@@ -1,0 +1,993 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>SmartWaste - Laguna Salada</title>
+
+    <!-- Leaflet CSS -->
+    <link
+        rel="stylesheet"
+        href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
+
+    <style>
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+        }
+
+        #map {
+            width: 100%;
+            height: 100vh;
+        }
+
+        /* Panel municipal */
+
+        .dashboard {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+
+            width: 300px;
+
+            background: white;
+
+            padding: 20px;
+
+            border-radius: 12px;
+
+            box-shadow: 0 5px 20px rgba(0,0,0,0.25);
+
+            z-index: 1000;
+        }
+
+        .dashboard h2 {
+            margin-top: 0;
+            margin-bottom: 5px;
+
+            color: #1b5e20;
+        }
+
+        .municipality {
+            color: #666;
+            margin-bottom: 20px;
+        }
+
+        .truck-info {
+            background: #f5f5f5;
+
+            padding: 15px;
+
+            border-radius: 8px;
+        }
+
+        .truck-info p {
+            margin: 8px 0;
+        }
+
+        .status {
+            color: green;
+            font-weight: bold;
+        }
+
+        .progress-container {
+            margin-top: 15px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 18px;
+
+            background: #ddd;
+
+            border-radius: 10px;
+
+            overflow: hidden;
+        }
+
+        .progress {
+            height: 100%;
+            width: 0%;
+
+            background: #2e7d32;
+
+            transition: width 0.5s ease;
+        }
+
+        .progress-text {
+            margin-top: 8px;
+
+            text-align: center;
+
+            font-weight: bold;
+        }
+
+        .truck-icon {
+            font-size: 35px;
+        }
+
+        /* Botón para crear rutas */
+
+.route-button {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    z-index: 1000;
+
+    padding: 12px 20px;
+
+    background: #1565c0;
+    color: white;
+
+    border: none;
+    border-radius: 8px;
+
+    font-size: 15px;
+    font-weight: bold;
+
+    cursor: pointer;
+
+    box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+}
+
+.route-button:hover {
+    background: #0d47a1;
+}
+
+.route-button.active {
+    background: #e65100;
+}
+
+/* ==========================================
+   GESTIÓN DE RUTAS
+========================================== */
+
+.route-management {
+    margin-top: 15px;
+}
+
+.route-management hr {
+    border: none;
+    border-top: 1px solid #ddd;
+    margin: 15px 0;
+}
+
+#manageRouteBtn {
+    width: 100%;
+
+    padding: 11px;
+
+    margin-top: 8px;
+
+    background: #1565c0;
+    color: white;
+
+    border: none;
+    border-radius: 7px;
+
+    font-weight: bold;
+    font-size: 14px;
+
+    cursor: pointer;
+}
+
+#manageRouteBtn:hover {
+    background: #0d47a1;
+}
+
+
+.selector-group {
+    margin-bottom: 14px;
+}
+
+.selector-group label {
+    display: block;
+    margin-bottom: 6px;
+
+    font-size: 13px;
+    font-weight: bold;
+    color: #444;
+}
+
+.selector-group select {
+    width: 100%;
+    padding: 10px;
+
+    border: 1px solid #ccc;
+    border-radius: 7px;
+
+    background: white;
+
+    font-size: 14px;
+
+    cursor: pointer;
+}
+
+
+    </style>
+
+</head>
+
+<body>
+
+    <!-- Panel municipal -->
+
+    <div class="dashboard">
+
+        <h2>SmartWaste</h2>
+
+        <div class="municipality">
+            Ayuntamiento de Laguna Salada
+        </div>
+
+        <div class="truck-info">
+
+            <p>
+                🚛 <strong>Camión:</strong>
+                Camión 01
+            </p>
+
+            <p>
+                🟢 <strong>Estado:</strong>
+                <span class="status">
+                    En servicio
+                </span>
+            </p>
+
+            <p>
+                🛣️ <strong>Ruta:</strong>
+                Centro
+            </p>
+
+            <p>
+                📍 <strong>Calles atendidas:</strong>
+                <span id="streetsCompleted">
+                    0
+                </span>
+                de
+                <span id="totalStreets">
+                    5
+                </span>
+            </p>
+
+
+            <hr>
+
+<div class="selector-group">
+
+    <label for="sectorSelect">
+        📍 Sector
+    </label>
+
+    <<select id="sectorSelect">
+
+    <option value="pueblo-nuevo">
+        Pueblo Nuevo
+    </option>
+
+    <option value="las-flores">
+        Las Flores
+    </option>
+
+</select>
+
+</div>
+
+<div class="selector-group">
+
+    <label for="truckSelect">
+        🚛 Camión asignado
+    </label>
+
+    <select id="truckSelect">
+
+    <option value="truck-01">
+        Camión 01
+    </option>
+
+    <option value="truck-02">
+        Camión 02
+    </option>
+
+</select>>
+
+</div>
+
+<button id="manageRouteBtn">
+    🛣️ Diseñar nueva ruta
+</button>
+
+</div>
+
+
+            <div class="progress-container">
+
+                <div class="progress-bar">
+
+                    <div
+                        id="progressBar"
+                        class="progress">
+                    </div>
+
+                </div>
+
+                <div
+                    id="progressText"
+                    class="progress-text">
+                    0% completado
+                </div>
+
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <button id="createRouteBtn" class="route-button">
+    🛣️ Crear ruta
+</button>
+
+    <!-- Mapa -->
+
+    <div id="map"></div>
+
+
+    <!-- Leaflet JS -->
+
+    <script
+        src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js">
+    </script>
+
+
+    <script>
+
+        
+
+        // Crear mapa centrado en Laguna Salada
+
+        const map = L.map('map').setView(
+            [19.648, -71.101],
+            15
+        );
+// ==========================================
+// CALCULAR RUTA SIGUIENDO CALLES REALES
+// ==========================================
+
+async function calculateStreetRoute(points) {
+
+    if (points.length < 2) {
+        alert('Selecciona al menos dos puntos.');
+        return;
+    }
+
+    // OSRM necesita coordenadas en formato:
+    // longitud,latitud
+
+    const coordinates = points
+        .map(point => `${point[1]},${point[0]}`)
+        .join(';');
+
+    const url =
+        `https://router.project-osrm.org/route/v1/driving/${coordinates}` +
+        `?overview=full&geometries=geojson`;
+
+    try {
+
+        const response = await fetch(url);
+
+        if (!response.ok) {
+            throw new Error('No se pudo calcular la ruta');
+        }
+
+        const data = await response.json();
+
+        if (
+            data.code !== 'Ok' ||
+            !data.routes ||
+            data.routes.length === 0
+        ) {
+            throw new Error('No se encontró una ruta válida');
+        }
+
+        // GeoJSON devuelve:
+        // longitud, latitud
+        // Leaflet necesita:
+        // latitud, longitud
+
+        const streetRoute = data.routes[0].geometry.coordinates.map(
+            coordinate => [
+                coordinate[1],
+                coordinate[0]
+            ]
+        );
+
+        return streetRoute;
+
+    } catch (error) {
+
+        console.error(
+            'Error calculando ruta:',
+            error
+        );
+
+        alert(
+            'No fue posible calcular la ruta por las calles.'
+        );
+
+        return null;
+    }
+}
+
+
+        // ==========================================
+// MODO CREAR RUTA
+// ==========================================
+
+let creatingRoute = false;
+let newRoutePoints = [];
+let newRouteLine = null;
+
+const createRouteBtn = document.getElementById('createRouteBtn');
+
+// ==========================================
+// SELECTORES DE SECTOR Y CAMIÓN
+// ==========================================
+
+const sectorSelect = document.getElementById('sectorSelect');
+const truckSelect = document.getElementById('truckSelect');
+
+sectorSelect.addEventListener('change', function() {
+
+    const selectedSectorId = sectorSelect.value;
+    const selectedSector = sectors[selectedSectorId];
+
+    // Seleccionar automáticamente el camión asignado
+    truckSelect.value = selectedSector.truckId;
+
+    console.log(
+        'Sector seleccionado:',
+        selectedSector.name
+    );
+
+    console.log(
+        'Camión asignado:',
+        selectedSector.truckName
+    );
+
+});
+
+
+const manageRouteBtn = document.getElementById('manageRouteBtn');
+
+manageRouteBtn.addEventListener('click', function() {
+
+    // Activar el mismo botón de creación de rutas
+    createRouteBtn.click();
+
+});
+
+
+createRouteBtn.addEventListener('click', async function() {
+
+    creatingRoute = !creatingRoute;
+
+    // ACTIVAR MODO CREAR RUTA
+
+    if (creatingRoute) {
+
+        newRoutePoints = [];
+
+        if (newRouteLine) {
+            map.removeLayer(newRouteLine);
+        }
+
+        newRouteLine = null;
+
+        createRouteBtn.textContent = '✅ Finalizar ruta';
+        createRouteBtn.classList.add('active');
+
+        return;
+    }
+
+
+    // FINALIZAR RUTA
+
+    createRouteBtn.textContent = '⏳ Calculando...';
+    createRouteBtn.disabled = true;
+
+
+    const streetRoute = await calculateStreetRoute(
+        newRoutePoints
+    );
+
+
+    if (streetRoute) {
+
+        // Eliminar línea naranja provisional
+
+        if (newRouteLine) {
+            map.removeLayer(newRouteLine);
+        }
+
+
+        // Dibujar ruta siguiendo calles reales
+
+        // Eliminar la línea naranja provisional
+if (newRouteLine) {
+    map.removeLayer(newRouteLine);
+    newRouteLine = null;
+}
+
+
+        // Ajustar mapa para mostrar la ruta
+
+        map.fitBounds(
+            newRouteLine.getBounds(),
+            {
+                padding: [50, 50]
+            }
+        );
+
+
+       // ==========================================
+// ASIGNAR RUTA SEGÚN EL SECTOR SELECCIONADO
+// ==========================================
+
+const selectedSectorId = sectorSelect.value;
+const selectedSector = sectors[selectedSectorId];
+
+// Guardar la ruta dentro del sector seleccionado
+selectedSector.route = streetRoute;
+
+// ------------------------------------------
+// PUEBLO NUEVO → CAMIÓN 01
+// ------------------------------------------
+
+if (selectedSectorId === 'pueblo-nuevo') {
+
+    route = streetRoute;
+
+    currentPoint = 0;
+
+    truck.setLatLng(route[0]);
+
+    totalStreets = route.length - 1;
+
+    routeLine.setLatLngs(route);
+
+    completedLine.setLatLngs([route[0]]);
+
+    updateDashboard();
+
+    console.log(
+        'Ruta asignada al Camión 01:',
+        route
+    );
+}
+
+
+// ------------------------------------------
+// LAS FLORES → CAMIÓN 02
+// ------------------------------------------
+
+if (selectedSectorId === 'las-flores') {
+
+    truck02.setLatLng(streetRoute[0]);
+
+    console.log(
+        'Ruta asignada al Camión 02:',
+        streetRoute
+    );
+
+}
+
+console.log(
+    'Nueva ruta asignada al Camión 01:',
+    route
+);
+
+        console.log(
+            'Ruta real calculada:',
+            streetRoute
+        );
+
+    }
+
+
+    createRouteBtn.textContent = '🛣️ Crear ruta';
+    createRouteBtn.classList.remove('active');
+    createRouteBtn.disabled = false;
+
+});
+
+
+        // Mostrar coordenadas al hacer clic en el mapa
+map.on('click', function(e) {
+
+    // Si estamos creando una ruta
+    if (creatingRoute) {
+
+        const point = [
+            e.latlng.lat,
+            e.latlng.lng
+        ];
+
+        newRoutePoints.push(point);
+
+        if (!newRouteLine) {
+
+            newRouteLine = L.polyline(
+                newRoutePoints,
+                {
+                    color: '#ff6f00',
+                    weight: 6,
+                    opacity: 0.9
+                }
+            ).addTo(map);
+
+        } else {
+
+            newRouteLine.setLatLngs(
+                newRoutePoints
+            );
+
+        }
+
+        return;
+    }
+
+
+    // Modo normal: mostrar coordenadas
+
+    console.log(
+        `[${e.latlng.lat.toFixed(6)}, ${e.latlng.lng.toFixed(6)}],`
+    );
+
+    L.popup()
+        .setLatLng(e.latlng)
+        .setContent(
+            `Lat: ${e.latlng.lat.toFixed(6)}<br>
+             Lng: ${e.latlng.lng.toFixed(6)}`
+        )
+        .openOn(map);
+
+});
+
+
+
+
+        // Agregar mapa base
+
+        L.tileLayer(
+            'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+            {
+                attribution:
+                    '&copy; OpenStreetMap contributors'
+            }
+        ).addTo(map);
+
+
+// ==========================================
+// SECTOR: PUEBLO NUEVO
+// Delimitación aproximada para la demo
+// ==========================================
+
+const puebloNuevoCoordinates = [
+    [19.660754, -71.107099],
+    [19.656632, -71.108644],
+    [19.653055, -71.109846],
+    [19.649165, -71.108757],
+    [19.649196, -71.104374],
+    [19.652207, -71.103108],
+    [19.658734, -71.103287]
+];
+
+const puebloNuevoSector = L.polygon(
+    puebloNuevoCoordinates,
+    {
+        color: '#1565c0',
+        weight: 3,
+        fillColor: '#42a5f5',
+        fillOpacity: 0.18,
+        interactive: false
+    }
+).addTo(map);
+
+puebloNuevoSector.bindPopup(`
+    <div style="min-width: 200px;">
+
+        <h3 style="
+            margin: 0 0 10px 0;
+            color: #1565c0;
+        ">
+            📍 Pueblo Nuevo
+        </h3>
+
+        <p>
+            <strong>🚛 Camión asignado:</strong>
+            Camión 01
+        </p>
+
+        <p>
+            <strong>🟢 Estado:</strong>
+            En servicio
+        </p>
+
+        <p>
+            <strong>📊 Progreso:</strong>
+            En seguimiento
+        </p>
+
+    </div>
+`);
+
+// ==========================================
+// SECTOR: LAS FLORES
+// Delimitación aproximada para la demo
+// ==========================================
+
+const lasFloresCoordinates = [
+    [19.649074, -71.098527],
+    [19.643598, -71.099535],
+    [19.645255, -71.101504],
+    [19.649034, -71.101000]
+];
+
+const lasFloresSector = L.polygon(
+    lasFloresCoordinates,
+    {
+        color: '#7b1fa2',
+        weight: 3,
+        fillColor: '#ab47bc',
+        fillOpacity: 0.18,
+        interactive: false
+    }
+).addTo(map);
+
+
+// ==========================================
+// DATOS DE SECTORES Y CAMIONES
+// ==========================================
+
+const sectors = {
+
+    'pueblo-nuevo': {
+        name: 'Pueblo Nuevo',
+        truckId: 'truck-01',
+        truckName: 'Camión 01',
+        status: 'En servicio',
+        route: [],
+        progress: 0
+    },
+
+    'las-flores': {
+        name: 'Las Flores',
+        truckId: 'truck-02',
+        truckName: 'Camión 02',
+        status: 'En servicio',
+        route: [],
+        progress: 0
+    }
+
+};
+
+        // Ruta simulada
+
+        // ==========================================
+// RUTA PILOTO - CAMIÓN 01
+// SECTOR: PUEBLO NUEVO
+// ==========================================
+
+let route = [
+
+    // Primer tramo
+    [19.649256, -71.104470],
+    [19.651499, -71.104352],
+    [19.654005, -71.103934],
+    [19.655986, -71.103483],
+    [19.658804, -71.103243],
+
+    // Segundo tramo
+    [19.655975, -71.103526],
+    [19.656066, -71.104277],
+    [19.654995, -71.104535],
+    [19.654248, -71.104900],
+    [19.651944, -71.105447],
+    [19.651035, -71.105522],
+    [19.650358, -71.105651],
+    [19.650277, -71.105050],
+    [19.650075, -71.105039],
+    [19.649974, -71.104589],
+    [19.649226, -71.104428]
+
+];
+
+
+        // Dibujar ruta pendiente
+
+        const routeLine = L.polyline(
+            route,
+            {
+                color: 'blue',
+                weight: 6,
+                opacity: 0.7
+            }
+        ).addTo(map);
+
+
+        // Ajustar mapa
+
+        map.fitBounds(
+            routeLine.getBounds(),
+            {
+                padding: [80, 80]
+            }
+        );
+
+
+        // Icono del camión
+
+        const truckIcon = L.divIcon({
+
+            html: '🚛',
+
+            className: 'truck-icon',
+
+            iconSize: [40, 40],
+
+            iconAnchor: [20, 20]
+
+        });
+
+
+        // Crear camión
+
+        const truck = L.marker(
+            route[0],
+            {
+                icon: truckIcon
+            }
+        )
+        .addTo(map)
+        .bindPopup(`
+            <b>Camión 01</b><br>
+            Estado: En servicio<br>
+            Ruta: Centro
+        `);
+// ==========================================
+// CAMIÓN 02 - LAS FLORES
+// ==========================================
+
+const truck02 = L.marker(
+    [19.6470, -71.1000],
+    {
+        icon: truckIcon
+    }
+)
+.addTo(map)
+.bindPopup(`
+    <b>Camión 02</b><br>
+    Sector: Las Flores<br>
+    Estado: Esperando ruta
+`);
+
+
+        // Línea completada
+
+        const completedLine = L.polyline(
+            [route[0]],
+            {
+                color: 'green',
+                weight: 7,
+                opacity: 0.9
+            }
+        ).addTo(map);
+
+
+        // Posición actual
+
+        let currentPoint = 0;
+
+
+        // Total de calles
+
+        let totalStreets = route.length - 1;
+
+
+        // Actualizar panel
+
+        function updateDashboard() {
+
+            const percentage = Math.round(
+                (currentPoint / totalStreets) * 100
+            );
+
+            document.getElementById(
+                'streetsCompleted'
+            ).textContent = currentPoint;
+
+            document.getElementById(
+                'totalStreets'
+            ).textContent = totalStreets;
+
+            document.getElementById(
+                'progressBar'
+            ).style.width = percentage + '%';
+
+            document.getElementById(
+                'progressText'
+            ).textContent =
+                percentage + '% completado';
+
+        }
+
+
+        // Mover camión
+
+        setInterval(() => {
+
+            currentPoint++;
+
+
+            // Reiniciar simulación
+
+            if (
+                currentPoint >= route.length
+            ) {
+
+                currentPoint = 0;
+
+                completedLine.setLatLngs(
+                    [route[0]]
+                );
+
+            }
+
+
+            // Mover camión
+
+            truck.setLatLng(
+                route[currentPoint]
+            );
+
+
+            // Actualizar línea completada
+
+            const completedRoute =
+                route.slice(
+                    0,
+                    currentPoint + 1
+                );
+
+            completedLine.setLatLngs(
+                completedRoute
+            );
+
+
+            // Actualizar panel
+
+            updateDashboard();
+
+
+        }, 1500);
+
+
+        // Estado inicial
+
+        updateDashboard();
+
+    </script>
+
+</body>
+
+</html>
