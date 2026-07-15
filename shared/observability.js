@@ -1,0 +1,3 @@
+export function createCorrelationId(prefix = 'sw') { return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`; }
+export function structuredLog({ level='info', event, municipality_id='laguna-salada-rd', correlation_id=createCorrelationId(), status='observed', detail={} }) { return { ts:new Date().toISOString(), level, event, municipality_id, correlation_id, status, detail }; }
+export function healthCheck({ backend=false, auth=false, rls=false, simulator=true } = {}) { return { visual_demo:'YES', local_functional_demo:'PARTIAL', backend: backend ? 'PARTIAL' : 'NO', auth: auth ? 'PARTIAL' : 'NO', rls: rls ? 'PARTIAL' : 'NO', real_gps:'NO', simulator: simulator ? 'YES' : 'NO', citizen_portal:'PARTIAL', controlled_pilot:'NO', production:'NO' }; }

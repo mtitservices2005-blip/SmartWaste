@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import { createDemoOperationsAdapter } from '../shared/operations-adapter.js';
+const adapter = createDemoOperationsAdapter();
+assert(adapter.listVehicles().length > 0);
+const route = adapter.createRoute({ id:'route-test', name:'Test', sectors:[], sector:'Centro urbano' });
+assert.equal(route.status, 'planned');
+assert.equal(adapter.assignVehicle('route-test','truck-01').status, 'assigned');
+assert.equal(adapter.startRoute('route-test').status, 'started');
+assert.equal(adapter.updateProgress('route-test', 50).status, 'in_progress');
+assert.equal(adapter.markDelayed('route-test').status, 'delayed');
+assert.equal(adapter.completeRoute('route-test').status, 'completed');
+assert.equal(adapter.verifyRoute('route-test').status, 'verified');
+assert(adapter.listPositions().every((p) => p.municipality_id));
+console.log('operations-adapter ok');
