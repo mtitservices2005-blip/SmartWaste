@@ -1,0 +1,17 @@
+{
+  "listVehicles": "DEMO_ONLY",
+  "getVehicle": "DEMO_ONLY",
+  "listRoutes": "DEMO_ONLY",
+  "getRoute": "DEMO_ONLY",
+  "createRoute": "READY",
+  "assignVehicle": "READY",
+  "assignDriver": "READY",
+  "startRoute": "READY",
+  "updateProgress": "READY",
+  "markDelayed": "READY",
+  "completeRoute": "READY",
+  "verifyRoute": "READY",
+  "registerIncident": "READY",
+  "backendApi": "BLOCKED",
+  "supabaseRemote": "REAL_NOT_RUN"
+}

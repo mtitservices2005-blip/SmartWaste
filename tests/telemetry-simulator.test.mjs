@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import { DeviceSimulator, makeTelemetry, TELEMETRY_SOURCES } from '../shared/telemetry-simulator.js';
+assert(TELEMETRY_SOURCES.includes('dedicated_tracker'));
+const simulator = new DeviceSimulator('truck-01');
+const point = simulator.start();
+assert.equal(point.vehicle_id, 'truck-01');
+assert.equal(point.source, 'simulator');
+simulator.setSpeed(0);
+assert.equal(simulator.simulateStopped().speed, 0);
+assert.equal(simulator.simulateSignalLoss(), null);
+assert.equal(simulator.emit(), null);
+assert.equal(simulator.simulateIncident('delay').type, 'delay');
+assert(makeTelemetry({ vehicle_id:'v1', latitude:1, longitude:2 }).captured_at);
+console.log('telemetry-simulator ok');
