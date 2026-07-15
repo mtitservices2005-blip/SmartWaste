@@ -18,3 +18,20 @@ export function assertSameMunicipality(ctx, record) {
   return true;
 }
 export const demoSession = createSessionContext({ user_id:'demo-user', role:'municipal_admin', municipality_id:'laguna-salada-rd' });
+
+
+export async function resolveSupabaseAuthContext(client, { municipality_id = null } = {}) {
+  if (!client?.auth?.getUser || !client?.from) throw new Error('Supabase client with auth and from is required');
+  const { data: userData, error: userError } = await client.auth.getUser();
+  if (userError) throw new Error(userError.message);
+  const user = userData?.user;
+  if (!user?.id) throw new Error('Authenticated user is required');
+  const profileResult = await client.from('profiles').select('*').eq('id', user.id).maybeSingle();
+  if (profileResult.error) throw new Error(profileResult.error.message);
+  let membershipQuery = client.from('memberships').select('*').eq('profile_id', user.id).eq('status', 'active');
+  if (municipality_id) membershipQuery = membershipQuery.eq('municipality_id', municipality_id);
+  const membershipResult = await membershipQuery.limit(1).maybeSingle();
+  if (membershipResult.error) throw new Error(membershipResult.error.message);
+  if (!membershipResult.data) throw new Error('Active membership is required');
+  return { ...createSessionContext({ user_id:user.id, role:membershipResult.data.role, municipality_id:membershipResult.data.municipality_id }), profile: profileResult.data, membership: membershipResult.data };
+}
