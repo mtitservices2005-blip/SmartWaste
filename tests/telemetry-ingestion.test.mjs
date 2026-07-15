@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import { makeTelemetry, validateTelemetryPosition, createTelemetryIngestionAdapter } from '../shared/telemetry-simulator.js';
+const good = makeTelemetry({ vehicle_id:'truck-01', latitude:19.6, longitude:-71.1 });
+assert.equal(validateTelemetryPosition(good).valid, true);
+assert.equal(validateTelemetryPosition({ ...good, latitude: 200 }).valid, false);
+assert.equal(validateTelemetryPosition({ ...good, source: 'gps_real_unapproved' }).valid, false);
+const adapter = createTelemetryIngestionAdapter(null, { municipality_id:'laguna-salada-rd' });
+const result = await adapter.ingest(good, { correlation_id:'corr-test' });
+assert.equal(result.ok, false);
+assert.equal(result.source, 'REAL_NOT_RUN');
+console.log('telemetry-ingestion ok');

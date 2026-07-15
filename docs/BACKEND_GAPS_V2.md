@@ -1,3 +1,9 @@
-# Backend gaps V2
+# Backend Gaps V2 SW-017
 
-No real backend API, Supabase migration application, Auth flow, RLS enforcement, Realtime subscription, GPS hardware, Storage upload, or production observability was verified. All remote/backend-dependent capabilities remain REAL_NOT_RUN, BLOCKED, PARTIAL, READY, or DEMO_ONLY as documented.
+- Supabase local was not executed: Supabase CLI and Docker are unavailable.
+- Remote Supabase was not modified; `supabase db push` was not run.
+- RLS policies and cross-tenant trigger guards are prepared but not verified against a live database.
+- Auth resolution is prepared for Supabase Auth but no real users or sessions were created.
+- Operations adapter supports real Supabase clients and explicit demo fallback, but real persistence is not verified.
+- Telemetry ingestion validates simulator payloads and prepares persistence/realtime subscription, but database and Realtime are not verified.
+- Physical GPS trackers are not integrated and must never receive service_role credentials.

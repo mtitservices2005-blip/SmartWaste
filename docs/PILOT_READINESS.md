@@ -1,16 +1,20 @@
-# Pilot readiness
+# Pilot Readiness SW-017
 
-| Question | Answer |
-| --- | --- |
-| Demo visual lista | YES |
-| Demo funcional local lista | PARTIAL |
-| Backend listo | NO |
-| Auth listo | NO |
-| RLS lista | NO |
-| GPS real listo | NO |
-| Simulador listo | YES |
-| Portal ciudadano listo | PARTIAL |
-| Piloto controlado listo | NO |
-| Producción lista | NO |
+| Capability | Status |
+|---|---|
+| Demo visual | YES |
+| Demo funcional local | YES |
+| Supabase local | NO |
+| Persistencia real | NO |
+| Auth real | NO |
+| RLS verificada | NO |
+| Operaciones reales | PARTIAL |
+| Telemetría persistente | NO |
+| Realtime | NO |
+| Simulador | YES |
+| Portal ciudadano | YES |
+| GPS físico | NO |
+| Piloto controlado | NO |
+| Producción | NO |
 
-A controlled pilot still requires verified backend, local Supabase/RLS tests, approved operational data, device auth, and municipal validation.
+Supabase local, RLS, Realtime and real E2E remain REAL_NOT_RUN because the container has neither Supabase CLI nor Docker. The simulator remains “Simulación demo · no GPS real”.
