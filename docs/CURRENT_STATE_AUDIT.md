@@ -2,7 +2,7 @@
 
 > Datos demo · no producción — este documento audita, no modifica, el estado descrito.
 
-Fecha de auditoría: 2026-07-29. Alcance: `README.md`, `docs/`, `shared/`, `backend/`, `supabase/`, `tests/`, `frontend/`, historial git completo (13 commits, 6 sustantivos). Metodología: lectura completa de código y documentación + ejecución local de los 13 archivos de test (`node tests/*.test.mjs`, sin instalar dependencias, sin tocar Supabase). No se ejecutó nada contra un backend o base de datos real.
+Fecha de auditoría: 2026-07-29 (revisión de correcciones: 2026-07-29). Alcance: `README.md`, `docs/`, `shared/`, `backend/`, `supabase/`, `tests/`, `frontend/`, historial git completo (13 commits, 6 sustantivos). Metodología: lectura completa de código y documentación + ejecución local de los 13 archivos de test, cada uno como proceso `node` independiente (`for test_file in tests/*.test.mjs; do node "$test_file"; done`, sin instalar dependencias, sin tocar Supabase). El comando `node tests/*.test.mjs` (sin loop) **no** ejecuta los 13 archivos — el shell expande el glob y `node` solo ejecuta el primero, pasando el resto como argumentos; este documento usa exclusivamente el resultado del loop verificado. No se ejecutó nada contra un backend o base de datos real.
 
 ## Resumen ejecutivo
 
@@ -25,7 +25,7 @@ El hallazgo que merece atención inmediata del Project Owner: las políticas RLS
 | Ingesta de telemetría a Supabase | `PLACEHOLDER` (sin cliente) / `PARTIAL` (con cliente) | `shared/telemetry-simulator.js:34-53`, mensaje "Telemetry persistence was prepared but not executed" | Nunca invocado con un cliente real |
 | `shared/contracts.js` (máquina de estados) | `REAL_READY` | Enums + `canTransitionRoute()` | Lógica ejecutable real, cubierta por `tests/contracts.test.mjs` |
 | `shared/operations-adapter.js` — modo demo | `REAL_READY` | `createDemoOperationsAdapter()` | En memoria, probado (`tests/operations-adapter.test.mjs`) |
-| `shared/operations-adapter.js` — modo Supabase | `PARTIAL` | `createSupabaseOperationsAdapter(...)`; `shared/integration/status.json` marca `createRoute`..`registerIncident` como `REAL_PREPARED_NOT_RUN` | Código completo con try/catch y fallback, nunca ejercido contra un cliente real |
+| `shared/operations-adapter.js` — modo Supabase | `PARTIAL` (bloqueado por incompatibilidad de esquema, ver abajo) | `createSupabaseOperationsAdapter(...)`; `shared/integration/status.json` marca `createRoute`..`registerIncident` como `REAL_PREPARED_NOT_RUN` | Código completo con try/catch y fallback, nunca ejercido contra un cliente real. Además, no está alineado con el esquema migrado — ver "Incompatibilidad adapter/esquema" |
 | `shared/auth-context.js` | `PARTIAL` | `resolveSupabaseAuthContext()` en líneas 23-37; roles/permissions reales | Lógica real, **no está importada ni conectada en `frontend/`** — no hay login ni gating por rol en la UI |
 | `backend/` | `PLACEHOLDER` | `backend/README.md` — "La Alpha no levanta servicios reales" | Cero código de servidor; solo lista de módulos futuros |
 | `supabase/migrations/202607150001_sw007_foundation.sql` | `REAL_READY` | Esquema completo, todas las tablas con `municipality_id` | Nunca aplicado (ver sección RLS) |
@@ -33,7 +33,7 @@ El hallazgo que merece atención inmediata del Project Owner: las políticas RLS
 | `supabase/migrations/202607150003_sw013_persistence_hardening.sql` | `REAL_READY` | CHECK constraints, columna `version`, trigger de concurrencia optimista | Bien formado, nunca ejecutado |
 | `supabase/migrations/202607150004_sw014_auth_rls_policies.sql` | `PARTIAL` | Políticas `tenant_read`/`tenant_insert_staff`/`tenant_update_staff` en 13 tablas (líneas 24-31) | Diseño sólido con huecos concretos — ver sección RLS |
 | `supabase/migrations/202607150005_sw015_operations_integrity.sql` | `REAL_READY` | Triggers `assert_same_municipality()` cross-tenant | Bien formado, nunca ejecutado |
-| Tests unitarios sobre lógica demo (8 archivos) | `REAL_READY` (como test) sobre lógica `DEMO_ONLY` | `tests/{auth-context,channel-contracts,citizen-portal,contracts,impact-center,operation-flow,operations-adapter,telemetry-simulator}.test.mjs` | Los 13 archivos pasan en esta auditoría (`node tests/*.test.mjs`, todos exit 0) |
+| Tests unitarios sobre lógica demo (8 archivos) | `REAL_READY` (como test) sobre lógica `DEMO_ONLY` | `tests/{auth-context,channel-contracts,citizen-portal,contracts,impact-center,operation-flow,operations-adapter,telemetry-simulator}.test.mjs` | Los 13 archivos de `tests/` se ejecutaron **cada uno como proceso `node` separado** (no con el glob `node tests/*.test.mjs`, que solo correría el primero). Resultado real: 13/13 con `exit_code=0` |
 | Tests "static" de RLS/integridad/E2E (4 archivos) | `PLACEHOLDER` (mal etiquetados) | `tests/rls-static.test.mjs`, `tests/operations-integrity-static.test.mjs`, `tests/e2e-demo.test.mjs`, `tests/e2e-v2.test.mjs` | Hacen `readFileSync` + regex sobre SQL/JS estático; **no tocan una base de datos ni un navegador**. `rls-static.test.mjs:4` usa una regex tan laxa que igual matchea con solo el nombre de la tabla |
 | CI/CD | Ausente | No existe `.github/workflows/`, no existe `package.json` en ningún punto del repo | No hay ejecución automática de pruebas ni gate de calidad |
 | Aislamiento multiinstitución (app-layer) | `PARTIAL` | `shared/auth-context.js:15-19` `assertSameMunicipality()` | Función real, pero solo se invoca si algo llama al adapter Supabase con un cliente real — nunca ocurre hoy |
@@ -55,6 +55,23 @@ Contrato de roles/permisos real (`shared/auth-context.js`), incluida una funció
 ## Persistencia real
 
 No existe. `backend/` no tiene servidor. El adapter de Supabase (`shared/operations-adapter.js`) está escrito para escribir contra tablas reales, pero cada operación de escritura (`createRoute`, `assignVehicle`, `startRoute`, etc.) está marcada `REAL_PREPARED_NOT_RUN` en `shared/integration/status.json`. Todo lo que el usuario ve persistir hoy vive en memoria del navegador (`structuredClone` del seed demo) y se pierde al recargar.
+
+### Incompatibilidad adapter/esquema (hallazgo de revisión, confirmado)
+
+`createSupabaseOperationsAdapter` escribe directamente sobre la tabla `routes`:
+- `assignVehicle` → `table(client,'routes').update({ vehicle_id: vehicleId, status:'assigned' })` (`shared/operations-adapter.js:72`)
+- `assignDriver` → `table(client,'routes').update({ driver_id: driverId, status:'assigned' })` (`shared/operations-adapter.js:74`)
+- `updateProgress` → `table(client,'routes').update({ progress, status: ... })` (`shared/operations-adapter.js:76`)
+
+Pero el esquema migrado define `routes` solo con `id, municipality_id, name, status, created_by, created_at, updated_at, version` (`supabase/migrations/202607150001_sw007_foundation.sql:9`, columna `version` añadida en `202607150003_sw013_persistence_hardening.sql:41`) — **sin `vehicle_id`, `driver_id` ni `progress`**. Esas columnas de asignación/ejecución existen en `route_runs` (`vehicle_id`, `driver_id`, `status`, `202607150001_sw007_foundation.sql:11`) y `vehicle_assignments` (`202607150001_sw007_foundation.sql:12`); no existe ninguna columna `progress` en ningún lugar del esquema migrado.
+
+**Conclusión de esta auditoría:**
+- Existe una **incompatibilidad contractual real** entre el adapter Supabase y el esquema migrado — no es un detalle menor, es un desajuste de modelo de datos.
+- El adapter Supabase **no está listo para ejecutar el ciclo operativo real** contra las migraciones actuales sin reconciliación previa; cualquier intento de `assignVehicle`/`assignDriver`/`updateProgress` contra Supabase real fallaría o, peor, silenciosamente escribiría columnas inexistentes según el comportamiento del cliente.
+- **SW-020 debe inspeccionar los contratos existentes (`shared/contracts.js`, el modelo `route_runs`/`vehicle_assignments`) y alinear el adapter con `routes`/`route_runs`** antes de poder ejercer un ciclo real contra Supabase local.
+- **No debe modificarse el esquema únicamente para acomodar ciegamente el adapter tal como está** — el esquema ya separa correctamente definición de ruta (`routes`) de ejecución operativa (`route_runs`), lo cual es el diseño correcto para un modelo multi-ejecución por ruta.
+- La solución debe **preservar la máquina de estados** (`shared/contracts.js`, `ROUTE_TRANSITIONS`/`canTransitionRoute`) y el modelo operativo `routes` (definición) → `route_runs` (ejecución) → `vehicle_assignments` (asignación), no aplanarlo de vuelta a un solo objeto "ruta" como hace hoy el adapter.
+- Esta reconciliación **debe verificarse mediante pruebas reales contra Supabase local** en SW-020, no darse por resuelta solo por inspección de código.
 
 ## Telemetría
 
