@@ -1,6 +1,8 @@
-// Seeds the minimum data set SW-020 needs against a local Supabase instance: two municipalities
-// (so cross-tenant RLS denial can be exercised for real), one profile per role including 'driver',
-// a vehicle, a driver row, and a route. Uses the service_role client, which bypasses RLS by design
+// Seeds the minimum data set SW-020 (and the frontend login-gating verification, see
+// docs/LOGIN_GATING_VERIFICATION_BRIEF.md) needs against a local Supabase instance: two
+// municipalities (so cross-tenant RLS denial can be exercised for real), one profile per role in
+// shared/auth-context.js ROLES (municipal_admin, dispatcher, driver, supervisor, mt_superadmin), a
+// vehicle, a driver row, and a route. Uses the service_role client, which bypasses RLS by design
 // (see docs/CURRENT_STATE_AUDIT.md) — this is a local-only seeding script, never shipped to a client.
 
 const PASSWORD = 'sw020-local-test-pass-1234';
@@ -31,11 +33,23 @@ export async function seedScenario(serviceClient) {
   const dispatcherA = await createUserWithProfile(serviceClient, { email: `dispatcher-a-${suffix}@sw020.test`, displayName: 'Dispatcher A' });
   const driverUserA = await createUserWithProfile(serviceClient, { email: `driver-a-${suffix}@sw020.test`, displayName: 'Driver A' });
   const adminB = await createUserWithProfile(serviceClient, { email: `admin-b-${suffix}@sw020.test`, displayName: 'Admin B' });
+  // supervisorA/superadmin: added for the frontend login-gating verification
+  // (docs/LOGIN_GATING_VERIFICATION_BRIEF.md) — SECTION_ROLES in frontend/auth-gate.js covers all
+  // 5 roles in shared/auth-context.js ROLES, but this seed previously only created 3 of them.
+  const supervisorA = await createUserWithProfile(serviceClient, { email: `supervisor-a-${suffix}@sw020.test`, displayName: 'Supervisor A' });
+  const superadmin = await createUserWithProfile(serviceClient, { email: `superadmin-${suffix}@sw020.test`, displayName: 'Superadmin' });
 
   await membership(serviceClient, { municipality_id: munA.data.id, profile_id: adminA.id, role: 'municipal_admin' });
   await membership(serviceClient, { municipality_id: munA.data.id, profile_id: dispatcherA.id, role: 'dispatcher' });
   await membership(serviceClient, { municipality_id: munA.data.id, profile_id: driverUserA.id, role: 'driver' });
   await membership(serviceClient, { municipality_id: munB.data.id, profile_id: adminB.id, role: 'municipal_admin' });
+  await membership(serviceClient, { municipality_id: munA.data.id, profile_id: supervisorA.id, role: 'supervisor' });
+  // memberships.municipality_id is NOT NULL in the schema (supabase/migrations/202607150001_sw007_
+  // foundation.sql), so mt_superadmin still needs a row scoped to *some* municipality even though
+  // shared/auth-context.js's createSessionContext() only requires municipality_id for non-superadmin
+  // roles. has_platform_role() (202607150004_sw014_auth_rls_policies.sql) checks role existence only,
+  // not this municipality_id, so which municipality it points to doesn't matter for platform checks.
+  await membership(serviceClient, { municipality_id: munA.data.id, profile_id: superadmin.id, role: 'mt_superadmin' });
 
   const driverRowA = await serviceClient.from('drivers').insert({ municipality_id: munA.data.id, profile_id: driverUserA.id, display_name: 'Driver A' }).select('*').single();
   if (driverRowA.error) throw new Error(`drivers insert failed: ${driverRowA.error.message}`);
@@ -52,7 +66,7 @@ export async function seedScenario(serviceClient) {
   return {
     municipalityA: munA.data,
     municipalityB: munB.data,
-    adminA, dispatcherA, driverUserA, adminB,
+    adminA, dispatcherA, driverUserA, adminB, supervisorA, superadmin,
     driverRowA: driverRowA.data,
     vehicleA: vehicleA.data,
     vehicleB: vehicleB.data,
