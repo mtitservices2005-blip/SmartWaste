@@ -66,32 +66,89 @@ export function createSupabaseOperationsAdapter(client, { fallback = createDemoO
       if (opts.version !== undefined) q = q.eq('version', opts.version);
       return q.select('*').single();
     }, () => ({ ...fallback.getRoute(id), ...patch }), opts.correlation_id),
-    assignVehicle: async (routeId, vehicleId, opts = {}) => {
-      const current = hasClient ? (await selectOne('routes', routeId)).data : fallback.getRoute(routeId);
-      if (current && !canTransitionRoute(current.status, 'assigned') && current.status !== 'assigned') return fail('INVALID_ROUTE_TRANSITION', `Rejected route transition ${current.status}->assigned`, opts);
-      return run(() => scoped(table(client, 'routes').update({ vehicle_id: vehicleId, status:'assigned' }).eq('id', routeId)).select('*').single(), () => fallback.assignVehicle(routeId, vehicleId), opts.correlation_id);
-    },
-    assignDriver: (routeId, driverId, opts = {}) => run(() => scoped(table(client, 'routes').update({ driver_id: driverId, status:'assigned' }).eq('id', routeId)).select('*').single(), () => fallback.assignDriver(routeId, driverId), opts.correlation_id),
-    startRoute: (routeId, opts = {}) => transitionPersistedRoute(client, fallback, municipality_id, routeId, 'started', opts),
-    updateProgress: (routeId, progress, opts = {}) => run(() => scoped(table(client, 'routes').update({ progress, status: progress >= 100 ? 'completed' : 'in_progress' }).eq('id', routeId)).select('*').single(), () => fallback.updateProgress(routeId, progress), opts.correlation_id),
-    markDelayed: (routeId, opts = {}) => transitionPersistedRoute(client, fallback, municipality_id, routeId, 'delayed', opts),
-    completeRoute: (routeId, opts = {}) => run(() => scoped(table(client, 'routes').update({ progress:100, status:'completed' }).eq('id', routeId)).select('*').single(), () => fallback.completeRoute(routeId), opts.correlation_id),
-    verifyRoute: (routeId, opts = {}) => transitionPersistedRoute(client, fallback, municipality_id, routeId, 'verified', opts),
+    // Execution lives in route_runs (one row per dispatch of a route), not on routes itself —
+    // routes only has route_id/status/etc as the route *definition*. assignVehicle/assignDriver
+    // open or reuse the route's active route_run and mirror the assignment into
+    // vehicle_assignments. See docs/CURRENT_STATE_AUDIT.md and supabase/migrations/202607150001_sw007_foundation.sql.
+    assignVehicle: (routeId, vehicleId, opts = {}) => assignToRouteRun(client, fallback, municipality_id, routeId, { vehicle_id: vehicleId }, opts, () => fallback.assignVehicle(routeId, vehicleId)),
+    assignDriver: (routeId, driverId, opts = {}) => assignToRouteRun(client, fallback, municipality_id, routeId, { driver_id: driverId }, opts, () => fallback.assignDriver(routeId, driverId)),
+    startRoute: (routeId, opts = {}) => transitionRouteRun(client, fallback, municipality_id, routeId, 'started', opts),
+    updateProgress: (routeId, progress, opts = {}) => hasClient
+      ? transitionRouteRun(client, fallback, municipality_id, routeId, progress >= 100 ? 'completed' : 'in_progress', opts)
+      : ok(fallback.updateProgress(routeId, progress), { source:'DEMO_FALLBACK', correlation_id: opts.correlation_id }),
+    markDelayed: (routeId, opts = {}) => transitionRouteRun(client, fallback, municipality_id, routeId, 'delayed', opts),
+    completeRoute: (routeId, opts = {}) => transitionRouteRun(client, fallback, municipality_id, routeId, 'completed', opts),
+    verifyRoute: (routeId, opts = {}) => transitionRouteRun(client, fallback, municipality_id, routeId, 'verified', opts),
     registerIncident: (incident, opts = {}) => run(() => table(client, 'incidents').insert({ ...incident, municipality_id: incident.municipality_id ?? municipality_id, correlation_id: opts.correlation_id ?? incident.correlation_id }).select('*').single(), () => fallback.registerIncident(incident), opts.correlation_id),
     listPositions: (opts = {}) => run(() => scoped(table(client, 'vehicle_positions').select('*').order('captured_at', { ascending:false })), () => fallback.listPositions(), opts.correlation_id)
   };
 }
 
-async function transitionPersistedRoute(client, fallback, municipality_id, routeId, next, opts = {}) {
+// Finds the most recent non-terminal route_run for a route, or creates one, scoped to municipality_id.
+async function findOrCreateActiveRouteRun(client, municipality_id, routeId) {
+  let findQuery = client.from('route_runs').select('*').eq('route_id', routeId).not('status', 'in', '("completed","verified","cancelled")').order('created_at', { ascending: false }).limit(1);
+  if (municipality_id) findQuery = findQuery.eq('municipality_id', municipality_id);
+  const existing = await findQuery.maybeSingle();
+  if (existing.error) return existing;
+  if (existing.data) return existing;
+  const routeQuery = municipality_id ? client.from('routes').select('*').eq('municipality_id', municipality_id).eq('id', routeId).maybeSingle() : client.from('routes').select('*').eq('id', routeId).maybeSingle();
+  const route = await routeQuery;
+  if (route.error) return route;
+  if (!route.data) return { data: null, error: null };
+  return client.from('route_runs').insert({ route_id: routeId, municipality_id: route.data.municipality_id }).select('*').single();
+}
+
+async function assignToRouteRun(client, fallback, municipality_id, routeId, patch, opts = {}, fallbackOperation) {
+  const missing = !client?.from;
+  if (missing) return ok(fallbackOperation(), { source:'DEMO_FALLBACK', correlation_id: opts.correlation_id });
+  try {
+    const routeRun = await findOrCreateActiveRouteRun(client, municipality_id, routeId);
+    if (routeRun.error) return fail(routeRun.error.code ?? 'SUPABASE_ERROR', routeRun.error.message, opts);
+    if (!routeRun.data) return fail('ROUTE_NOT_FOUND', 'Route not found', opts);
+    const updated = await client.from('route_runs').update({ ...patch, status: 'assigned' }).eq('id', routeRun.data.id).select('*').single();
+    if (updated.error) return fail(updated.error.code ?? 'SUPABASE_ERROR', updated.error.message, opts);
+    const vehicle_id = patch.vehicle_id ?? updated.data.vehicle_id;
+    const driver_id = patch.driver_id ?? updated.data.driver_id;
+    if (vehicle_id) {
+      const existingAssignment = await client.from('vehicle_assignments').select('*').eq('route_run_id', updated.data.id).maybeSingle();
+      if (existingAssignment.error) return fail(existingAssignment.error.code ?? 'SUPABASE_ERROR', existingAssignment.error.message, opts);
+      const assignmentPatch = { municipality_id: updated.data.municipality_id, vehicle_id, driver_id, route_run_id: updated.data.id, status: 'assigned' };
+      const assignment = existingAssignment.data
+        ? await client.from('vehicle_assignments').update(assignmentPatch).eq('id', existingAssignment.data.id).select('*').single()
+        : await client.from('vehicle_assignments').insert(assignmentPatch).select('*').single();
+      if (assignment.error) return fail(assignment.error.code ?? 'SUPABASE_ERROR', assignment.error.message, opts);
+    }
+    // Only advance the route definition's status out of 'planned'; a second assignVehicle/assignDriver
+    // call (or one made after the route already started) must not roll routes.status backwards.
+    let routeQ = client.from('routes').update({ status: 'assigned' }).eq('id', routeId).eq('status', 'planned');
+    if (municipality_id) routeQ = routeQ.eq('municipality_id', municipality_id);
+    const routeUpdate = await routeQ.select('*').maybeSingle();
+    if (routeUpdate.error) return fail(routeUpdate.error.code ?? 'SUPABASE_ERROR', routeUpdate.error.message, opts);
+    if (routeUpdate.data) return ok(routeUpdate.data, opts);
+    const routeSelect = municipality_id ? client.from('routes').select('*').eq('municipality_id', municipality_id).eq('id', routeId).maybeSingle() : client.from('routes').select('*').eq('id', routeId).maybeSingle();
+    const routeCurrent = await routeSelect;
+    if (routeCurrent.error) return fail(routeCurrent.error.code ?? 'SUPABASE_ERROR', routeCurrent.error.message, opts);
+    return ok(routeCurrent.data, opts);
+  } catch (error) {
+    return fail('ADAPTER_EXCEPTION', error.message, opts);
+  }
+}
+
+// Route status transitions during execution (start/progress/delay/complete/verify) are recorded on
+// route_runs, the execution record — not on routes, the route definition. This also keeps driver-
+// initiated transitions (start/progress) inside what the driver RLS policy on route_runs allows;
+// routes stays staff-write-only (see supabase/migrations/202607150006_sw020_rls_fixes.sql).
+async function transitionRouteRun(client, fallback, municipality_id, routeId, next, opts = {}) {
   const adapterMissing = !client?.from;
-  if (adapterMissing) return ok(fallback[next === 'started' ? 'startRoute' : next === 'delayed' ? 'markDelayed' : 'verifyRoute'](routeId), { source:'DEMO_FALLBACK', correlation_id: opts.correlation_id });
-  const currentQuery = municipality_id ? client.from('routes').select('*').eq('municipality_id', municipality_id).eq('id', routeId).maybeSingle() : client.from('routes').select('*').eq('id', routeId).maybeSingle();
-  const current = await currentQuery;
+  const fallbackMethod = { started:'startRoute', delayed:'markDelayed', completed:'completeRoute', verified:'verifyRoute', in_progress:'updateProgress' }[next] ?? 'markDelayed';
+  if (adapterMissing) return ok(fallback[fallbackMethod]?.(routeId) ?? fallback.getRoute(routeId), { source:'DEMO_FALLBACK', correlation_id: opts.correlation_id });
+  let findQuery = client.from('route_runs').select('*').eq('route_id', routeId).order('created_at', { ascending: false }).limit(1);
+  if (municipality_id) findQuery = findQuery.eq('municipality_id', municipality_id);
+  const current = await findQuery.maybeSingle();
   if (current.error) return fail(current.error.code ?? 'SUPABASE_ERROR', current.error.message, opts);
-  if (!current.data) return fail('ROUTE_NOT_FOUND', 'Route not found', opts);
+  if (!current.data) return fail('ROUTE_RUN_NOT_FOUND', 'No route_run found for route; assign it first', opts);
   if (!canTransitionRoute(current.data.status, next)) return fail('INVALID_ROUTE_TRANSITION', `Rejected route transition ${current.data.status}->${next}`, opts);
-  let q = client.from('routes').update({ status: next }).eq('id', routeId);
-  if (municipality_id) q = q.eq('municipality_id', municipality_id);
+  let q = client.from('route_runs').update({ status: next }).eq('id', current.data.id);
   if (opts.version !== undefined) q = q.eq('version', opts.version);
   const updated = await q.select('*').single();
   if (updated.error) return fail(updated.error.code ?? 'SUPABASE_ERROR', updated.error.message, opts);
