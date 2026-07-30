@@ -1,6 +1,12 @@
 import { trucks, routes, drivers, incidents, routePaths } from './demo-data.js';
 import { canTransitionRoute } from './contracts.js';
 
+// This adapter (createSupabaseOperationsAdapter, below) is the single entry point for operating
+// on routes/route_runs/vehicle_assignments — see docs/CORE_READINESS_REVIEW.md. When MT Workflow
+// (MTIT-OS Core) exists, this is the module that would internally call CreateWorkOrder()/
+// AssignWorkOrder()/CompleteWorkOrder()/VerifyWorkOrder()/CloseWorkOrder() instead of writing to
+// route_runs directly — callers of this adapter should not need to change.
+
 const ok = (data, meta = {}) => ({ ok: true, data, source: meta.source ?? 'REAL', correlation_id: meta.correlation_id ?? null });
 const fail = (code, message, meta = {}) => ({ ok: false, error: { code, message }, source: meta.source ?? 'REAL', correlation_id: meta.correlation_id ?? null });
 const table = (client, name) => client.from(name);
