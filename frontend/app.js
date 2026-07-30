@@ -3,6 +3,7 @@ import { operationsAdapter } from '../shared/operations-adapter.js';
 import { DeviceSimulator } from '../shared/telemetry-simulator.js';
 import { validateEvidenceFile } from '../shared/channel-contracts.js';
 import { IMPACT_DEMO_NOTICE, IMPACT_SCENARIO_NOTICE, defaultImpactAssumptions, metricReadiness, calculateImpactMetrics } from '../shared/impact-center.js';
+import { initAuthGate } from './auth-gate.js';
 
 const $ = (selector) => document.querySelector(selector);
 const app = $('#app');
@@ -177,3 +178,6 @@ document.querySelectorAll('#fuelPrice,#fuelEfficiency,#operatingDays,#hourlyCost
 $('#evidence').addEventListener('change', (event) => { const file = event.target.files?.[0]; const result = validateEvidenceFile(file); $('#evidencePreview').textContent = result.ok ? `${file?.name ?? 'Sin archivo'} · ${result.reason}` : `Evidencia rechazada: ${result.reason}`; });
 function requestGeolocation() { const target = $('#geoStatus'); if (!navigator.geolocation) { target.textContent = 'Ubicación no disponible en este navegador.'; return; } target.textContent = 'Solicitando permiso de ubicación...'; navigator.geolocation.getCurrentPosition((pos) => { target.textContent = `Ubicación recibida localmente: ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)} (no enviada)`; }, (err) => { target.textContent = `Permiso denegado, timeout o ubicación no disponible: ${err.message}`; }, { enableHighAccuracy:true, timeout:8000, maximumAge:60000 }); }
 initMap();
+// No-ops entirely (leaves every section visible, same as before this line existed) unless the
+// page sets window.SMARTWASTE_SUPABASE_CONFIG — see frontend/auth-gate.js and CLAUDE.md rule 5.
+initAuthGate();

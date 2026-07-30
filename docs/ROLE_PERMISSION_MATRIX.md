@@ -8,4 +8,4 @@
 | dispatcher | One municipality | assign vehicles, drivers, routes; create incidents |
 | driver | Authorized own operation | view route, start route, update progress, report incidents |
 
-Security must be enforced by backend/RLS with `municipality_id`; frontend filters are demo UX only.
+Security must be enforced by backend/RLS with `municipality_id`; frontend filters are demo UX only by default. `frontend/auth-gate.js` adds an opt-in real login + role gate backed by `resolveSupabaseAuthContext()` (see `docs/FRONTEND_LOGIN_SETUP.md`) — but it activates only when explicitly configured, and RLS remains the actual security boundary either way.
