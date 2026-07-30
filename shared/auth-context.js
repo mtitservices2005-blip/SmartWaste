@@ -1,3 +1,6 @@
+// New callers should generally prefer shared/core-ports.js (createIdentityProvider /
+// createMunicipalityScope) over importing these functions directly — see
+// docs/CORE_READINESS_REVIEW.md. This file's exports are unchanged for existing callers.
 export const ROLES = ['mt_superadmin','municipal_admin','supervisor','dispatcher','driver'];
 export const PERMISSIONS = {
   mt_superadmin: ['platform.read','municipality.onboard','municipality.support','health.read'],
