@@ -1,0 +1,59 @@
+name: Tests
+
+# CI/CD for SmartWaste (see docs/TECHNICAL_DEBT_REGISTER.md item #8 — no automated gate existed
+# before this). Two jobs: fast unit/local tests that need nothing but Node, and integration tests
+# that need a real local Supabase instance (Docker), mirroring exactly how SW-020 verified them
+# manually on LabPC (docs/SW020_CLAUDE_CODE_TASK_BRIEF.md).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  unit-tests:
+    name: Unit/local tests (no Supabase required)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # None of these test files import @supabase/supabase-js, so no npm install is needed here —
+      # keeps this job fast. tests/rls-adversarial.test.mjs and tests/operational-cycle.test.mjs are
+      # excluded on purpose: they need a live Supabase instance and run in the integration-tests job.
+      - name: Run each tests/*.test.mjs file as an independent node process
+        run: |
+          set -e
+          skip_list="tests/rls-adversarial.test.mjs tests/operational-cycle.test.mjs"
+          for f in tests/*.test.mjs; do
+            skip=false
+            for s in $skip_list; do
+              [ "$f" = "$s" ] && skip=true
+            done
+            if [ "$skip" = true ]; then continue; fi
+            echo "=== $f ==="
+            node "$f"
+          done
+
+  integration-tests:
+    name: Integration tests (local Supabase via Docker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Start Supabase local
+        run: npx supabase start
+      - name: Run RLS adversarial and operational cycle tests
+        run: |
+          set -e
+          node tests/rls-adversarial.test.mjs
+          node tests/operational-cycle.test.mjs
+      - name: Stop Supabase local
+        if: always()
+        run: npx supabase stop
