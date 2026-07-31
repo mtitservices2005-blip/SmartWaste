@@ -9,6 +9,13 @@ export const ROUTE_TRANSITIONS = {
 };
 
 export function canTransitionRoute(from, to) { return Boolean(ROUTE_TRANSITIONS[from]?.includes(to)); }
+
+// Which of ROUTE_TRANSITIONS[status] a driver may trigger directly from the driver view
+// (frontend/app.js renderConductor). Scoped narrower than the raw transition graph because
+// PERMISSIONS.driver (shared/auth-context.js) only grants routes.start/routes.progress/
+// incidents.create — not routes.verify (supervisor-only) or cancellation (dispatcher-only), even
+// though the transition graph itself would technically allow reaching either from some states.
+export function driverAllowedTransitions(status) { return (ROUTE_TRANSITIONS[status] ?? []).filter((next) => !['verified', 'cancelled'].includes(next)); }
 export function requireMunicipality(record) { if (!record?.municipality_id) throw new Error('municipality_id is required'); return record; }
 
 const base = { id:'uuid', municipality_id:'uuid', created_at:'timestamp', updated_at:'timestamp' };

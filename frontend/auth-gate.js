@@ -18,8 +18,9 @@ import { createIdentityProvider } from '../shared/core-ports.js';
 // anon_insert_citizen_report policy).
 export const SECTION_ROLES = {
   mapa: ['municipal_admin', 'supervisor', 'dispatcher', 'driver'],
-  municipal: ['municipal_admin', 'dispatcher', 'driver'],
+  municipal: ['municipal_admin', 'dispatcher'],
   supervisor: ['supervisor'],
+  conductor: ['driver'],
   impacto: ['municipal_admin', 'supervisor'],
   master: ['mt_superadmin'],
   ciudadania: null

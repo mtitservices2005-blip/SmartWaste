@@ -8,12 +8,14 @@ import { pickVisibleSections, readSupabaseConfig, SECTION_ROLES } from '../front
 // Anonymous / no session: only the public citizen portal is visible.
 assert.deepEqual(pickVisibleSections(null).sort(), ['ciudadania']);
 
-// Driver: operational sections, not the impact center (no reports.read in PERMISSIONS.driver) or
-// master admin.
-assert.deepEqual(pickVisibleSections('driver').sort(), ['ciudadania', 'mapa', 'municipal']);
+// Driver gets its own dedicated view (assigned route + progress + incident reporting, matching
+// PERMISSIONS.driver's routes.start/routes.progress/incidents.create) instead of the generic
+// municipal panel — same rationale as the supervisor split below. No impact center (no
+// reports.read in PERMISSIONS.driver) or master admin.
+assert.deepEqual(pickVisibleSections('driver').sort(), ['ciudadania', 'conductor', 'mapa']);
 
-// Dispatcher: same as driver — dispatcher also lacks reports.read (shared/auth-context.js
-// PERMISSIONS.dispatcher).
+// Dispatcher: generic municipal panel (no dedicated view of its own), no impact center — dispatcher
+// also lacks reports.read (shared/auth-context.js PERMISSIONS.dispatcher).
 assert.deepEqual(pickVisibleSections('dispatcher').sort(), ['ciudadania', 'mapa', 'municipal']);
 
 // Supervisor gets its own dedicated view (route verification + incident management, matching

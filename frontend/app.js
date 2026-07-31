@@ -1,15 +1,23 @@
 import { demoNotice, simulationNotice, pilotMunicipality, trucks, routes, sectors, drivers, incidents, notifications, municipalities, routeFlow, routePaths, stateLabels } from '../shared/demo-data.js';
 import { operationsAdapter } from '../shared/operations-adapter.js';
+import { driverAllowedTransitions } from '../shared/contracts.js';
 import { DeviceSimulator } from '../shared/telemetry-simulator.js';
 import { validateEvidenceFile } from '../shared/channel-contracts.js';
 import { IMPACT_DEMO_NOTICE, IMPACT_SCENARIO_NOTICE, defaultImpactAssumptions, metricReadiness, calculateImpactMetrics } from '../shared/impact-center.js';
-import { initAuthGate } from './auth-gate.js';
+import { initAuthGate, SECTION_ROLES } from './auth-gate.js';
 
 const $ = (selector) => document.querySelector(selector);
 const app = $('#app');
 const driverName = (id) => drivers.find((driver) => driver.id === id)?.name ?? 'Sin asignar';
 const routeById = (id) => routes.find((route) => route.id === id);
 const routeName = (id) => routeById(id)?.name ?? 'Sin ruta asignada';
+// Demo-only stand-in for "the logged-in driver" — there is no per-user session wired to a specific
+// drivers.id yet (auth-gate.js only resolves the *role*, not which driver row a Supabase user maps
+// to; that lookup needs a real drivers.profile_id query, out of scope here). drv-02 is the driver
+// already assigned to the route the old hardcoded widget referenced (route-centro), so the demo
+// narrative doesn't change, it just becomes data-driven instead of a fixed string.
+const DEMO_DRIVER_ID = 'drv-02';
+const currentDriverRoute = () => routes.find((route) => route.driverId === DEMO_DRIVER_ID) ?? null;
 const label = (state) => stateLabels[state] ?? state;
 const routePosition = (truck) => truck.position ?? routePaths[truck.routeId]?.[truck.positionIndex ?? 0] ?? pilotMunicipality.center;
 let selectedTruckId = null;
@@ -82,7 +90,7 @@ function renderRouteDetail(route) {
 }
 function renderIncidentDetail(incident) { return `<div class="drawer-head"><p class="eyebrow">Incidencia operativa demo</p><h2>${incident.type}</h2>${pill('open')}</div><p><b>Folio:</b> ${incident.id}</p><p><b>Sector:</b> ${incident.sector}</p><p><b>Prioridad:</b> ${incident.priority}</p><p><b>Estado:</b> ${incident.status}</p><p>${incident.detail}</p><p class="demo">${demoNotice}</p>`; }
 
-function renderMunicipal() { return `<section id="municipal" class="section card"><h2>Panel municipal</h2><p class="demo">${demoNotice} · Municipio piloto configurable: ${pilotMunicipality.name}, ${pilotMunicipality.country}</p><div class="controls"><input id="search" placeholder="Buscar ruta, camión o sector"><select id="sectorFilter"><option value="">Todos los sectores</option>${sectors.map((s) => `<option>${s.name}</option>`).join('')}</select></div><div class="panel-grid"><div><h3>Rutas del día</h3><div class="list" id="routeList">${renderRoutes(routes)}</div></div><div><h3>Vehículos demo</h3>${trucks.map((truck) => `<button class="row selectable" data-truck="${truck.id}"><span>${truckIcon(truck)} ${truck.unit}<br>${driverName(truck.driverId)}</span>${pill(truck.state)}</button>`).join('')}</div><div><h3>Incidencias en mapa</h3>${incidents.map((incident) => `<button class="row selectable" data-incident="${incident.code}"><span>${incident.type}<br>${incident.sector}</span>${pill('open')}</button>`).join('')}</div></div><h3>Vista móvil conductor</h3><div class="mobile"><h4>Ruta asignada</h4><p>Demo Centro Urbano AM → En progreso</p><button data-flow>Avanzar flujo demo</button><p id="flowState">planned</p></div></section>`; }
+function renderMunicipal() { return `<section id="municipal" class="section card"><h2>Panel municipal</h2><p class="demo">${demoNotice} · Municipio piloto configurable: ${pilotMunicipality.name}, ${pilotMunicipality.country}</p><div class="controls"><input id="search" placeholder="Buscar ruta, camión o sector"><select id="sectorFilter"><option value="">Todos los sectores</option>${sectors.map((s) => `<option>${s.name}</option>`).join('')}</select></div><div class="panel-grid"><div><h3>Rutas del día</h3><div class="list" id="routeList">${renderRoutes(routes)}</div></div><div><h3>Vehículos demo</h3>${trucks.map((truck) => `<button class="row selectable" data-truck="${truck.id}"><span>${truckIcon(truck)} ${truck.unit}<br>${driverName(truck.driverId)}</span>${pill(truck.state)}</button>`).join('')}</div><div><h3>Incidencias en mapa</h3>${incidents.map((incident) => `<button class="row selectable" data-incident="${incident.code}"><span>${incident.type}<br>${incident.sector}</span>${pill('open')}</button>`).join('')}</div></div></section>`; }
 function renderRoutes(items) { return items.map((route) => `<article class="row selectable" data-route="${route.id}"><div><strong>${route.name}</strong><br>${route.sectors.join(' · ')} · ETA ${route.eta}<br>${progress(route.progress)}</div><div>${pill(routeStatus(route))}<br>${route.covered}/${route.stops} paradas</div></article>`).join(''); }
 function renderSupervisor() {
   const pendingVerification = routes.filter((route) => route.status === 'completed');
@@ -91,6 +99,20 @@ function renderSupervisor() {
     <div><h3>Rutas pendientes de verificación</h3>${pendingVerification.length ? pendingVerification.map((route) => `<article class="row"><div><strong>${route.name}</strong><br>${route.sectors.join(' · ')} · ${route.progress}% completado</div><div>${pill('completed')}<button data-verify-route="${route.id}">Verificar</button></div></article>`).join('') : '<p>No hay rutas completadas pendientes de verificación.</p>'}</div>
     <div><h3>Incidencias abiertas</h3>${openIncidents.length ? openIncidents.map((incident) => `<article class="row"><div><strong>${incident.type}</strong><br>${incident.sector} · ${incident.priority}</div><div>${pill('open')}<button data-resolve-incident="${incident.code}">Marcar resuelta</button></div></article>`).join('') : '<p>Sin incidencias abiertas.</p>'}</div>
   </div></section>`;
+}
+function renderConductor() {
+  const route = currentDriverRoute();
+  const driver = drivers.find((item) => item.id === DEMO_DRIVER_ID);
+  const ownIncidents = route ? incidents.filter((incident) => route.incidents.includes(incident.code)) : [];
+  const nextStates = route ? driverAllowedTransitions(route.status) : [];
+  return `<section id="conductor" class="section card"><h2>Vista de conductor</h2><p class="demo">${demoNotice} · Sesión demo de ${driver?.name ?? 'conductor'}. Acciones de esta vista son demo local (no escriben contra Supabase todavía).</p>
+    ${route ? `<div class="panel-grid">
+      <div><h3>Ruta asignada</h3><article class="row"><div><strong>${route.name}</strong><br>${route.sectors.join(' · ')} · ETA ${route.eta}<br>${progress(route.progress)}</div><div>${pill(routeStatus(route))}<br>${route.covered}/${route.stops} paradas</div></article>
+        <div class="mobile"><h4>Cambiar estado de la ruta</h4>${nextStates.length ? nextStates.map((next) => `<button data-driver-transition="${next}">${label(next)}</button>`).join('') : '<p>Sin transiciones disponibles para el conductor en este estado.</p>'}</div></div>
+      <div><h3>Incidencias de esta ruta</h3>${ownIncidents.length ? ownIncidents.map((incident) => `<button class="row selectable" data-incident="${incident.code}"><span>${incident.type}<br>${incident.sector}</span>${pill('open')}</button>`).join('') : '<p>Sin incidencias reportadas en esta ruta.</p>'}
+        <form id="driverIncidentForm"><h4>Reportar incidencia</h4><select name="type"><option>Calle bloqueada</option><option>Avería</option><option>Retraso</option><option>Vertedero improvisado</option></select><textarea name="description" placeholder="Descripción demo" required></textarea><button>Reportar</button></form></div>
+    </div>` : '<p>Sin ruta asignada actualmente.</p>'}
+  </section>`;
 }
 function renderCitizen() { return `<section id="ciudadania" class="section card"><h2>Portal ciudadano</h2><p class="demo">${demoNotice}</p><div class="panel-grid"><div><h3>Consulta de recogida</h3><select id="citizenSector">${sectors.map((s) => `<option value="${s.id}">${s.name}</option>`).join('')}</select><p id="pickupResult"></p><h3>Avisos municipales</h3>${notifications.map((n) => `<div class="row">🔔 ${n}</div>`).join('')}</div><form id="incidentForm"><h3>Reportar incidencia</h3><select name="type"><option>Basura no recogida</option><option>Vertedero improvisado</option></select><select name="sector">${sectors.map((s) => `<option value="${s.id}">${s.name}</option>`).join('')}</select><textarea name="description" placeholder="Descripción demo"></textarea><input id="manualAddress" name="address" placeholder="Dirección manual si no usa GPS"><button type="button" id="useGeo">Usar ubicación GPS del navegador</button><p id="geoStatus" class="demo">GPS requiere permiso del usuario.</p><input id="evidence" type="file" accept="image/png,image/jpeg,image/webp,application/pdf" aria-label="Adjuntar evidencia demo"><p id="evidencePreview" class="demo">Evidencia local; no upload real verificado.</p><button>Obtener folio</button><p id="folio"></p></form><div><h3>Consultar estado</h3><input id="folioSearch" value="SW-FOLIO-1001"><button id="checkFolio">Consultar</button><p id="folioStatus"></p><h3>Futura relación</h3><p>Preparado para Chatbot Municipal: preguntas frecuentes, folios y avisos por sector.</p></div></div></section>`; }
 
@@ -124,7 +146,7 @@ function renderBeforeAfter(m){return `<div class="comparison-table">${m.beforeAf
 
 function renderMaster() { return `<section id="master" class="section card"><h2>Master Admin MT IT Services</h2><p class="demo">${demoNotice}</p><div class="panel-grid">${municipalities.map((m) => `<article class="card"><h3>${m.name}</h3><p>Plan: ${m.plan}</p><p>Camiones: ${m.trucks} · Rutas: ${m.routes} · Usuarios: ${m.users}</p>${pill(m.status.toLowerCase().includes('operativo') ? 'active' : 'assigned')}<button data-onboarding="${m.id}">Onboarding demo</button><p class="demo" data-onboarding-status="${m.id}"></p></article>`).join('')}</div><h3>Arquitectura futura</h3><p>${pilotMunicipality.integrationsReady.join(' · ')}</p></section>`; }
 
-app.innerHTML = `${renderMap()}${renderMunicipal()}${renderSupervisor()}${renderCitizen()}${renderImpactCenter()}${renderMaster()}`;
+app.innerHTML = `${renderMap()}${renderMunicipal()}${renderSupervisor()}${renderConductor()}${renderCitizen()}${renderImpactCenter()}${renderMaster()}`;
 
 function loadLeaflet() {
   return new Promise((resolve, reject) => {
@@ -171,11 +193,20 @@ document.addEventListener('click', (event) => {
   const truckButton = event.target.closest('[data-truck]'); if (truckButton) selectTruck(truckButton.dataset.truck);
   const routeButton = event.target.closest('[data-route]'); if (routeButton?.dataset.route) selectRoute(routeButton.dataset.route);
   const incidentButton = event.target.closest('[data-incident]'); if (incidentButton) selectIncident(incidentButton.dataset.incident);
-  if (event.target.matches('[data-flow]')) { const current = $('#flowState').textContent; $('#flowState').textContent = routeFlow[(routeFlow.indexOf(current) + 1) % routeFlow.length]; }
   const verifyButton = event.target.closest('[data-verify-route]');
   if (verifyButton) { const route = routeById(verifyButton.dataset.verifyRoute); if (route) { route.status = 'verified'; $('#supervisor').outerHTML = renderSupervisor(); } }
   const resolveButton = event.target.closest('[data-resolve-incident]');
   if (resolveButton) { const incident = incidents.find((item) => item.code === resolveButton.dataset.resolveIncident); if (incident) { incident.status = 'Cerrada'; $('#supervisor').outerHTML = renderSupervisor(); } }
+  const driverTransitionButton = event.target.closest('[data-driver-transition]');
+  if (driverTransitionButton) {
+    const route = currentDriverRoute();
+    const next = driverTransitionButton.dataset.driverTransition;
+    if (route && driverAllowedTransitions(route.status).includes(next)) {
+      route.status = next;
+      if (next === 'completed') route.progress = 100;
+      $('#conductor').outerHTML = renderConductor();
+    }
+  }
   const onboardButton = event.target.closest('[data-onboarding]');
   if (onboardButton) { const status = document.querySelector(`[data-onboarding-status="${onboardButton.dataset.onboarding}"]`); if (status) status.textContent = 'Onboarding demo iniciado — flujo completo en desarrollo.'; }
   if (event.target.id === 'useGeo') { requestGeolocation(); }
@@ -183,6 +214,19 @@ document.addEventListener('click', (event) => {
   const sim = event.target.dataset.sim; if (sim === 'start') startSimulation(); if (sim === 'pause') pauseSimulation(); if (sim === 'reset') resetSimulation(); if (sim === 'speed') { simulationSpeed = simulationSpeed === 1 ? 2 : simulationSpeed === 2 ? 4 : 1; event.target.textContent = `${simulationSpeed}×`; if (simulationTimer) { pauseSimulation(); startSimulation(); } }
 });
 document.addEventListener('change', (event) => { if (event.target.closest('#impacto') && event.target.matches('select')) { $('#impacto').outerHTML = renderImpactCenter(currentImpactAssumptions(), currentImpactFilters()); } });
+// Delegated (not a direct listener) because #driverIncidentForm is recreated every time #conductor
+// re-renders (e.g. after a route status transition), which would drop a directly-attached listener.
+document.addEventListener('submit', (event) => {
+  if (event.target.id !== 'driverIncidentForm') return;
+  event.preventDefault();
+  const route = currentDriverRoute();
+  if (!route) return;
+  const formData = new FormData(event.target);
+  const code = `INC-${incidents.length + 1}`;
+  incidents.push({ id: `SW-FOLIO-${1000 + incidents.length + 1}`, code, type: formData.get('type'), sector: route.sector, status: 'Abierta', priority: 'Media', position: pilotMunicipality.center, detail: formData.get('description') });
+  route.incidents.push(code);
+  $('#conductor').outerHTML = renderConductor();
+});
 $('#search').addEventListener('input', (event) => { const term = event.target.value.toLowerCase(); $('#routeList').innerHTML = renderRoutes(routes.filter((route) => JSON.stringify(route).toLowerCase().includes(term))); });
 $('#sectorFilter').addEventListener('change', (event) => { $('#routeList').innerHTML = renderRoutes(routes.filter((route) => !event.target.value || route.sectors.includes(event.target.value))); });
 $('#citizenSector').addEventListener('change', (event) => { const sector = sectors.find((item) => item.id === event.target.value); $('#pickupResult').textContent = `${sector.pickupDay} · Estado: ${sector.status}`; });
@@ -191,7 +235,33 @@ $('#incidentForm').addEventListener('submit', (event) => { event.preventDefault(
 document.querySelectorAll('#fuelPrice,#fuelEfficiency,#operatingDays,#hourlyCost').forEach((input) => input.addEventListener('input', () => { const assumptions = { ...defaultImpactAssumptions, fuelPrice: Number($('#fuelPrice').value), fuelEfficiency: Number($('#fuelEfficiency').value), operatingDays: Number($('#operatingDays').value), hourlyCost: Number($('#hourlyCost').value) }; $('#impactEconomics').innerHTML = renderImpactEconomics(calculateImpactMetrics(assumptions)); }));
 $('#evidence').addEventListener('change', (event) => { const file = event.target.files?.[0]; const result = validateEvidenceFile(file); $('#evidencePreview').textContent = result.ok ? `${file?.name ?? 'Sin archivo'} · ${result.reason}` : `Evidencia rechazada: ${result.reason}`; });
 function requestGeolocation() { const target = $('#geoStatus'); if (!navigator.geolocation) { target.textContent = 'Ubicación no disponible en este navegador.'; return; } target.textContent = 'Solicitando permiso de ubicación...'; navigator.geolocation.getCurrentPosition((pos) => { target.textContent = `Ubicación recibida localmente: ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)} (no enviada)`; }, (err) => { target.textContent = `Permiso denegado, timeout o ubicación no disponible: ${err.message}`; }, { enableHighAccuracy:true, timeout:8000, maximumAge:60000 }); }
+// Tab-style navigation: only one top-level section visible at a time, chosen by the URL hash
+// (#mapa, #conductor, etc.), matching the nav links' existing href="#id" — added because stacking
+// every section in one long page made new views (like #conductor) hard to notice among the rest.
+// SECTION_ROLES.keys() (not a separate hardcoded list) so this can never drift out of sync with
+// which sections actually exist / are gated by role in auth-gate.js.
+const SECTION_IDS = Object.keys(SECTION_ROLES);
+function isNavAllowed(id) { const link = document.querySelector(`nav a[href="#${id}"]`); return !link || link.style.display !== 'none'; }
+function activateSection(id) {
+  const allowed = SECTION_IDS.filter(isNavAllowed);
+  const target = allowed.includes(id) ? id : allowed[0];
+  if (!target) return;
+  SECTION_IDS.forEach((sectionId) => { const el = document.getElementById(sectionId); if (el) el.style.display = sectionId === target ? '' : 'none'; });
+  document.querySelectorAll('nav a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === `#${target}`));
+  if (location.hash !== `#${target}`) history.replaceState(null, '', `#${target}`);
+  $('#app').scrollIntoView({ block: 'start' });
+  // Leaflet sizes itself from the container's on-screen dimensions at init time; if #mapa was
+  // display:none then (e.g. the page loaded directly on #conductor), the map would have measured a
+  // 0×0 box. invalidateSize() re-measures now that the container is actually visible.
+  if (target === 'mapa' && map) map.invalidateSize();
+}
+window.addEventListener('hashchange', () => activateSection(location.hash.slice(1)));
+activateSection(location.hash.slice(1) || 'mapa');
+
 initMap();
 // No-ops entirely (leaves every section visible, same as before this line existed) unless the
 // page sets window.SMARTWASTE_SUPABASE_CONFIG — see frontend/auth-gate.js and CLAUDE.md rule 5.
-initAuthGate();
+// Re-activate afterwards: role resolution is async and may hide the section the tab logic above
+// picked before login resolved (e.g. a driver's default 'mapa' tab is still allowed, but if the
+// hash pointed at '#municipal' before resolving, that's no longer valid for that role).
+initAuthGate().then(() => activateSection(location.hash.slice(1) || 'mapa'));

@@ -28,7 +28,7 @@ Definido en `frontend/auth-gate.js` (`SECTION_ROLES`), validado sin necesidad de
 | Rol | Secciones visibles |
 |---|---|
 | (sin sesión / ciudadano) | Portal ciudadano únicamente |
-| `driver` | Mapa, panel municipal, portal ciudadano |
+| `driver` | Mapa, vista de conductor (propia, ruta asignada + reporte de incidencias), portal ciudadano — no ve el panel municipal genérico |
 | `dispatcher` | Mapa, panel municipal, portal ciudadano |
 | `supervisor` | Mapa, panel de supervisor (propio, verificación de rutas + incidencias), impacto y ahorros, portal ciudadano — no ve el panel municipal genérico |
 | `municipal_admin` | Mapa, panel municipal, impacto y ahorros, portal ciudadano |
