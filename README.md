@@ -6,8 +6,14 @@ SmartWaste es una demo Alpha visual para ayuntamientos que necesitan monitorear 
 
 ## Demos
 
-- Demo principal: abrir `frontend/index.html`.
-- Demo end-to-end: abrir `frontend/e2e-demo/index.html`.
+**Importante:** `frontend/app.js` usa módulos ES con imports relativos. Abrir `frontend/index.html` con doble clic (protocolo `file://`) hace que Chrome/Edge bloqueen esos imports por CORS y la página quede en blanco, sin ningún error visible. Hay que servirlo por `http://localhost`:
+
+- Windows: doble clic en `iniciar-demo.bat` (en la raíz del repo) — levanta el servidor y abre el navegador solo.
+- Cualquier sistema: `node scripts/serve-demo.mjs` desde la raíz del repo, y abrir `http://localhost:8080/` (requiere Node, sin dependencias extra).
+
+Con eso:
+- Demo principal: `http://localhost:8080/frontend/index.html` (la raíz `/` sirve lo mismo).
+- Demo end-to-end: `http://localhost:8080/frontend/e2e-demo/index.html`.
 
 ## Alcance Alpha
 
