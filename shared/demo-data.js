@@ -71,12 +71,18 @@ export const routePaths = {
   'route-mao': [[19.6542, -71.1041], [19.6531, -71.1023], [19.6520, -71.1004], [19.6508, -71.0984], [19.6496, -71.0965]]
 };
 
+// realId: fixed uuid each route would have if seeded into a local Supabase instance for real
+// verification (tests/integration/seed.mjs seeds route-centro and route-maestros with these exact
+// ids). routes.id is a `uuid` column in the real schema (supabase/migrations/202607150001_sw007_
+// foundation.sql:9) — these demo ids ('route-centro', etc.) are not valid uuids themselves, so real
+// writes (frontend/app.js) use route.realId, never route.id, when a writeAdapter is active. See
+// docs/TECHNICAL_DEBT_REGISTER.md #14.
 export const routes = [
-  { id: 'route-centro', name: 'Demo Centro Urbano AM', status: 'in_progress', sectors: ['Centro urbano', 'Avenida Duarte'], sector: 'Centro urbano', truckId: 'truck-01', driverId: 'drv-02', progress: 68, scheduled: '07:00', started: '07:14', eta: '10:40', distanceKm: 5.8, estimatedMinutes: 72, stops: 12, covered: 8, pending: 4, incidents: ['INC-003'] },
-  { id: 'route-duarte', name: 'Demo Duarte Comercial', status: 'delayed', sectors: ['Avenida Duarte', 'Centro urbano'], sector: 'Avenida Duarte', truckId: 'truck-02', driverId: 'drv-01', progress: 42, scheduled: '08:00', started: '08:21', eta: '11:25', distanceKm: 4.7, estimatedMinutes: 85, stops: 14, covered: 5, pending: 9, incidents: ['INC-001', 'INC-002'] },
-  { id: 'route-maestros', name: 'Demo Los Maestros', status: 'completed', sectors: ['Los Maestros'], sector: 'Los Maestros', truckId: 'truck-04', driverId: 'drv-01', progress: 100, scheduled: '06:30', started: '06:34', eta: '09:55', distanceKm: 3.9, estimatedMinutes: 55, stops: 9, covered: 9, pending: 0, incidents: [] },
-  { id: 'route-buenos-aires', name: 'Demo Buenos Aires PM', status: 'assigned', sectors: ['Buenos Aires'], sector: 'Buenos Aires', truckId: 'truck-03', driverId: 'drv-03', progress: 14, scheduled: '14:00', started: 'Pendiente', eta: '15:20', distanceKm: 4.2, estimatedMinutes: 63, stops: 6, covered: 1, pending: 5, incidents: ['INC-004'] },
-  { id: 'route-mao', name: 'Demo salida hacia Mao', status: 'in_progress', sectors: ['Salida hacia Mao'], sector: 'Salida hacia Mao', truckId: 'truck-06', driverId: 'drv-04', progress: 54, scheduled: '09:00', started: '09:08', eta: '12:05', distanceKm: 6.1, estimatedMinutes: 91, stops: 10, covered: 5, pending: 5, incidents: ['INC-005'] }
+  { id: 'route-centro', realId: '2c31e348-a7d7-466a-a3ff-c299d7a449c9', name: 'Demo Centro Urbano AM', status: 'in_progress', sectors: ['Centro urbano', 'Avenida Duarte'], sector: 'Centro urbano', truckId: 'truck-01', driverId: 'drv-02', progress: 68, scheduled: '07:00', started: '07:14', eta: '10:40', distanceKm: 5.8, estimatedMinutes: 72, stops: 12, covered: 8, pending: 4, incidents: ['INC-003'] },
+  { id: 'route-duarte', realId: '53f21a7f-ea5f-406b-a2b9-d9180a57c391', name: 'Demo Duarte Comercial', status: 'delayed', sectors: ['Avenida Duarte', 'Centro urbano'], sector: 'Avenida Duarte', truckId: 'truck-02', driverId: 'drv-01', progress: 42, scheduled: '08:00', started: '08:21', eta: '11:25', distanceKm: 4.7, estimatedMinutes: 85, stops: 14, covered: 5, pending: 9, incidents: ['INC-001', 'INC-002'] },
+  { id: 'route-maestros', realId: 'c81455df-4afd-45cb-8823-162a633e9486', name: 'Demo Los Maestros', status: 'completed', sectors: ['Los Maestros'], sector: 'Los Maestros', truckId: 'truck-04', driverId: 'drv-01', progress: 100, scheduled: '06:30', started: '06:34', eta: '09:55', distanceKm: 3.9, estimatedMinutes: 55, stops: 9, covered: 9, pending: 0, incidents: [] },
+  { id: 'route-buenos-aires', realId: '3f675942-8d20-42e7-be71-41334435dfbb', name: 'Demo Buenos Aires PM', status: 'assigned', sectors: ['Buenos Aires'], sector: 'Buenos Aires', truckId: 'truck-03', driverId: 'drv-03', progress: 14, scheduled: '14:00', started: 'Pendiente', eta: '15:20', distanceKm: 4.2, estimatedMinutes: 63, stops: 6, covered: 1, pending: 5, incidents: ['INC-004'] },
+  { id: 'route-mao', realId: '1b208f7d-3406-42e4-ae26-2894fd0b6439', name: 'Demo salida hacia Mao', status: 'in_progress', sectors: ['Salida hacia Mao'], sector: 'Salida hacia Mao', truckId: 'truck-06', driverId: 'drv-04', progress: 54, scheduled: '09:00', started: '09:08', eta: '12:05', distanceKm: 6.1, estimatedMinutes: 91, stops: 10, covered: 5, pending: 5, incidents: ['INC-005'] }
 ];
 
 export const trucks = [
@@ -88,12 +94,17 @@ export const trucks = [
   { id: 'truck-06', unit: 'SW-LS-06', name: 'Unidad liviana 06', plate: 'DEMO-LS-006', state: 'active', driverId: 'drv-04', routeId: 'route-mao', progress: 54, speedKmh: 22, updatedAt: 'Hace 1 min', sector: 'Salida hacia Mao', nextStop: 'Parada demo carretera', loadLevel: 48, positionIndex: 2 }
 ];
 
+// realId: same idea as routes.realId above — incidents.id is also a real `uuid` column, and demo
+// status/priority ('Abierta', 'Alta', ...) are display labels, not the real schema's English
+// enum (shared/contracts.js INCIDENT_STATES / 'low|medium|high|critical'). Real writes translate
+// the specific values they need at the call site in frontend/app.js rather than through a general
+// mapping table — see docs/TECHNICAL_DEBT_REGISTER.md #14.
 export const incidents = [
-  { id: 'SW-FOLIO-1001', code: 'INC-001', type: 'Calle bloqueada', sector: 'Avenida Duarte', status: 'En revisión', priority: 'Alta', position: [19.6512, -71.0984], detail: 'Obstáculo reportado en calle demo; supervisor debe validar.' },
-  { id: 'SW-FOLIO-1002', code: 'INC-002', type: 'Retraso', sector: 'Avenida Duarte', status: 'Asignada a supervisor', priority: 'Media', position: [19.6500, -71.0962], detail: 'Retraso demo por congestión local.' },
-  { id: 'SW-FOLIO-1003', code: 'INC-003', type: 'Zona pendiente', sector: 'Centro urbano', status: 'Abierta', priority: 'Media', position: [19.6487, -71.0944], detail: 'Punto pendiente de recolección demo.' },
-  { id: 'SW-FOLIO-1004', code: 'INC-004', type: 'Vertedero improvisado', sector: 'Buenos Aires', status: 'Abierta', priority: 'Alta', position: [19.6472, -71.0955], detail: 'Acumulación demo para priorización municipal.' },
-  { id: 'SW-FOLIO-1005', code: 'INC-005', type: 'Avería', sector: 'Salida hacia Mao', status: 'En revisión', priority: 'Alta', position: [19.6524, -71.1007], detail: 'Alerta demo de mantenimiento; no proviene de telemetría real.' }
+  { id: 'SW-FOLIO-1001', realId: '513212cd-b072-4a99-adbc-43d2bb563d01', code: 'INC-001', type: 'Calle bloqueada', sector: 'Avenida Duarte', status: 'En revisión', priority: 'Alta', position: [19.6512, -71.0984], detail: 'Obstáculo reportado en calle demo; supervisor debe validar.' },
+  { id: 'SW-FOLIO-1002', realId: '168ee0c6-0dd6-455e-9429-b883bd0b0a4d', code: 'INC-002', type: 'Retraso', sector: 'Avenida Duarte', status: 'Asignada a supervisor', priority: 'Media', position: [19.6500, -71.0962], detail: 'Retraso demo por congestión local.' },
+  { id: 'SW-FOLIO-1003', realId: '201375e2-ce59-4454-9b50-00cd376fc786', code: 'INC-003', type: 'Zona pendiente', sector: 'Centro urbano', status: 'Abierta', priority: 'Media', position: [19.6487, -71.0944], detail: 'Punto pendiente de recolección demo.' },
+  { id: 'SW-FOLIO-1004', realId: '38752c30-3c41-452f-bd42-52f5b443c652', code: 'INC-004', type: 'Vertedero improvisado', sector: 'Buenos Aires', status: 'Abierta', priority: 'Alta', position: [19.6472, -71.0955], detail: 'Acumulación demo para priorización municipal.' },
+  { id: 'SW-FOLIO-1005', realId: 'ce866a9b-6b90-411f-a6c6-3baa4ee03c6a', code: 'INC-005', type: 'Avería', sector: 'Salida hacia Mao', status: 'En revisión', priority: 'Alta', position: [19.6524, -71.1007], detail: 'Alerta demo de mantenimiento; no proviene de telemetría real.' }
 ];
 
 export const notifications = [

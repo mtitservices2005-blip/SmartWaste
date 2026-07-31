@@ -4,6 +4,14 @@
 // shared/auth-context.js ROLES (municipal_admin, dispatcher, driver, supervisor, mt_superadmin), a
 // vehicle, a driver row, and a route. Uses the service_role client, which bypasses RLS by design
 // (see docs/CURRENT_STATE_AUDIT.md) — this is a local-only seeding script, never shipped to a client.
+//
+// Also seeds route-centro/route-maestros/INC-003 using the EXACT realId uuids from
+// shared/demo-data.js (docs/TECHNICAL_DEBT_REGISTER.md #14) — that's what lets
+// frontend/app.js's real writes (conductor route transitions, supervisor verify/resolve) find a
+// matching row when exercised interactively against this seeded instance, instead of failing with
+// ROUTE_RUN_NOT_FOUND.
+
+import { routes as demoRoutes, incidents as demoIncidents } from '../../shared/demo-data.js';
 
 const PASSWORD = 'sw020-local-test-pass-1234';
 
@@ -63,6 +71,31 @@ export async function seedScenario(serviceClient) {
   const vehicleB = await serviceClient.from('vehicles').insert({ municipality_id: munB.data.id, code: `SW020-B-${suffix}` }).select('*').single();
   if (vehicleB.error) throw new Error(`vehicles B insert failed: ${vehicleB.error.message}`);
 
+  // route-centro / route-maestros / INC-003: seeded with the exact demo-data.js .realId uuids so
+  // frontend/app.js's real writes (conductor transitions, supervisor verify/resolve) find a match
+  // when someone logs in as driverUserA/supervisorA against this instance and clicks those buttons.
+  const demoRouteCentro = demoRoutes.find((r) => r.id === 'route-centro');
+  const demoRouteMaestros = demoRoutes.find((r) => r.id === 'route-maestros');
+  const demoIncident003 = demoIncidents.find((i) => i.code === 'INC-003');
+
+  const routeCentro = await serviceClient.from('routes').insert({ id: demoRouteCentro.realId, municipality_id: munA.data.id, name: demoRouteCentro.name, status: demoRouteCentro.status }).select('*').single();
+  if (routeCentro.error) throw new Error(`route-centro insert failed: ${routeCentro.error.message}`);
+  // status: 'in_progress' matches the demo's own route.status for route-centro — driverAllowedTransitions('in_progress')
+  // offers 'delayed'/'completed' in the UI, both valid next steps for driver_update_own_route_run.
+  const routeRunCentro = await serviceClient.from('route_runs').insert({ municipality_id: munA.data.id, route_id: routeCentro.data.id, vehicle_id: vehicleA.data.id, driver_id: driverRowA.data.id, status: 'in_progress' }).select('*').single();
+  if (routeRunCentro.error) throw new Error(`route_run for route-centro failed: ${routeRunCentro.error.message}`);
+
+  const routeMaestros = await serviceClient.from('routes').insert({ id: demoRouteMaestros.realId, municipality_id: munA.data.id, name: demoRouteMaestros.name, status: demoRouteMaestros.status }).select('*').single();
+  if (routeMaestros.error) throw new Error(`route-maestros insert failed: ${routeMaestros.error.message}`);
+  // status: 'completed' so supervisorA can exercise the real verifyRoute() transition (completed -> verified).
+  const routeRunMaestros = await serviceClient.from('route_runs').insert({ municipality_id: munA.data.id, route_id: routeMaestros.data.id, vehicle_id: vehicleA.data.id, status: 'completed' }).select('*').single();
+  if (routeRunMaestros.error) throw new Error(`route_run for route-maestros failed: ${routeRunMaestros.error.message}`);
+
+  // status/priority translated from the demo's Spanish labels ('Abierta'/'Media') to the real
+  // schema's English values — see the comment above shared/demo-data.js's incidents export.
+  const incidentCentro = await serviceClient.from('incidents').insert({ id: demoIncident003.realId, municipality_id: munA.data.id, route_run_id: routeRunCentro.data.id, type: demoIncident003.type, status: 'open', priority: 'medium' }).select('*').single();
+  if (incidentCentro.error) throw new Error(`INC-003 insert failed: ${incidentCentro.error.message}`);
+
   return {
     municipalityA: munA.data,
     municipalityB: munB.data,
@@ -70,6 +103,11 @@ export async function seedScenario(serviceClient) {
     driverRowA: driverRowA.data,
     vehicleA: vehicleA.data,
     vehicleB: vehicleB.data,
-    routeA: routeA.data
+    routeA: routeA.data,
+    routeCentro: routeCentro.data,
+    routeRunCentro: routeRunCentro.data,
+    routeMaestros: routeMaestros.data,
+    routeRunMaestros: routeRunMaestros.data,
+    incidentCentro: incidentCentro.data
   };
 }

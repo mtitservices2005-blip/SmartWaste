@@ -194,23 +194,43 @@ function startSimulation() { if (simulationTimer) return; simulationTimer = setI
 function pauseSimulation() { clearInterval(simulationTimer); simulationTimer = null; }
 function resetSimulation() { pauseSimulation(); trucks.forEach((truck) => { const original = initialTruckState[truck.id]; simState[truck.id] = { index: original.index, progress: original.progress }; truck.progress = original.progress; truck.updatedAt = original.updatedAt; truck.sector = original.sector; }); drawMapLayers(); if (selectedTruckId) selectTruck(selectedTruckId); if (selectedRouteId) selectRoute(selectedRouteId); if (selectedIncidentId) selectIncident(selectedIncidentId); }
 
+// Shared by every supervisor/conductor write action below: `maybeResultPromise` is undefined in
+// demo mode (writeAdapter is null, so `writeAdapter?.method(...)` short-circuits) — in that case
+// onSuccess() runs immediately, exactly like before any of this real-write wiring existed (rule 5).
+// When writeAdapter is set, it's a real Promise from shared/operations-adapter.js's { ok, error }
+// result shape; onSuccess() (the local demo-array update + re-render) only runs after a successful
+// real write, and a failed one surfaces the error instead of silently pretending it worked.
+async function applyRealWrite(maybeResultPromise, onSuccess) {
+  if (maybeResultPromise) {
+    const result = await maybeResultPromise;
+    if (!result.ok) { alert(`No se pudo guardar en Supabase: ${result.error.message}`); return; }
+  }
+  onSuccess();
+}
+
 document.addEventListener('click', (event) => {
   if (event.target.matches('[data-close-detail]')) { closeDetail(); return; }
   const truckButton = event.target.closest('[data-truck]'); if (truckButton) selectTruck(truckButton.dataset.truck);
   const routeButton = event.target.closest('[data-route]'); if (routeButton?.dataset.route) selectRoute(routeButton.dataset.route);
   const incidentButton = event.target.closest('[data-incident]'); if (incidentButton) selectIncident(incidentButton.dataset.incident);
   const verifyButton = event.target.closest('[data-verify-route]');
-  if (verifyButton) { const route = routeById(verifyButton.dataset.verifyRoute); if (route) { route.status = 'verified'; $('#supervisor').outerHTML = renderSupervisor(); } }
+  if (verifyButton) {
+    const route = routeById(verifyButton.dataset.verifyRoute);
+    if (route) applyRealWrite(writeAdapter?.verifyRoute(route.realId), () => { route.status = 'verified'; $('#supervisor').outerHTML = renderSupervisor(); });
+  }
   const resolveButton = event.target.closest('[data-resolve-incident]');
-  if (resolveButton) { const incident = incidents.find((item) => item.code === resolveButton.dataset.resolveIncident); if (incident) { incident.status = 'Cerrada'; $('#supervisor').outerHTML = renderSupervisor(); } }
+  if (resolveButton) {
+    const incident = incidents.find((item) => item.code === resolveButton.dataset.resolveIncident);
+    if (incident) applyRealWrite(writeAdapter?.updateIncident(incident.realId, { status: 'resolved' }), () => { incident.status = 'Cerrada'; $('#supervisor').outerHTML = renderSupervisor(); });
+  }
   const driverTransitionButton = event.target.closest('[data-driver-transition]');
   if (driverTransitionButton) {
     const route = currentDriverRoute();
     const next = driverTransitionButton.dataset.driverTransition;
     if (route && driverAllowedTransitions(route.status).includes(next)) {
-      route.status = next;
-      if (next === 'completed') route.progress = 100;
-      $('#conductor').outerHTML = renderConductor();
+      const method = { started: 'startRoute', in_progress: 'updateProgress', delayed: 'markDelayed', completed: 'completeRoute' }[next];
+      const call = writeAdapter && (method === 'updateProgress' ? writeAdapter.updateProgress(route.realId, next === 'completed' ? 100 : route.progress) : writeAdapter[method](route.realId));
+      applyRealWrite(call, () => { route.status = next; if (next === 'completed') route.progress = 100; $('#conductor').outerHTML = renderConductor(); });
     }
   }
   const onboardButton = event.target.closest('[data-onboarding]');
@@ -228,18 +248,23 @@ document.addEventListener('submit', async (event) => {
   const route = currentDriverRoute();
   if (!route) return;
   const formData = new FormData(event.target);
-  const payload = { type: formData.get('type'), sector: route.sector, status: 'Abierta', priority: 'Media', detail: formData.get('description') };
+  const type = formData.get('type');
+  const description = formData.get('description');
   // This one is a real INSERT when writeAdapter is set — no existing-row id to match, so it's not
-  // affected by the demo/real id mismatch documented above driverAllowedTransitions' usage. We
-  // deliberately don't send route_run_id: demo route ids (e.g. 'route-centro') are not valid
-  // Postgres uuids, and driver_insert_own_incident (202607150006_sw020_rls_fixes.sql) already
-  // allows a null route_run_id, so the insert succeeds without it.
+  // affected by the demo/real id mismatch fixed via .realId above (docs/TECHNICAL_DEBT_REGISTER.md
+  // #14). incidents' real columns are (type, status, priority, description, route_run_id,
+  // vehicle_id, ...) — no 'sector' column, and 'detail' isn't a column name either, so the real
+  // payload only sends type/description; status/priority are left to their DB defaults ('open'/
+  // 'medium'), which already match the demo's own defaults below. We deliberately don't send
+  // route_run_id: demo route ids (e.g. 'route-centro') aren't valid Postgres uuids, and
+  // driver_insert_own_incident (202607150006_sw020_rls_fixes.sql) already allows a null
+  // route_run_id, so the insert succeeds without it.
   if (writeAdapter) {
-    const result = await writeAdapter.registerIncident(payload);
+    const result = await writeAdapter.registerIncident({ type, description });
     if (!result.ok) { alert(`No se pudo registrar la incidencia en Supabase: ${result.error.message}`); return; }
   }
   const code = `INC-${incidents.length + 1}`;
-  incidents.push({ id: `SW-FOLIO-${1000 + incidents.length + 1}`, code, ...payload, position: pilotMunicipality.center });
+  incidents.push({ id: `SW-FOLIO-${1000 + incidents.length + 1}`, code, type, sector: route.sector, status: 'Abierta', priority: 'Media', detail: description, position: pilotMunicipality.center });
   route.incidents.push(code);
   $('#conductor').outerHTML = renderConductor();
 });

@@ -36,11 +36,13 @@ Definido en `frontend/auth-gate.js` (`SECTION_ROLES`), validado sin necesidad de
 
 El portal ciudadano (`#ciudadania`) es siempre público — coincide con la política `anon_insert_citizen_report` de `supabase/migrations/202607150006_sw020_rls_fixes.sql`, pensada para reportes anónimos.
 
-## Escrituras reales (parcial)
+## Escrituras reales
 
-Con la config activada y sesión resuelta, `frontend/app.js` arma un `createSupabaseOperationsAdapter` (`shared/operations-adapter.js`) y lo usa para **una sola acción**: el reporte de incidencia de la vista de conductor (`#driverIncidentForm`) — es un insert, no depende de que el id de una ruta/incidencia demo exista en la base real.
+Con la config activada y sesión resuelta, `frontend/app.js` arma un `createSupabaseOperationsAdapter` (`shared/operations-adapter.js`) y lo usa para las acciones de escritura de las vistas de conductor y supervisor: reportar incidencia, transiciones de ruta del conductor (iniciar/en progreso/retrasar/completar), "Verificar" ruta y "Marcar resuelta" del supervisor.
 
-El resto de las acciones que escriben (transiciones de ruta del conductor, "Verificar" y "Marcar resuelta" del supervisor) siguen siendo demo-only a propósito: actualizan por id, y los ids de `shared/demo-data.js` (`route-centro`, `INC-003`) no son uuids válidos de Postgres — `routes.id`/`incidents.id` sí lo son. Cablearlas tal cual fallaría en cada intento contra Supabase real. Ver `docs/TECHNICAL_DEBT_REGISTER.md` #14 y `shared/integration/status.json.frontendWriteWiring` para el detalle y las dos formas de resolverlo.
+Esto requirió resolver un desajuste de ids: `shared/demo-data.js` usa ids legibles (`route-centro`, `INC-003`) pero `routes.id`/`incidents.id` son columnas `uuid` en el esquema real. Cada ruta/incidencia demo tiene ahora un campo `.realId` (uuid fijo) que se usa exclusivamente al llamar al adapter real — `tests/integration/seed.mjs` siembra `route-centro`, `route-maestros` e `INC-003` con esos mismos `.realId` para que la prueba interactiva encuentre la fila correspondiente. Ver `docs/TECHNICAL_DEBT_REGISTER.md` #14.
+
+**Pendiente:** esto está `PREPARED_NOT_RUN` en `shared/integration/status.json`, no `VERIFIED_REAL` (regla 6 de `CLAUDE.md`) — falta la verificación interactiva contra Supabase local en LabPC, mismo patrón que la verificación de login de más abajo. Al hacerla: iniciar sesión como el conductor sembrado (`driverUserA`) y confirmar que las transiciones de `route-centro` escriben en `route_runs`; iniciar sesión como `supervisorA` y confirmar que "Verificar" sobre `route-maestros` y "Marcar resuelta" sobre `INC-003` escriben de verdad.
 
 ## Seguridad
 

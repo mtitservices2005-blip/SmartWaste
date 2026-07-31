@@ -22,9 +22,9 @@
   "supabaseRemote": "REAL_NOT_RUN",
   "frontendWriteWiring": {
     "conductorIncidentReport": "PREPARED_NOT_RUN",
-    "conductorRouteTransitions": "NOT_WIRED",
-    "supervisorVerifyRoute": "NOT_WIRED",
-    "supervisorResolveIncident": "NOT_WIRED",
-    "reason": "frontend/app.js: when window.SMARTWASTE_SUPABASE_CONFIG is set and login resolves, a createSupabaseOperationsAdapter is built and used for the driver's incident report (an insert, no existing-row id needed). Route status transitions (conductor + supervisor) and resolving an incident are NOT wired: they update-by-id, and shared/demo-data.js route/incident ids ('route-centro', 'INC-003') are not valid Postgres uuids (routes.id/incidents.id are uuid columns, see shared/contracts.js) — wiring them as-is would fail every real write with an invalid-uuid error, not silently no-op. Needs the demo/real id spaces reconciled (migrate demo ids to seeded real uuids, or read routes/incidents live from Supabase) before wiring those buttons; not started."
+    "conductorRouteTransitions": "PREPARED_NOT_RUN",
+    "supervisorVerifyRoute": "PREPARED_NOT_RUN",
+    "supervisorResolveIncident": "PREPARED_NOT_RUN",
+    "reason": "frontend/app.js: when window.SMARTWASTE_SUPABASE_CONFIG is set and login resolves, a createSupabaseOperationsAdapter is built and used for the driver's incident report, the conductor's route transitions, and the supervisor's verify/resolve actions. Was blocked by shared/demo-data.js route/incident ids ('route-centro', 'INC-003') not being valid Postgres uuids while routes.id/incidents.id are uuid columns — resolved by adding a fixed .realId uuid to each demo route/incident (docs/TECHNICAL_DEBT_REGISTER.md #14) and using .realId (never .id) in every real adapter call. tests/integration/seed.mjs now seeds route-centro/route-maestros/INC-003 with those exact .realId values, plus a matching route_run per route, so the wiring can actually find a row when exercised. PREPARED_NOT_RUN, not VERIFIED_REAL: this sandbox has no Supabase/Docker to run tests/rls-adversarial.test.mjs-style interactive verification against — needs LabPC, same as docs/FRONTEND_LOGIN_SETUP.md's login verification."
   }
 }
