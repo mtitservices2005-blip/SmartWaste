@@ -16,8 +16,11 @@ assert.deepEqual(pickVisibleSections('driver').sort(), ['ciudadania', 'mapa', 'm
 // PERMISSIONS.dispatcher).
 assert.deepEqual(pickVisibleSections('dispatcher').sort(), ['ciudadania', 'mapa', 'municipal']);
 
-// Supervisor and municipal_admin: everything except the cross-municipality master admin panel.
-assert.deepEqual(pickVisibleSections('supervisor').sort(), ['ciudadania', 'impacto', 'mapa', 'municipal']);
+// Supervisor gets its own dedicated view (route verification + incident management, matching
+// PERMISSIONS.supervisor's routes.verify/incidents.manage) instead of the generic municipal panel.
+assert.deepEqual(pickVisibleSections('supervisor').sort(), ['ciudadania', 'impacto', 'mapa', 'supervisor']);
+
+// municipal_admin: generic municipal panel + impact center, not the master admin panel.
 assert.deepEqual(pickVisibleSections('municipal_admin').sort(), ['ciudadania', 'impacto', 'mapa', 'municipal']);
 
 // Platform superadmin: only the master admin panel (platform-scoped, not a single municipality's
