@@ -86,7 +86,11 @@ export async function initAuthGate() {
     try {
       const ctx = await identity.resolveContext();
       applySectionVisibility(pickVisibleSections(ctx.role));
-      return ctx;
+      // Attach the client so callers (frontend/app.js) can build createSupabaseOperationsAdapter
+      // scoped to this session's municipality_id, instead of every real-write feature needing to
+      // create/manage its own Supabase client. Anon key only, same client used for login itself —
+      // no new credential surface (CLAUDE.md rule 8).
+      return { ...ctx, client };
     } catch {
       return null;
     }

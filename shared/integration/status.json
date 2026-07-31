@@ -17,6 +17,14 @@
   "completeRoute": "REAL_VERIFIED",
   "verifyRoute": "REAL_VERIFIED",
   "registerIncident": "REAL_VERIFIED",
+  "updateIncident": "PREPARED_NOT_RUN",
   "backendApi": "BLOCKED",
-  "supabaseRemote": "REAL_NOT_RUN"
+  "supabaseRemote": "REAL_NOT_RUN",
+  "frontendWriteWiring": {
+    "conductorIncidentReport": "PREPARED_NOT_RUN",
+    "conductorRouteTransitions": "NOT_WIRED",
+    "supervisorVerifyRoute": "NOT_WIRED",
+    "supervisorResolveIncident": "NOT_WIRED",
+    "reason": "frontend/app.js: when window.SMARTWASTE_SUPABASE_CONFIG is set and login resolves, a createSupabaseOperationsAdapter is built and used for the driver's incident report (an insert, no existing-row id needed). Route status transitions (conductor + supervisor) and resolving an incident are NOT wired: they update-by-id, and shared/demo-data.js route/incident ids ('route-centro', 'INC-003') are not valid Postgres uuids (routes.id/incidents.id are uuid columns, see shared/contracts.js) — wiring them as-is would fail every real write with an invalid-uuid error, not silently no-op. Needs the demo/real id spaces reconciled (migrate demo ids to seeded real uuids, or read routes/incidents live from Supabase) before wiring those buttons; not started."
+  }
 }

@@ -30,6 +30,7 @@ export function createDemoOperationsAdapter(seed = { trucks, routes, drivers, in
     completeRoute: (routeId) => updateRoute(state, routeId, { progress:100, status:'completed' }),
     verifyRoute: (routeId) => transitionRoute(state, routeId, 'verified'),
     registerIncident: (incident) => { const created = { code:`INC-${state.incidents.length + 1}`, status:'Abierta', priority:'Media', ...incident }; state.incidents.push(created); return clone(created); },
+    updateIncident: (id, patch) => { const incident = state.incidents.find((item) => item.id === id || item.code === id); if (!incident) throw new Error('Incident not found'); Object.assign(incident, patch); return clone(incident); },
     listPositions: () => state.trucks.map((truck) => ({ vehicle_id: truck.id, municipality_id:'laguna-salada-rd', position: truck.position ?? routePaths[truck.routeId]?.[truck.positionIndex ?? 0] ?? null, source:'demo' }))
   };
 }
@@ -86,6 +87,7 @@ export function createSupabaseOperationsAdapter(client, { fallback = createDemoO
     completeRoute: (routeId, opts = {}) => transitionRouteRun(client, fallback, municipality_id, routeId, 'completed', opts),
     verifyRoute: (routeId, opts = {}) => transitionRouteRun(client, fallback, municipality_id, routeId, 'verified', opts),
     registerIncident: (incident, opts = {}) => run(() => table(client, 'incidents').insert({ ...incident, municipality_id: incident.municipality_id ?? municipality_id, correlation_id: opts.correlation_id ?? incident.correlation_id }).select('*').single(), () => fallback.registerIncident(incident), opts.correlation_id),
+    updateIncident: (id, patch, opts = {}) => run(() => scoped(table(client, 'incidents').update(patch).eq('id', id)).select('*').single(), () => fallback.updateIncident?.(id, patch) ?? { ...patch, id }, opts.correlation_id),
     listPositions: (opts = {}) => run(() => scoped(table(client, 'vehicle_positions').select('*').order('captured_at', { ascending:false })), () => fallback.listPositions(), opts.correlation_id)
   };
 }

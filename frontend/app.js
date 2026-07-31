@@ -1,5 +1,5 @@
 import { demoNotice, simulationNotice, pilotMunicipality, trucks, routes, sectors, drivers, incidents, notifications, municipalities, routeFlow, routePaths, stateLabels } from '../shared/demo-data.js';
-import { operationsAdapter } from '../shared/operations-adapter.js';
+import { operationsAdapter, createSupabaseOperationsAdapter } from '../shared/operations-adapter.js';
 import { driverAllowedTransitions } from '../shared/contracts.js';
 import { DeviceSimulator } from '../shared/telemetry-simulator.js';
 import { validateEvidenceFile } from '../shared/channel-contracts.js';
@@ -30,6 +30,12 @@ let truckMarkers = [];
 let incidentMarkers = [];
 let simulationTimer = null;
 let simulationSpeed = 1;
+// Set once initAuthGate() resolves with a real signed-in session (window.SMARTWASTE_SUPABASE_CONFIG
+// configured) — null in default demo mode, which keeps every write below exactly as it behaved
+// before this existed (CLAUDE.md rule 5). Only the conductor/supervisor write actions are wired to
+// it so far; the map/municipal/impact reads still come from shared/demo-data.js — connecting those
+// live to Supabase is separate, larger follow-up work (see docs/FRONTEND_LOGIN_SETUP.md).
+let writeAdapter = null;
 const initialTruckState = Object.fromEntries(trucks.map((truck) => [truck.id, { index: truck.positionIndex ?? 0, progress: truck.progress, updatedAt: truck.updatedAt, sector: truck.sector }]));
 const simState = Object.fromEntries(trucks.map((truck) => [truck.id, { index: truck.positionIndex ?? 0, progress: truck.progress }]));
 
@@ -216,14 +222,24 @@ document.addEventListener('click', (event) => {
 document.addEventListener('change', (event) => { if (event.target.closest('#impacto') && event.target.matches('select')) { $('#impacto').outerHTML = renderImpactCenter(currentImpactAssumptions(), currentImpactFilters()); } });
 // Delegated (not a direct listener) because #driverIncidentForm is recreated every time #conductor
 // re-renders (e.g. after a route status transition), which would drop a directly-attached listener.
-document.addEventListener('submit', (event) => {
+document.addEventListener('submit', async (event) => {
   if (event.target.id !== 'driverIncidentForm') return;
   event.preventDefault();
   const route = currentDriverRoute();
   if (!route) return;
   const formData = new FormData(event.target);
+  const payload = { type: formData.get('type'), sector: route.sector, status: 'Abierta', priority: 'Media', detail: formData.get('description') };
+  // This one is a real INSERT when writeAdapter is set — no existing-row id to match, so it's not
+  // affected by the demo/real id mismatch documented above driverAllowedTransitions' usage. We
+  // deliberately don't send route_run_id: demo route ids (e.g. 'route-centro') are not valid
+  // Postgres uuids, and driver_insert_own_incident (202607150006_sw020_rls_fixes.sql) already
+  // allows a null route_run_id, so the insert succeeds without it.
+  if (writeAdapter) {
+    const result = await writeAdapter.registerIncident(payload);
+    if (!result.ok) { alert(`No se pudo registrar la incidencia en Supabase: ${result.error.message}`); return; }
+  }
   const code = `INC-${incidents.length + 1}`;
-  incidents.push({ id: `SW-FOLIO-${1000 + incidents.length + 1}`, code, type: formData.get('type'), sector: route.sector, status: 'Abierta', priority: 'Media', position: pilotMunicipality.center, detail: formData.get('description') });
+  incidents.push({ id: `SW-FOLIO-${1000 + incidents.length + 1}`, code, ...payload, position: pilotMunicipality.center });
   route.incidents.push(code);
   $('#conductor').outerHTML = renderConductor();
 });
@@ -264,4 +280,15 @@ initMap();
 // Re-activate afterwards: role resolution is async and may hide the section the tab logic above
 // picked before login resolved (e.g. a driver's default 'mapa' tab is still allowed, but if the
 // hash pointed at '#municipal' before resolving, that's no longer valid for that role).
-initAuthGate().then(() => activateSection(location.hash.slice(1) || 'mapa'));
+initAuthGate().then((ctx) => {
+  // Only registerIncident (an insert, see the driverIncidentForm handler above) is wired to this
+  // adapter so far. Route status transitions (driver's #conductor buttons, supervisor's verify/
+  // resolve) are deliberately NOT wired yet: shared/demo-data.js route/incident ids are readable
+  // slugs ('route-centro', 'INC-003'), but routes.id/incidents.id are `uuid` columns in the real
+  // schema (shared/contracts.js) — passing a demo id straight to the adapter would fail every time
+  // with "invalid input syntax for type uuid", not silently do nothing. Wiring those needs the
+  // demo/real id spaces reconciled first (either migrate demo ids to seeded real uuids, or read
+  // routes/incidents from Supabase instead of shared/demo-data.js) — that's larger, separate work.
+  if (ctx?.client) writeAdapter = createSupabaseOperationsAdapter(ctx.client, { municipality_id: ctx.municipality_id });
+  activateSection(location.hash.slice(1) || 'mapa');
+});

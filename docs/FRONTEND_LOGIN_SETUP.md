@@ -36,6 +36,12 @@ Definido en `frontend/auth-gate.js` (`SECTION_ROLES`), validado sin necesidad de
 
 El portal ciudadano (`#ciudadania`) es siempre público — coincide con la política `anon_insert_citizen_report` de `supabase/migrations/202607150006_sw020_rls_fixes.sql`, pensada para reportes anónimos.
 
+## Escrituras reales (parcial)
+
+Con la config activada y sesión resuelta, `frontend/app.js` arma un `createSupabaseOperationsAdapter` (`shared/operations-adapter.js`) y lo usa para **una sola acción**: el reporte de incidencia de la vista de conductor (`#driverIncidentForm`) — es un insert, no depende de que el id de una ruta/incidencia demo exista en la base real.
+
+El resto de las acciones que escriben (transiciones de ruta del conductor, "Verificar" y "Marcar resuelta" del supervisor) siguen siendo demo-only a propósito: actualizan por id, y los ids de `shared/demo-data.js` (`route-centro`, `INC-003`) no son uuids válidos de Postgres — `routes.id`/`incidents.id` sí lo son. Cablearlas tal cual fallaría en cada intento contra Supabase real. Ver `docs/TECHNICAL_DEBT_REGISTER.md` #14 y `shared/integration/status.json.frontendWriteWiring` para el detalle y las dos formas de resolverlo.
+
 ## Seguridad
 
 Solo se usa la `anon key` (pensada para ser pública; RLS es lo que protege los datos, no este archivo). Nunca poner la `service_role key` acá — regla 8 de `CLAUDE.md`.
