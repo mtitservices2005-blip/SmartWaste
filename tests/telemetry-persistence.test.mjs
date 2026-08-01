@@ -1,20 +1,15 @@
-// SW-016: exercises real telemetry ingestion and persistence against a local Supabase instance,
-// through shared/telemetry-simulator.js's DeviceSimulator and createTelemetryIngestionAdapter.
-// Requires `npx supabase start`; see docs/SW020_CLAUDE_CODE_TASK_BRIEF.md section 0 for the same
-// local-instance setup used by tests/operational-cycle.test.mjs.
+// SW-016: exercises real telemetry ingestion, persistence, and Realtime delivery against a local
+// Supabase instance, through shared/telemetry-simulator.js's DeviceSimulator and
+// createTelemetryIngestionAdapter. Requires `npx supabase start`; see
+// docs/SW020_CLAUDE_CODE_TASK_BRIEF.md section 0 for the same local-instance setup used by
+// tests/operational-cycle.test.mjs.
 //
-// SCOPE: this only covers ingestion/persistence and the RLS write policy — NOT Realtime delivery.
-// A prior version of this file also subscribed to Realtime and verified event delivery, but that
-// consistently failed in CI: the channel reaches SUBSCRIBED, but no postgres_changes INSERT event
-// is ever delivered, for both a driver-scoped and a service_role-scoped subscription (ruling out
-// RLS/JWT as the cause). The Realtime container's own logs (captured via a CI diagnostic step)
-// show only its internal "Broadcast Changes" replication connection
-// (supabase_realtime_messages_publication over realtime.messages) ever starting — nothing for
-// vehicle_positions/supabase_realtime, even after granting supabase_realtime_admin SELECT on
-// vehicle_positions (202607150007_sw016_telemetry_realtime.sql). See
-// docs/TECHNICAL_DEBT_REGISTER.md for the full writeup; Realtime delivery stays REAL_NOT_RUN in
-// shared/integration/status.json until that's root-caused (likely needs direct Postgres/
-// Realtime-source-level access, e.g. LabPC).
+// Realtime delivery previously failed 100% of the time here (see git history for this file around
+// PR #17, and docs/TECHNICAL_DEBT_REGISTER.md item #14 for the full writeup) — root-caused in
+// SW-022 as a race between the channel's client-side 'SUBSCRIBED' ack and the server actually
+// registering the WAL consumer for this subscription's filter. shared/telemetry-simulator.js's
+// subscribe() now waits out that race internally (REALTIME_SUBSCRIBE_SETTLE_MS) before signaling
+// 'SUBSCRIBED' to the caller, which is what step 3 below now relies on.
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { loadLocalSupabaseEnv, createServiceClient, createSignedInClient } from './integration/local-supabase-env.mjs';
@@ -69,7 +64,37 @@ assert.equal(persisted.data.vehicle_id, scenario.vehicleA.id);
 assert.equal(persisted.data.municipality_id, scenario.municipalityA.id);
 assert.equal(persisted.data.source, 'simulator');
 
-// 3. Real RLS rejection (not just the app-level municipality_id guard): same municipality, but a
+// 3. Realtime delivery (sw016.realtime): subscribe for this vehicle and confirm a new INSERT
+// actually arrives via postgres_changes, once the channel signals it's really ready (see the
+// header comment above and shared/telemetry-simulator.js's subscribe()).
+const secondCorrelation = randomUUID();
+const delivered = await new Promise((resolve, reject) => {
+  const timeout = setTimeout(() => reject(new Error('Realtime event not received within 20s')), 20000);
+  const subscription = telemetry.subscribe(scenario.vehicleA.id, (row) => {
+    if (row.correlation_id !== secondCorrelation) return;
+    clearTimeout(timeout);
+    subscription.unsubscribe();
+    resolve(row);
+  }, {
+    onStatus: (status, err) => {
+      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        clearTimeout(timeout);
+        reject(new Error(`Realtime channel failed with status ${status}${err ? `: ${err.message ?? JSON.stringify(err)}` : ''}`));
+        return;
+      }
+      if (status !== 'SUBSCRIBED') return;
+      const secondPoint = scoped(simulator.emit());
+      telemetry.ingest(secondPoint, { correlation_id: secondCorrelation }).then((result) => {
+        if (!result.ok) { clearTimeout(timeout); reject(new Error(`second ingest failed: ${JSON.stringify(result.error)}`)); }
+      });
+    }
+  });
+  assert.equal(subscription.status, 'REALTIME_SUBSCRIBED');
+});
+assert.equal(delivered.vehicle_id, scenario.vehicleA.id);
+assert.equal(delivered.correlation_id, secondCorrelation);
+
+// 4. Real RLS rejection (not just the app-level municipality_id guard): same municipality, but a
 // vehicle this driver has no vehicle_assignments row for. driver_insert_own_vehicle_position's
 // EXISTS(...) finds nothing, so Postgres itself must deny the insert.
 const unassignedPoint = { ...scoped(simulator.emit()), vehicle_id: vehicleA2.data.id };
@@ -78,3 +103,4 @@ assert.equal(rejected.ok, false, 'driver must not be able to write telemetry for
 assert.notEqual(rejected.error?.code, 'CROSS_TENANT_TELEMETRY', 'rejection must come from RLS at the database, not the app-level municipality_id guard');
 
 console.log('telemetry-persistence ok');
+process.exit(0);

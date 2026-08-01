@@ -53,6 +53,9 @@ export function validateTelemetryPosition(position, { maxAgeMs = 1000 * 60 * 60 
   return { valid: errors.length === 0, errors };
 }
 
+// See the comment inside subscribe() below for why this exists.
+const REALTIME_SUBSCRIBE_SETTLE_MS = 2000;
+
 export function createTelemetryIngestionAdapter(client, { municipality_id = null } = {}) {
   return {
     mode: client?.from ? 'REAL' : 'REAL_NOT_RUN',
@@ -86,10 +89,24 @@ export function createTelemetryIngestionAdapter(client, { municipality_id = null
     },
     subscribe(vehicleId, onPosition, { onStatus } = {}) {
       if (!client?.channel) return { status:'REALTIME_NOT_RUN', unsubscribe() {} };
+      let settleTimer = null;
       const channel = client.channel(`vehicle_positions:${vehicleId}`)
         .on('postgres_changes', { event:'INSERT', schema:'public', table:'vehicle_positions', filter:`vehicle_id=eq.${vehicleId}` }, (payload) => onPosition(payload.new))
-        .subscribe((status, err) => onStatus?.(status, err));
-      return { status:'REALTIME_SUBSCRIBED', unsubscribe: () => channel.unsubscribe() };
+        .subscribe((status, err) => {
+          // Root cause of item #14 (SW-022, docs/TECHNICAL_DEBT_REGISTER.md): the channel reports
+          // 'SUBSCRIBED' as soon as the client joins the Phoenix channel, but that does not mean
+          // the server-side WAL consumer (Realtime's Elixir "cainophile" process, reading
+          // pg_replication_slots via pgoutput) has finished registering this subscription's filter
+          // yet. Inserting immediately on 'SUBSCRIBED' races that registration and can silently
+          // drop the very first event — confirmed by comparing a diagnostic script that waited
+          // this long after SUBSCRIBED (delivered reliably) against the original test that
+          // inserted synchronously inside the SUBSCRIBED callback (never delivered). Delaying the
+          // caller-visible 'SUBSCRIBED' here fixes it for every caller without them needing to
+          // know about the race.
+          if (status === 'SUBSCRIBED') { settleTimer = setTimeout(() => onStatus?.(status, err), REALTIME_SUBSCRIBE_SETTLE_MS); return; }
+          onStatus?.(status, err);
+        });
+      return { status:'REALTIME_SUBSCRIBED', unsubscribe: () => { if (settleTimer) clearTimeout(settleTimer); channel.unsubscribe(); } };
     }
   };
 }
