@@ -28,7 +28,14 @@ export function createAnonClient(env) {
 
 export async function createSignedInClient(env, email, password) {
   const client = createAnonClient(env);
-  const { error } = await client.auth.signInWithPassword({ email, password });
+  const { data, error } = await client.auth.signInWithPassword({ email, password });
   if (error) throw new Error(`Sign-in failed for ${email}: ${error.message}`);
+  // supabase-js normally propagates the session's JWT to the Realtime websocket via an internal
+  // onAuthStateChange listener, but that propagation is async and can race with an immediate
+  // client.channel(...).subscribe() call right after sign-in — the socket can then connect (and
+  // report SUBSCRIBED) still carrying the anon key, so postgres_changes RLS evaluates as anon and
+  // silently drops every event instead of erroring (see tests/telemetry-realtime.test.mjs).
+  // Setting it explicitly here removes that race for every caller of this helper.
+  client.realtime.setAuth(data.session.access_token);
   return client;
 }
