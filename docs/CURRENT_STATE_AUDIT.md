@@ -17,7 +17,7 @@ Los dos huecos de RLS señalados en la auditoría original (rol `driver` sin esc
 | Mapa operativo (Leaflet/OSM) | `REAL_READY` (código) / `DEMO_ONLY` (datos) | `frontend/app.js:120-149`, CDN unpkg.com | Librería y render reales; coordenadas y rutas 100% estáticas de `shared/demo-data.js` |
 | Panel municipal | `DEMO_ONLY` | `frontend/app.js:84` | UI real, sin persistencia, filtra sobre arrays estáticos |
 | Portal ciudadano | `DEMO_ONLY` | `frontend/app.js:86`, `shared/citizen-portal.js` | Folio generado client-side, sin upload real, geolocalización leída pero "no enviada" |
-| Vista supervisor | `PLACEHOLDER` | `shared/auth-context.js:1,5`, `docs/ROLE_PERMISSION_MATRIX.md` | Existe como rol/permiso y como pasos narrativos de E2E; **no existe componente de UI propio** |
+| Vista supervisor | `DEMO_ONLY` (actualizado, ver PR #14/#18) | `frontend/app.js:87-93,127`, `frontend/index.html:11` | Componente de UI propio real: `renderSupervisor()`, sección `#supervisor` con enlace de nav dedicado, acciones interactivas (verificar ruta, resolver incidencia) sobre datos demo en memoria — sin persistencia contra Supabase todavía |
 | Vista móvil de conductor | `PLACEHOLDER` | `frontend/app.js:84` (fragmento `Vista móvil conductor`) | No es una vista independiente; botón que cicla `routeFlow` local dentro del panel municipal |
 | Master Admin | `DEMO_ONLY` | `frontend/app.js:116` | Lista municipios estáticos; botón "Onboarding demo" sin handler |
 | Centro de Impacto y Ahorros | `PARTIAL` | `shared/impact-center.js:3-4,18-23` | Cálculo real sobre datos demo; el propio módulo se auto-clasifica por métrica (`REAL_READY/PARTIAL/DEMO_ONLY/BLOCKED`) |

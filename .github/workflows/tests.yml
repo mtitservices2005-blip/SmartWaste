@@ -20,12 +20,13 @@ jobs:
         with:
           node-version: '22'
       # None of these test files import @supabase/supabase-js, so no npm install is needed here —
-      # keeps this job fast. tests/rls-adversarial.test.mjs and tests/operational-cycle.test.mjs are
-      # excluded on purpose: they need a live Supabase instance and run in the integration-tests job.
+      # keeps this job fast. tests/rls-adversarial.test.mjs, tests/operational-cycle.test.mjs, and
+      # tests/telemetry-persistence.test.mjs are excluded on purpose: they need a live Supabase
+      # instance and run in the integration-tests job.
       - name: Run each tests/*.test.mjs file as an independent node process
         run: |
           set -e
-          skip_list="tests/rls-adversarial.test.mjs tests/operational-cycle.test.mjs"
+          skip_list="tests/rls-adversarial.test.mjs tests/operational-cycle.test.mjs tests/telemetry-persistence.test.mjs"
           for f in tests/*.test.mjs; do
             skip=false
             for s in $skip_list; do
@@ -54,11 +55,28 @@ jobs:
         run: npm ci
       - name: Start Supabase local
         run: npx supabase start
-      - name: Run RLS adversarial and operational cycle tests
+      - name: Run RLS adversarial, operational cycle, and telemetry persistence tests
         run: |
           set -e
           node tests/rls-adversarial.test.mjs
           node tests/operational-cycle.test.mjs
+          node tests/telemetry-persistence.test.mjs
+      # General-purpose diagnostic, kept for future integration-test failures (added while
+      # debugging a Realtime postgres_changes issue in PR #17 — see
+      # docs/TECHNICAL_DEBT_REGISTER.md and tests/telemetry-persistence.test.mjs's header comment
+      # for that specific writeup). The job logs above only show the `node tests/*.test.mjs` step;
+      # the various Supabase services run in their own Docker containers started by
+      # `supabase start`, and their internal logs are otherwise invisible from this workflow. Dump
+      # the Realtime one here on any integration-tests failure so there's a chance of real evidence
+      # instead of a blind guess.
+      - name: Dump Supabase Realtime container logs (only on failure)
+        if: failure()
+        run: |
+          docker ps -a
+          for c in $(docker ps -a --format '{{.Names}}' | grep -i realtime); do
+            echo "=== docker logs $c ==="
+            docker logs "$c" --tail 300 2>&1 || true
+          done
       - name: Stop Supabase local
         if: always()
         run: npx supabase stop
