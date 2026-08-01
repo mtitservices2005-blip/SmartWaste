@@ -1,8 +1,9 @@
 // SCOPE: static text/regex check on migration SQL — does NOT connect to a database and does NOT
-// verify the triggers actually reject cross-municipality writes. Real coverage for that lives in
-// tests/operational-cycle.test.mjs and tests/rls-adversarial.test.mjs (run against a live
-// Supabase/Postgres instance, see SW-020). This file only guards against the migration file
-// losing the trigger/function names below.
+// verify the triggers actually reject cross-municipality writes. No test currently exercises a
+// real cross-municipality foreign-key write against these triggers: operational-cycle.test.mjs
+// only uses valid same-municipality references, and rls-adversarial.test.mjs's cross-tenant cases
+// exercise RLS policies, not assert_same_municipality(). That real coverage is still missing —
+// this file only guards against the migration file losing the trigger/function names below.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 const sql = readFileSync('supabase/migrations/202607150005_sw015_operations_integrity.sql','utf8');
