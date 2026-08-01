@@ -2,6 +2,7 @@ import { demoNotice, simulationNotice, pilotMunicipality, trucks, routes, sector
 import { operationsAdapter } from '../shared/operations-adapter.js';
 import { DeviceSimulator, createDemoPositionHistory } from '../shared/telemetry-simulator.js';
 import { validateEvidenceFile } from '../shared/channel-contracts.js';
+import { createDemoFolio, findSectorService, findIncidentStatus } from '../shared/citizen-portal.js';
 import { IMPACT_DEMO_NOTICE, IMPACT_SCENARIO_NOTICE, defaultImpactAssumptions, metricReadiness, calculateImpactMetrics } from '../shared/impact-center.js';
 import { initAuthGate } from './auth-gate.js';
 
@@ -22,6 +23,11 @@ let truckMarkers = [];
 let incidentMarkers = [];
 let simulationTimer = null;
 let simulationSpeed = 1;
+// Seeded per page load (not a fixed 1) so two concurrent demo sessions don't both hand out
+// SW-FOLIO-3001 first — this has no backing store, so a random per-session start is the only way
+// to keep the same low collision odds the previous Math.random()-per-submission version had
+// (Codex review on PR #23).
+let citizenFolioSequence = Math.floor(Math.random() * 5000) + 1;
 const initialTruckState = Object.fromEntries(trucks.map((truck) => [truck.id, { index: truck.positionIndex ?? 0, progress: truck.progress, updatedAt: truck.updatedAt, sector: truck.sector }]));
 const simState = Object.fromEntries(trucks.map((truck) => [truck.id, { index: truck.positionIndex ?? 0, progress: truck.progress }]));
 
@@ -287,15 +293,15 @@ document.addEventListener('click', (event) => {
   const onboardButton = event.target.closest('[data-onboarding]');
   if (onboardButton) { const status = document.querySelector(`[data-onboarding-status="${onboardButton.dataset.onboarding}"]`); if (status) status.textContent = 'Onboarding demo iniciado — flujo completo en desarrollo.'; }
   if (event.target.id === 'useGeo') { requestGeolocation(); }
-  if (event.target.id === 'checkFolio') { const found = incidents.find((incident) => incident.id === $('#folioSearch').value); $('#folioStatus').textContent = found ? `${found.type}: ${found.status}` : 'Folio demo no encontrado'; }
+  if (event.target.id === 'checkFolio') { const found = findIncidentStatus($('#folioSearch').value); $('#folioStatus').textContent = found ? `${found.type}: ${found.status}` : 'Folio demo no encontrado'; }
   const sim = event.target.dataset.sim; if (sim === 'start') startSimulation(); if (sim === 'pause') pauseSimulation(); if (sim === 'reset') resetSimulation(); if (sim === 'speed') { simulationSpeed = simulationSpeed === 1 ? 2 : simulationSpeed === 2 ? 4 : 1; event.target.textContent = `${simulationSpeed}×`; if (simulationTimer) { pauseSimulation(); startSimulation(); } }
 });
 document.addEventListener('change', (event) => { if (event.target.closest('#impacto') && event.target.matches('select')) { $('#impacto').outerHTML = renderImpactCenter(currentImpactAssumptions(), currentImpactFilters()); } });
 $('#search').addEventListener('input', (event) => { const term = event.target.value.toLowerCase(); $('#routeList').innerHTML = renderRoutes(routes.filter((route) => JSON.stringify(route).toLowerCase().includes(term))); });
 $('#sectorFilter').addEventListener('change', (event) => { $('#routeList').innerHTML = renderRoutes(routes.filter((route) => !event.target.value || route.sectors.includes(event.target.value))); });
-$('#citizenSector').addEventListener('change', (event) => { const sector = sectors.find((item) => item.id === event.target.value); $('#pickupResult').textContent = `${sector.pickupDay} · Estado: ${sector.status}`; });
+$('#citizenSector').addEventListener('change', (event) => { const service = findSectorService(event.target.value); $('#pickupResult').textContent = service ? `${service.pickupDay} · Estado: ${service.status}` : 'Sector demo no encontrado'; });
 $('#citizenSector').dispatchEvent(new Event('change'));
-$('#incidentForm').addEventListener('submit', (event) => { event.preventDefault(); $('#folio').textContent = `Folio generado: SW-FOLIO-${Math.floor(2000 + Math.random() * 7000)} (demo · sin upload real)`; });
+$('#incidentForm').addEventListener('submit', (event) => { event.preventDefault(); $('#folio').textContent = `Folio generado: ${createDemoFolio(citizenFolioSequence)} (demo · sin upload real)`; citizenFolioSequence += 1; });
 document.querySelectorAll('#fuelPrice,#fuelEfficiency,#operatingDays,#hourlyCost').forEach((input) => input.addEventListener('input', () => { const assumptions = { ...defaultImpactAssumptions, fuelPrice: Number($('#fuelPrice').value), fuelEfficiency: Number($('#fuelEfficiency').value), operatingDays: Number($('#operatingDays').value), hourlyCost: Number($('#hourlyCost').value) }; $('#impactEconomics').innerHTML = renderImpactEconomics(calculateImpactMetrics(assumptions)); }));
 $('#evidence').addEventListener('change', (event) => { const file = event.target.files?.[0]; const result = validateEvidenceFile(file); $('#evidencePreview').textContent = result.ok ? `${file?.name ?? 'Sin archivo'} · ${result.reason}` : `Evidencia rechazada: ${result.reason}`; });
 $('#driverVehicleSelect').addEventListener('change', (event) => {
