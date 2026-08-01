@@ -66,7 +66,7 @@ export function createTelemetryIngestionAdapter(client, { municipality_id = null
       if (!client?.channel) return { status:'REALTIME_NOT_RUN', unsubscribe() {} };
       const channel = client.channel(`vehicle_positions:${vehicleId}`)
         .on('postgres_changes', { event:'INSERT', schema:'public', table:'vehicle_positions', filter:`vehicle_id=eq.${vehicleId}` }, (payload) => onPosition(payload.new))
-        .subscribe((status) => onStatus?.(status));
+        .subscribe((status, err) => onStatus?.(status, err));
       return { status:'REALTIME_SUBSCRIBED', unsubscribe: () => channel.unsubscribe() };
     }
   };

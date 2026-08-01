@@ -64,7 +64,7 @@ assert.equal(persisted.data.source, 'simulator');
 // RLS policy that covers 'driver' (202607150004_sw014_auth_rls_policies.sql).
 let secondCorrelation;
 const received = new Promise((resolve, reject) => {
-  const timeout = setTimeout(() => reject(new Error('Realtime event not received within 15s')), 15000);
+  const timeout = setTimeout(() => reject(new Error('Realtime event not received within 15s (channel never reached SUBSCRIBED, or the INSERT it saw did not match)')), 15000);
   const subscription = telemetry.subscribe(
     scenario.vehicleA.id,
     (row) => {
@@ -74,7 +74,13 @@ const received = new Promise((resolve, reject) => {
       resolve(row);
     },
     {
-      onStatus: (status) => {
+      onStatus: (status, err) => {
+        console.log(`[telemetry-realtime] channel status: ${status}${err ? ` (${err.message ?? err})` : ''}`);
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          clearTimeout(timeout);
+          reject(new Error(`Realtime channel failed with status ${status}${err ? `: ${err.message ?? JSON.stringify(err)}` : ''}`));
+          return;
+        }
         if (status !== 'SUBSCRIBED') return;
         secondCorrelation = randomUUID();
         const secondPoint = scoped(simulator.emit());
