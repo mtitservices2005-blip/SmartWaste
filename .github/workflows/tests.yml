@@ -21,12 +21,12 @@ jobs:
           node-version: '22'
       # None of these test files import @supabase/supabase-js, so no npm install is needed here —
       # keeps this job fast. tests/rls-adversarial.test.mjs, tests/operational-cycle.test.mjs, and
-      # tests/telemetry-realtime.test.mjs are excluded on purpose: they need a live Supabase
+      # tests/telemetry-persistence.test.mjs are excluded on purpose: they need a live Supabase
       # instance and run in the integration-tests job.
       - name: Run each tests/*.test.mjs file as an independent node process
         run: |
           set -e
-          skip_list="tests/rls-adversarial.test.mjs tests/operational-cycle.test.mjs tests/telemetry-realtime.test.mjs"
+          skip_list="tests/rls-adversarial.test.mjs tests/operational-cycle.test.mjs tests/telemetry-persistence.test.mjs"
           for f in tests/*.test.mjs; do
             skip=false
             for s in $skip_list; do
@@ -55,20 +55,20 @@ jobs:
         run: npm ci
       - name: Start Supabase local
         run: npx supabase start
-      - name: Run RLS adversarial, operational cycle, and telemetry Realtime tests
+      - name: Run RLS adversarial, operational cycle, and telemetry persistence tests
         run: |
           set -e
           node tests/rls-adversarial.test.mjs
           node tests/operational-cycle.test.mjs
-          node tests/telemetry-realtime.test.mjs
-      # Diagnostic only (docs/TECHNICAL_DEBT_REGISTER.md item #14 / PR #17): tests/telemetry-realtime
-      # .test.mjs's Realtime channel reaches SUBSCRIBED but never receives the INSERT event, with no
-      # client-side error, for both a driver-scoped and a service_role-scoped subscription — ruling
-      # out RLS/JWT propagation. The job logs above only show the `node tests/*.test.mjs` step; the
-      # Realtime server itself runs in its own Docker container started by `supabase start`, and its
-      # internal logs (replication/publication errors, auth rejections, etc.) are otherwise invisible
-      # from this workflow. Dump them here so the next failure carries real evidence instead of
-      # another blind guess.
+          node tests/telemetry-persistence.test.mjs
+      # General-purpose diagnostic, kept for future integration-test failures (added while
+      # debugging a Realtime postgres_changes issue in PR #17 — see
+      # docs/TECHNICAL_DEBT_REGISTER.md and tests/telemetry-persistence.test.mjs's header comment
+      # for that specific writeup). The job logs above only show the `node tests/*.test.mjs` step;
+      # the various Supabase services run in their own Docker containers started by
+      # `supabase start`, and their internal logs are otherwise invisible from this workflow. Dump
+      # the Realtime one here on any integration-tests failure so there's a chance of real evidence
+      # instead of a blind guess.
       - name: Dump Supabase Realtime container logs (only on failure)
         if: failure()
         run: |
