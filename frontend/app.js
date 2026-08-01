@@ -23,7 +23,11 @@ let truckMarkers = [];
 let incidentMarkers = [];
 let simulationTimer = null;
 let simulationSpeed = 1;
-let citizenFolioSequence = 1;
+// Seeded per page load (not a fixed 1) so two concurrent demo sessions don't both hand out
+// SW-FOLIO-3001 first — this has no backing store, so a random per-session start is the only way
+// to keep the same low collision odds the previous Math.random()-per-submission version had
+// (Codex review on PR #23).
+let citizenFolioSequence = Math.floor(Math.random() * 5000) + 1;
 const initialTruckState = Object.fromEntries(trucks.map((truck) => [truck.id, { index: truck.positionIndex ?? 0, progress: truck.progress, updatedAt: truck.updatedAt, sector: truck.sector }]));
 const simState = Object.fromEntries(trucks.map((truck) => [truck.id, { index: truck.positionIndex ?? 0, progress: truck.progress }]));
 
