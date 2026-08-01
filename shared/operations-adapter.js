@@ -1,5 +1,6 @@
 import { trucks, routes, drivers, incidents, routePaths } from './demo-data.js';
 import { canTransitionRoute } from './contracts.js';
+import { deriveStopStatus } from './route-engine.js';
 
 // This adapter (createSupabaseOperationsAdapter, below) is the single entry point for operating
 // on routes/route_runs/vehicle_assignments — see docs/CORE_READINESS_REVIEW.md. When MT Workflow
@@ -12,8 +13,9 @@ const fail = (code, message, meta = {}) => ({ ok: false, error: { code, message 
 const table = (client, name) => client.from(name);
 
 const clone = (value) => structuredClone(value);
-export function createDemoOperationsAdapter(seed = { trucks, routes, drivers, incidents }) {
+export function createDemoOperationsAdapter(seed = { trucks, routes, drivers, incidents, routeStops: [] }) {
   const state = clone(seed);
+  if (!state.routeStops) state.routeStops = [];
   return {
     mode: 'DEMO_ONLY',
     listVehicles: () => clone(state.trucks),
@@ -22,6 +24,14 @@ export function createDemoOperationsAdapter(seed = { trucks, routes, drivers, in
     listRoutes: () => clone(state.routes),
     getRoute: (id) => clone(state.routes.find((r) => r.id === id) ?? null),
     createRoute: (route) => { const created = { status:'planned', progress:0, incidents:[], ...route }; state.routes.push(created); return clone(created); },
+    // Points already carry `sequence` (see shared/route-engine.js's generateRouteStopPoints()) —
+    // this just stamps them with route_id and an id, same shape a real route_stops row would have.
+    saveRouteStops: (routeId, points) => {
+      const saved = points.map((point, index) => ({ id: `demo-stop-${routeId}-${state.routeStops.length + index + 1}`, route_id: routeId, ...point }));
+      state.routeStops.push(...saved);
+      return clone(saved);
+    },
+    listRouteStops: (routeId) => clone(state.routeStops.filter((stop) => stop.route_id === routeId).sort((a, b) => a.sequence - b.sequence)),
     assignVehicle: (routeId, vehicleId) => updateRoute(state, routeId, { truckId: vehicleId, status:'assigned' }),
     assignDriver: (routeId, driverId) => updateRoute(state, routeId, { driverId, status:'assigned' }),
     startRoute: (routeId) => transitionRoute(state, routeId, 'started'),
@@ -86,7 +96,43 @@ export function createSupabaseOperationsAdapter(client, { fallback = createDemoO
     completeRoute: (routeId, opts = {}) => transitionRouteRun(client, fallback, municipality_id, routeId, 'completed', opts),
     verifyRoute: (routeId, opts = {}) => transitionRouteRun(client, fallback, municipality_id, routeId, 'verified', opts),
     registerIncident: (incident, opts = {}) => run(() => table(client, 'incidents').insert({ ...incident, municipality_id: incident.municipality_id ?? municipality_id, correlation_id: opts.correlation_id ?? incident.correlation_id }).select('*').single(), () => fallback.registerIncident(incident), opts.correlation_id),
-    listPositions: (opts = {}) => run(() => scoped(table(client, 'vehicle_positions').select('*').order('captured_at', { ascending:false })), () => fallback.listPositions(), opts.correlation_id)
+    listPositions: (opts = {}) => run(() => scoped(table(client, 'vehicle_positions').select('*').order('captured_at', { ascending:false })), () => fallback.listPositions(), opts.correlation_id),
+    // Points come from shared/route-engine.js's generateRouteStopPoints()/splitIntoTrips() —
+    // already sequence-ordered and, if the caller split by trip, flattened back into one list
+    // before calling this (route_stops has no trip concept, only route_id + sequence).
+    saveRouteStops: (routeId, points, opts = {}) => run(
+      () => table(client, 'route_stops').insert(points.map((point) => ({
+        route_id: routeId,
+        municipality_id: municipality_id,
+        sequence: point.sequence,
+        label: point.label,
+        latitude: point.latitude,
+        longitude: point.longitude
+      }))).select('*'),
+      () => fallback.saveRouteStops(routeId, points),
+      opts.correlation_id
+    ),
+    listRouteStops: (routeId, opts = {}) => run(
+      () => scoped(table(client, 'route_stops').select('*')).eq('route_id', routeId).order('sequence'),
+      () => fallback.listRouteStops(routeId),
+      opts.correlation_id
+    ),
+    // Derives each stop's pending/recolectado status from real recorded vehicle_positions for
+    // vehicleId (see route-engine.js's deriveStopStatus) — no status column needed on route_stops.
+    // vehicleId is the caller's responsibility to resolve (e.g. from the route's active
+    // vehicle_assignments row) rather than re-deriving it here, to keep this method's scope to
+    // "stops + positions -> status" only.
+    async listRouteStopsWithStatus(routeId, vehicleId, opts = {}) {
+      const stopsResult = await run(
+        () => scoped(table(client, 'route_stops').select('*')).eq('route_id', routeId).order('sequence'),
+        () => fallback.listRouteStops(routeId),
+        opts.correlation_id
+      );
+      if (!stopsResult.ok) return stopsResult;
+      const positionsResult = await run(() => scoped(table(client, 'vehicle_positions').select('*').order('captured_at', { ascending:false })), () => fallback.listPositions(), opts.correlation_id);
+      const vehiclePositions = positionsResult.ok ? positionsResult.data.filter((position) => position.vehicle_id === vehicleId) : [];
+      return ok(stopsResult.data.map((stop) => ({ ...stop, status: deriveStopStatus(stop, vehiclePositions) })), opts);
+    }
   };
 }
 
