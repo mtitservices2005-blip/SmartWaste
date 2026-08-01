@@ -6,14 +6,18 @@
 // all of that and inspects Postgres directly — the publication, the replication slots, and
 // Realtime's internal `realtime.subscription` bookkeeping table — right after a real
 // postgres_changes subscribe() call, to see what the server actually did (or didn't do) to fulfill
-// it. Requires `npx supabase start`; not part of the pass/fail CI gate (see .github/workflows/
-// tests.yml) — it prints evidence and always exits 0, because it's meant to be read, not asserted.
+// it. It also actually inserts a telemetry row after subscribing and waits to see whether the
+// client's onPosition callback fires — the first run of this script (PR #20) only confirmed the
+// subscription was registered correctly server-side, it never tested whether an INSERT is actually
+// delivered end-to-end. Requires `npx supabase start`; not part of the pass/fail CI gate (see
+// .github/workflows/tests.yml) — it prints evidence and always exits 0, because it's meant to be
+// read, not asserted.
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { loadLocalSupabaseEnv, createServiceClient, createSignedInClient } from './integration/local-supabase-env.mjs';
 import { seedScenario } from './integration/seed.mjs';
 import { createSupabaseOperationsAdapter } from '../shared/operations-adapter.js';
-import { createTelemetryIngestionAdapter } from '../shared/telemetry-simulator.js';
+import { createTelemetryIngestionAdapter, makeTelemetry } from '../shared/telemetry-simulator.js';
 
 // Everything below is wrapped so that any failure — missing DB_URL, seeding, login, or the
 // direct Postgres connection itself — is logged instead of throwing past the final
@@ -36,10 +40,11 @@ try {
 
   const telemetry = createTelemetryIngestionAdapter(driverClient, { municipality_id: scenario.municipalityA.id });
 
+  const received = [];
   console.log('=== Subscribing via postgres_changes ===');
   const subscribed = await new Promise((resolve) => {
     const timeout = setTimeout(() => resolve({ status: 'TIMED_OUT_WAITING_FOR_SUBSCRIBED' }), 15000);
-    telemetry.subscribe(scenario.vehicleA.id, () => {}, {
+    telemetry.subscribe(scenario.vehicleA.id, (position) => received.push(position), {
       onStatus: (status, err) => {
         console.log(`channel status: ${status}${err ? ` (${err.message ?? err})` : ''}`);
         if (status === 'SUBSCRIBED') { clearTimeout(timeout); resolve({ status }); }
@@ -51,6 +56,31 @@ try {
 
   // Give the server a moment to do whatever bookkeeping it does after a join, before we inspect it.
   await new Promise((resolve) => setTimeout(resolve, 3000));
+
+  console.log('\n=== Inserting a real telemetry row and waiting to see if it is delivered ===');
+  const correlation_id = randomUUID();
+  const point = makeTelemetry({
+    vehicle_id: scenario.vehicleA.id,
+    municipality_id: scenario.municipalityA.id,
+    latitude: 19.6489,
+    longitude: -71.0956,
+    correlation_id
+  });
+  const ingestResult = await telemetry.ingest(point);
+  console.log('ingest() result:', JSON.stringify(ingestResult));
+
+  const delivery = await new Promise((resolve) => {
+    const deadline = Date.now() + 15000;
+    const poll = setInterval(() => {
+      const match = received.find((p) => p.correlation_id === correlation_id);
+      if (match) { clearInterval(poll); resolve({ delivered: true, position: match }); }
+      else if (Date.now() > deadline) { clearInterval(poll); resolve({ delivered: false }); }
+    }, 250);
+  });
+  console.log('Delivery via postgres_changes:', JSON.stringify(delivery));
+  if (!delivery.delivered) {
+    console.log('*** NOT DELIVERED: the INSERT went through (see ingest() result above) but onPosition never fired within 15s. ***');
+  }
 
   console.log('\n=== Direct Postgres inspection (bypassing PostgREST/Realtime API entirely) ===');
   const db = new pg.Client({ connectionString: env.DB_URL });
