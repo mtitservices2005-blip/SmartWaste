@@ -61,6 +61,22 @@ jobs:
           node tests/rls-adversarial.test.mjs
           node tests/operational-cycle.test.mjs
           node tests/telemetry-realtime.test.mjs
+      # Diagnostic only (docs/TECHNICAL_DEBT_REGISTER.md item #14 / PR #17): tests/telemetry-realtime
+      # .test.mjs's Realtime channel reaches SUBSCRIBED but never receives the INSERT event, with no
+      # client-side error, for both a driver-scoped and a service_role-scoped subscription — ruling
+      # out RLS/JWT propagation. The job logs above only show the `node tests/*.test.mjs` step; the
+      # Realtime server itself runs in its own Docker container started by `supabase start`, and its
+      # internal logs (replication/publication errors, auth rejections, etc.) are otherwise invisible
+      # from this workflow. Dump them here so the next failure carries real evidence instead of
+      # another blind guess.
+      - name: Dump Supabase Realtime container logs (only on failure)
+        if: failure()
+        run: |
+          docker ps -a
+          for c in $(docker ps -a --format '{{.Names}}' | grep -i realtime); do
+            echo "=== docker logs $c ==="
+            docker logs "$c" --tail 300 2>&1 || true
+          done
       - name: Stop Supabase local
         if: always()
         run: npx supabase stop
