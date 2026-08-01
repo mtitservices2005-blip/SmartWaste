@@ -66,10 +66,12 @@ assert.equal(persisted.data.source, 'simulator');
 
 // 3. Realtime delivery (sw016.realtime): subscribe for this vehicle and confirm a new INSERT
 // actually arrives via postgres_changes, once the channel signals it's really ready (see the
-// header comment above and shared/telemetry-simulator.js's subscribe()).
+// header comment above and shared/telemetry-simulator.js's subscribe()). subscribe() retries with
+// backoff internally on failure, so give this enough room for the worst case (3 retries at up to
+// 1s/2s/4s backoff, plus a 2s settle wait after the eventual successful join).
 const secondCorrelation = randomUUID();
 const delivered = await new Promise((resolve, reject) => {
-  const timeout = setTimeout(() => reject(new Error('Realtime event not received within 20s')), 20000);
+  const timeout = setTimeout(() => reject(new Error('Realtime event not received within 45s')), 45000);
   const subscription = telemetry.subscribe(scenario.vehicleA.id, (row) => {
     if (row.correlation_id !== secondCorrelation) return;
     clearTimeout(timeout);
