@@ -1,6 +1,6 @@
 import { demoNotice, simulationNotice, pilotMunicipality, trucks, routes, sectors, drivers, incidents, notifications, municipalities, routeFlow, routePaths, stateLabels } from '../shared/demo-data.js';
 import { operationsAdapter } from '../shared/operations-adapter.js';
-import { DeviceSimulator } from '../shared/telemetry-simulator.js';
+import { DeviceSimulator, createDemoPositionHistory } from '../shared/telemetry-simulator.js';
 import { validateEvidenceFile } from '../shared/channel-contracts.js';
 import { IMPACT_DEMO_NOTICE, IMPACT_SCENARIO_NOTICE, defaultImpactAssumptions, metricReadiness, calculateImpactMetrics } from '../shared/impact-center.js';
 import { initAuthGate } from './auth-gate.js';
@@ -24,6 +24,37 @@ let simulationTimer = null;
 let simulationSpeed = 1;
 const initialTruckState = Object.fromEntries(trucks.map((truck) => [truck.id, { index: truck.positionIndex ?? 0, progress: truck.progress, updatedAt: truck.updatedAt, sector: truck.sector }]));
 const simState = Object.fromEntries(trucks.map((truck) => [truck.id, { index: truck.positionIndex ?? 0, progress: truck.progress }]));
+
+// Driver mobile view (vista móvil conductor): DeviceSimulator feeds a demo, in-memory stand-in for
+// vehicle_positions (createDemoPositionHistory, shared/telemetry-simulator.js) — same shape/columns
+// a real Supabase-backed history would have, just not persisted. Generation runs independently of
+// whether the view is visible (mirrors trucks always reporting telemetry); the view itself only
+// polls (Realtime is unresolved — docs/TECHNICAL_DEBT_REGISTER.md item #14) and only while visible.
+const trucksWithRoute = trucks.filter((truck) => truck.routeId);
+const positionHistory = createDemoPositionHistory();
+const driverSimulators = Object.fromEntries(trucksWithRoute.map((truck) => {
+  const simulator = new DeviceSimulator(truck.id);
+  simulator.index = truck.positionIndex ?? 0; // start the trail aligned with the truck's current demo progress
+  return [truck.id, simulator];
+}));
+let driverVehicleId = trucksWithRoute[0]?.id ?? trucks[0].id;
+let driverMap;
+let driverMapReady = false;
+let driverPlannedLayer = null;
+let driverTrailLayer = null;
+let driverCurrentMarker = null;
+let driverPollTimer = null;
+const DRIVER_POLL_INTERVAL_MS = 7000; // dentro del rango pedido de 5-10s
+
+Object.values(driverSimulators).forEach((simulator) => positionHistory.record(simulator.start()));
+function tickDriverTelemetry() {
+  Object.entries(driverSimulators).forEach(([truckId, simulator]) => {
+    const truck = trucks.find((item) => item.id === truckId);
+    if (!truck || truck.state === 'offline' || truck.state === 'completed') return;
+    positionHistory.record(simulator.emit());
+  });
+}
+setInterval(tickDriverTelemetry, 4000);
 
 function progress(value) { return `<div class="progress" aria-label="${value}% completado"><i style="width:${value}%"></i></div>`; }
 function pill(state) { return `<span class="pill ${state}">${label(state)}</span>`; }
@@ -82,7 +113,16 @@ function renderRouteDetail(route) {
 }
 function renderIncidentDetail(incident) { return `<div class="drawer-head"><p class="eyebrow">Incidencia operativa demo</p><h2>${incident.type}</h2>${pill('open')}</div><p><b>Folio:</b> ${incident.id}</p><p><b>Sector:</b> ${incident.sector}</p><p><b>Prioridad:</b> ${incident.priority}</p><p><b>Estado:</b> ${incident.status}</p><p>${incident.detail}</p><p class="demo">${demoNotice}</p>`; }
 
-function renderMunicipal() { return `<section id="municipal" class="section card"><h2>Panel municipal</h2><p class="demo">${demoNotice} · Municipio piloto configurable: ${pilotMunicipality.name}, ${pilotMunicipality.country}</p><div class="controls"><input id="search" placeholder="Buscar ruta, camión o sector"><select id="sectorFilter"><option value="">Todos los sectores</option>${sectors.map((s) => `<option>${s.name}</option>`).join('')}</select></div><div class="panel-grid"><div><h3>Rutas del día</h3><div class="list" id="routeList">${renderRoutes(routes)}</div></div><div><h3>Vehículos demo</h3>${trucks.map((truck) => `<button class="row selectable" data-truck="${truck.id}"><span>${truckIcon(truck)} ${truck.unit}<br>${driverName(truck.driverId)}</span>${pill(truck.state)}</button>`).join('')}</div><div><h3>Incidencias en mapa</h3>${incidents.map((incident) => `<button class="row selectable" data-incident="${incident.code}"><span>${incident.type}<br>${incident.sector}</span>${pill('open')}</button>`).join('')}</div></div><h3>Vista móvil conductor</h3><div class="mobile"><h4>Ruta asignada</h4><p>Demo Centro Urbano AM → En progreso</p><button data-flow>Avanzar flujo demo</button><p id="flowState">planned</p></div></section>`; }
+function renderMunicipal() { return `<section id="municipal" class="section card"><h2>Panel municipal</h2><p class="demo">${demoNotice} · Municipio piloto configurable: ${pilotMunicipality.name}, ${pilotMunicipality.country}</p><div class="controls"><input id="search" placeholder="Buscar ruta, camión o sector"><select id="sectorFilter"><option value="">Todos los sectores</option>${sectors.map((s) => `<option>${s.name}</option>`).join('')}</select></div><div class="panel-grid"><div><h3>Rutas del día</h3><div class="list" id="routeList">${renderRoutes(routes)}</div></div><div><h3>Vehículos demo</h3>${trucks.map((truck) => `<button class="row selectable" data-truck="${truck.id}"><span>${truckIcon(truck)} ${truck.unit}<br>${driverName(truck.driverId)}</span>${pill(truck.state)}</button>`).join('')}</div><div><h3>Incidencias en mapa</h3>${incidents.map((incident) => `<button class="row selectable" data-incident="${incident.code}"><span>${incident.type}<br>${incident.sector}</span>${pill('open')}</button>`).join('')}</div></div><h3>Vista móvil conductor</h3>${renderDriverMobile()}</section>`; }
+function renderDriverMobile() {
+  const truck = trucks.find((item) => item.id === driverVehicleId);
+  return `<div class="mobile" id="driverMobile">
+    <select id="driverVehicleSelect" aria-label="Vehículo del conductor">${trucksWithRoute.map((t) => `<option value="${t.id}" ${t.id === driverVehicleId ? 'selected' : ''}>${t.unit}</option>`).join('')}</select>
+    <p id="driverRouteInfo">${pill(truck.state)} ${routeName(truck.routeId)} · ${truck.progress}% completado</p>
+    <div id="driverMap" class="real-map driver-map" role="application" aria-label="Posición y trazo del vehículo (demo)"></div>
+    <p class="demo">${simulationNotice} · trazo histórico vía polling cada ${DRIVER_POLL_INTERVAL_MS / 1000}s (sin Realtime, ver docs/TECHNICAL_DEBT_REGISTER.md #14)</p>
+  </div>`;
+}
 function renderRoutes(items) { return items.map((route) => `<article class="row selectable" data-route="${route.id}"><div><strong>${route.name}</strong><br>${route.sectors.join(' · ')} · ETA ${route.eta}<br>${progress(route.progress)}</div><div>${pill(routeStatus(route))}<br>${route.covered}/${route.stops} paradas</div></article>`).join(''); }
 function renderSupervisor() {
   const pendingVerification = routes.filter((route) => route.status === 'completed');
@@ -156,6 +196,53 @@ function drawMapLayers(L = window.L) {
   });
   incidents.forEach((incident) => { incidentMarkers.push(L.marker(incident.position, { icon: L.divIcon({ className: 'leaflet-incident', html: `<span>⚠<small>${incident.type}</small></span>`, iconSize: [90, 34] }) }).addTo(map).on('click', () => selectIncident(incident.code))); });
 }
+
+function initDriverMap() {
+  loadLeaflet().then((L) => {
+    driverMapReady = true;
+    driverMap = L.map('driverMap', { zoomControl: false, attributionControl: false }).setView(pilotMunicipality.center, pilotMunicipality.zoom);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(driverMap);
+    drawDriverPositions();
+  }).catch(() => { const el = $('#driverMap'); if (el) { el.classList.add('fallback-active'); el.innerHTML = '<div class="map-fallback"><strong>Mapa externo no disponible.</strong></div>'; } });
+}
+// Reads positionHistory (the demo stand-in for a `select * from vehicle_positions where
+// vehicle_id=$1 order by captured_at` query) and redraws: planned route as a base line, the
+// traveled trail as a solid line, and the most recent point as a distinct marker. Called on every
+// poll tick and immediately on vehicle switch — cheap enough (a handful of points) to just redraw
+// everything each time, same approach drawMapLayers() already uses for the main operational map.
+function drawDriverPositions() {
+  if (!driverMapReady) return;
+  const L = window.L;
+  const truck = trucks.find((item) => item.id === driverVehicleId);
+  if (!truck?.routeId) return;
+  if (driverPlannedLayer) driverPlannedLayer.remove();
+  driverPlannedLayer = L.polyline(routePaths[truck.routeId] ?? [], { color: '#94a3b8', weight: 4, opacity: .6, dashArray: '6 8' }).addTo(driverMap);
+
+  const history = positionHistory.listPositions(driverVehicleId);
+  const trail = history.map((point) => [point.latitude, point.longitude]);
+  if (driverTrailLayer) driverTrailLayer.remove();
+  driverTrailLayer = trail.length > 1 ? L.polyline(trail, { color: '#0f7b4f', weight: 5, opacity: .9 }).addTo(driverMap) : null;
+
+  if (driverCurrentMarker) driverCurrentMarker.remove();
+  const last = history[history.length - 1];
+  if (last) {
+    driverCurrentMarker = L.circleMarker([last.latitude, last.longitude], { radius: 9, color: '#155eef', weight: 3, fillColor: '#155eef', fillOpacity: .9 }).addTo(driverMap);
+    driverMap.panTo([last.latitude, last.longitude]);
+  }
+}
+function startDriverPolling() { if (driverPollTimer) return; drawDriverPositions(); driverPollTimer = setInterval(drawDriverPositions, DRIVER_POLL_INTERVAL_MS); }
+function stopDriverPolling() { clearInterval(driverPollTimer); driverPollTimer = null; }
+// Every section is always in the DOM (single scrolling page, nav links just jump to an anchor —
+// see frontend/index.html), so "navigate away from the view" means scrolled out of the viewport,
+// not unmounted. IntersectionObserver starts/stops polling accordingly, so it doesn't run forever
+// in the background once the driver never scrolls back to it.
+function initDriverPolling() {
+  const target = $('#driverMobile');
+  if (!target) return;
+  if (!('IntersectionObserver' in window)) { startDriverPolling(); return; }
+  new IntersectionObserver((entries) => entries.forEach((entry) => (entry.isIntersecting ? startDriverPolling() : stopDriverPolling())), { threshold: .15 }).observe(target);
+}
+
 function drawerContent(content) { return `<button class="drawer-close" data-close-detail aria-label="Cerrar detalle">✕ Cerrar</button><div class="drawer-scroll">${content}</div>`; }
 function openDetail(content) { const detail = $('#detail'); detail.innerHTML = drawerContent(content); detail.classList.remove('is-hidden'); detail.setAttribute('aria-hidden', 'false'); }
 function closeDetail() { const detail = $('#detail'); detail.classList.add('is-hidden'); detail.setAttribute('aria-hidden', 'true'); detail.innerHTML = ''; selectedTruckId = null; selectedRouteId = null; selectedIncidentId = null; }
@@ -171,7 +258,6 @@ document.addEventListener('click', (event) => {
   const truckButton = event.target.closest('[data-truck]'); if (truckButton) selectTruck(truckButton.dataset.truck);
   const routeButton = event.target.closest('[data-route]'); if (routeButton?.dataset.route) selectRoute(routeButton.dataset.route);
   const incidentButton = event.target.closest('[data-incident]'); if (incidentButton) selectIncident(incidentButton.dataset.incident);
-  if (event.target.matches('[data-flow]')) { const current = $('#flowState').textContent; $('#flowState').textContent = routeFlow[(routeFlow.indexOf(current) + 1) % routeFlow.length]; }
   const verifyButton = event.target.closest('[data-verify-route]');
   if (verifyButton) { const route = routeById(verifyButton.dataset.verifyRoute); if (route) { route.status = 'verified'; $('#supervisor').outerHTML = renderSupervisor(); } }
   const resolveButton = event.target.closest('[data-resolve-incident]');
@@ -190,8 +276,16 @@ $('#citizenSector').dispatchEvent(new Event('change'));
 $('#incidentForm').addEventListener('submit', (event) => { event.preventDefault(); $('#folio').textContent = `Folio generado: SW-FOLIO-${Math.floor(2000 + Math.random() * 7000)} (demo · sin upload real)`; });
 document.querySelectorAll('#fuelPrice,#fuelEfficiency,#operatingDays,#hourlyCost').forEach((input) => input.addEventListener('input', () => { const assumptions = { ...defaultImpactAssumptions, fuelPrice: Number($('#fuelPrice').value), fuelEfficiency: Number($('#fuelEfficiency').value), operatingDays: Number($('#operatingDays').value), hourlyCost: Number($('#hourlyCost').value) }; $('#impactEconomics').innerHTML = renderImpactEconomics(calculateImpactMetrics(assumptions)); }));
 $('#evidence').addEventListener('change', (event) => { const file = event.target.files?.[0]; const result = validateEvidenceFile(file); $('#evidencePreview').textContent = result.ok ? `${file?.name ?? 'Sin archivo'} · ${result.reason}` : `Evidencia rechazada: ${result.reason}`; });
+$('#driverVehicleSelect').addEventListener('change', (event) => {
+  driverVehicleId = event.target.value;
+  const truck = trucks.find((item) => item.id === driverVehicleId);
+  $('#driverRouteInfo').innerHTML = `${pill(truck.state)} ${routeName(truck.routeId)} · ${truck.progress}% completado`;
+  drawDriverPositions();
+});
 function requestGeolocation() { const target = $('#geoStatus'); if (!navigator.geolocation) { target.textContent = 'Ubicación no disponible en este navegador.'; return; } target.textContent = 'Solicitando permiso de ubicación...'; navigator.geolocation.getCurrentPosition((pos) => { target.textContent = `Ubicación recibida localmente: ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)} (no enviada)`; }, (err) => { target.textContent = `Permiso denegado, timeout o ubicación no disponible: ${err.message}`; }, { enableHighAccuracy:true, timeout:8000, maximumAge:60000 }); }
 initMap();
+initDriverMap();
+initDriverPolling();
 // No-ops entirely (leaves every section visible, same as before this line existed) unless the
 // page sets window.SMARTWASTE_SUPABASE_CONFIG — see frontend/auth-gate.js and CLAUDE.md rule 5.
 initAuthGate();

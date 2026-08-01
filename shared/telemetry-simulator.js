@@ -17,6 +17,28 @@ export class DeviceSimulator {
   emit(status='in_progress') { if (this.signalLost) return null; const truck = trucks.find((t) => t.id === this.vehicleId) ?? trucks[0]; const path = routePaths[truck.routeId] ?? [truck.position ?? [19.6489, -71.0956]]; const [latitude, longitude] = path[this.index % path.length]; this.index += 1; return { status, ...makeTelemetry({ vehicle_id:this.vehicleId, latitude, longitude, speed:this.speed }) }; }
 }
 
+// Client-side stand-in for querying vehicle_positions by vehicle_id ordered by captured_at (the
+// real read path — see supabase/migrations/202607150003_sw013_persistence_hardening.sql:72's
+// vehicle_positions_vehicle_recorded_idx). Keeps every recorded point, never discards — same
+// "dense history" shape the real table has. Used by frontend/app.js's driver mobile view to poll
+// for redraws while Realtime postgres_changes stays unresolved (docs/TECHNICAL_DEBT_REGISTER.md
+// item #14).
+export function createDemoPositionHistory() {
+  const history = new Map();
+  return {
+    record(position) {
+      if (!position?.vehicle_id) return position;
+      const list = history.get(position.vehicle_id) ?? [];
+      list.push(position);
+      history.set(position.vehicle_id, list);
+      return position;
+    },
+    listPositions(vehicleId) {
+      return (history.get(vehicleId) ?? []).slice().sort((a, b) => Date.parse(a.captured_at) - Date.parse(b.captured_at));
+    }
+  };
+}
+
 export function validateTelemetryPosition(position, { maxAgeMs = 1000 * 60 * 60 * 6, now = Date.now() } = {}) {
   const errors = [];
   if (!position?.vehicle_id) errors.push('vehicle_id is required');
