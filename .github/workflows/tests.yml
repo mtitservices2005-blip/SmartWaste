@@ -20,13 +20,13 @@ jobs:
         with:
           node-version: '22'
       # None of these test files import @supabase/supabase-js, so no npm install is needed here —
-      # keeps this job fast. tests/rls-adversarial.test.mjs, tests/operational-cycle.test.mjs, and
-      # tests/telemetry-persistence.test.mjs are excluded on purpose: they need a live Supabase
-      # instance and run in the integration-tests job.
+      # keeps this job fast. tests/rls-adversarial.test.mjs, tests/operational-cycle.test.mjs,
+      # tests/telemetry-persistence.test.mjs, and tests/telemetry-realtime-diagnosis.test.mjs are
+      # excluded on purpose: they need a live Supabase instance and run in the integration-tests job.
       - name: Run each tests/*.test.mjs file as an independent node process
         run: |
           set -e
-          skip_list="tests/rls-adversarial.test.mjs tests/operational-cycle.test.mjs tests/telemetry-persistence.test.mjs"
+          skip_list="tests/rls-adversarial.test.mjs tests/operational-cycle.test.mjs tests/telemetry-persistence.test.mjs tests/telemetry-realtime-diagnosis.test.mjs"
           for f in tests/*.test.mjs; do
             skip=false
             for s in $skip_list; do
@@ -61,6 +61,11 @@ jobs:
           node tests/rls-adversarial.test.mjs
           node tests/operational-cycle.test.mjs
           node tests/telemetry-persistence.test.mjs
+      # SW-022 (docs/TECHNICAL_DEBT_REGISTER.md item #14): diagnostic-only, inspects Postgres
+      # directly to find why Realtime never delivers postgres_changes events. Always exits 0 by
+      # design — read its output in the job log, it's not a pass/fail gate.
+      - name: Diagnose Realtime postgres_changes (direct Postgres inspection)
+        run: node tests/telemetry-realtime-diagnosis.test.mjs
       # General-purpose diagnostic, kept for future integration-test failures (added while
       # debugging a Realtime postgres_changes issue in PR #17 — see
       # docs/TECHNICAL_DEBT_REGISTER.md and tests/telemetry-persistence.test.mjs's header comment

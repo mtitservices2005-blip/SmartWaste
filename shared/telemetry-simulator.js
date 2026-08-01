@@ -53,6 +53,10 @@ export function validateTelemetryPosition(position, { maxAgeMs = 1000 * 60 * 60 
   return { valid: errors.length === 0, errors };
 }
 
+// See the comments inside subscribe() below for why these exist.
+const REALTIME_SUBSCRIBE_SETTLE_MS = 2000;
+const REALTIME_SUBSCRIBE_RETRY_BACKOFF_MS = [1000, 2000, 4000];
+
 export function createTelemetryIngestionAdapter(client, { municipality_id = null } = {}) {
   return {
     mode: client?.from ? 'REAL' : 'REAL_NOT_RUN',
@@ -86,10 +90,51 @@ export function createTelemetryIngestionAdapter(client, { municipality_id = null
     },
     subscribe(vehicleId, onPosition, { onStatus } = {}) {
       if (!client?.channel) return { status:'REALTIME_NOT_RUN', unsubscribe() {} };
-      const channel = client.channel(`vehicle_positions:${vehicleId}`)
-        .on('postgres_changes', { event:'INSERT', schema:'public', table:'vehicle_positions', filter:`vehicle_id=eq.${vehicleId}` }, (payload) => onPosition(payload.new))
-        .subscribe((status, err) => onStatus?.(status, err));
-      return { status:'REALTIME_SUBSCRIBED', unsubscribe: () => channel.unsubscribe() };
+      // Item #14 (SW-022, docs/TECHNICAL_DEBT_REGISTER.md): the channel reports 'SUBSCRIBED' as
+      // soon as the client joins the Phoenix channel, but that does not mean the server-side WAL
+      // consumer for this specific table+filter has actually been set up yet — that can still fail
+      // shortly after (observed in CI as the "subscription_errors" rate counter incrementing ~1s
+      // after join). Retry the whole subscribe from scratch with backoff whenever the channel
+      // reports CHANNEL_ERROR/CLOSED/TIMED_OUT, and only pass 'SUBSCRIBED' up to the caller after
+      // it has held for REALTIME_SUBSCRIBE_SETTLE_MS without failing. NOTE this is a best-effort
+      // mitigation, not a guaranteed fix: SW-022 also observed a third failure mode in CI where the
+      // channel stays open and reports nothing wrong at all, yet the event is simply never
+      // delivered — that failure is invisible to the client, so no retry-on-status logic can catch
+      // it. Callers relying on Realtime delivery being real should not assume this makes it so.
+      let settleTimer = null;
+      let retryTimer = null;
+      let attempt = 0;
+      let stopped = false;
+      let channel = null;
+
+      const attemptSubscribe = () => {
+        attempt += 1;
+        channel = client.channel(`vehicle_positions:${vehicleId}:${attempt}`)
+          .on('postgres_changes', { event:'INSERT', schema:'public', table:'vehicle_positions', filter:`vehicle_id=eq.${vehicleId}` }, (payload) => onPosition(payload.new))
+          .subscribe((status, err) => {
+            if (stopped) return;
+            if (status === 'SUBSCRIBED') { settleTimer = setTimeout(() => { if (!stopped) onStatus?.(status, err); }, REALTIME_SUBSCRIBE_SETTLE_MS); return; }
+            const canRetry = (status === 'CHANNEL_ERROR' || status === 'CLOSED' || status === 'TIMED_OUT') && attempt <= REALTIME_SUBSCRIBE_RETRY_BACKOFF_MS.length;
+            if (canRetry) {
+              if (settleTimer) clearTimeout(settleTimer);
+              channel.unsubscribe();
+              retryTimer = setTimeout(attemptSubscribe, REALTIME_SUBSCRIBE_RETRY_BACKOFF_MS[attempt - 1]);
+              return;
+            }
+            onStatus?.(status, err);
+          });
+      };
+      attemptSubscribe();
+
+      return {
+        status:'REALTIME_SUBSCRIBED',
+        unsubscribe: () => {
+          stopped = true;
+          if (settleTimer) clearTimeout(settleTimer);
+          if (retryTimer) clearTimeout(retryTimer);
+          channel?.unsubscribe();
+        }
+      };
     }
   };
 }

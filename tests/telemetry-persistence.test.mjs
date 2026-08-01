@@ -4,17 +4,15 @@
 // local-instance setup used by tests/operational-cycle.test.mjs.
 //
 // SCOPE: this only covers ingestion/persistence and the RLS write policy — NOT Realtime delivery.
-// A prior version of this file also subscribed to Realtime and verified event delivery, but that
-// consistently failed in CI: the channel reaches SUBSCRIBED, but no postgres_changes INSERT event
-// is ever delivered, for both a driver-scoped and a service_role-scoped subscription (ruling out
-// RLS/JWT as the cause). The Realtime container's own logs (captured via a CI diagnostic step)
-// show only its internal "Broadcast Changes" replication connection
-// (supabase_realtime_messages_publication over realtime.messages) ever starting — nothing for
-// vehicle_positions/supabase_realtime, even after granting supabase_realtime_admin SELECT on
-// vehicle_positions (202607150007_sw016_telemetry_realtime.sql). See
-// docs/TECHNICAL_DEBT_REGISTER.md for the full writeup; Realtime delivery stays REAL_NOT_RUN in
-// shared/integration/status.json until that's root-caused (likely needs direct Postgres/
-// Realtime-source-level access, e.g. LabPC).
+// SW-022 investigated Realtime postgres_changes delivery in depth (docs/TECHNICAL_DEBT_REGISTER.md
+// item #14) and found it fails in at least three different, inconsistent ways across otherwise
+// identical CI runs: (1) delivered correctly once a client waited a few seconds after the channel's
+// 'SUBSCRIBED' ack; (2) the channel was closed by the server (CLOSED) about a second after that same
+// ack; (3) the channel stayed open and never closed, but the event was simply never delivered,
+// with no error surfaced to the client at all. Case (3) means there is no reliable client-visible
+// signal to retry on — shared/telemetry-simulator.js's subscribe() still retries on observable
+// failures (REALTIME_SUBSCRIBE_SETTLE_MS / REALTIME_SUBSCRIBE_RETRY_BACKOFF_MS) as a best-effort
+// mitigation, but that can't fix the silent-failure case, so this test does not assert on delivery.
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { loadLocalSupabaseEnv, createServiceClient, createSignedInClient } from './integration/local-supabase-env.mjs';
