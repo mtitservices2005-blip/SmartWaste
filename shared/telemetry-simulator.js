@@ -94,11 +94,13 @@ export function createTelemetryIngestionAdapter(client, { municipality_id = null
       // soon as the client joins the Phoenix channel, but that does not mean the server-side WAL
       // consumer for this specific table+filter has actually been set up yet — that can still fail
       // shortly after (observed in CI as the "subscription_errors" rate counter incrementing ~1s
-      // after join, followed by the channel closing). A fixed delay alone isn't reliable: one CI
-      // run delivered fine after a 2-3s wait, another got CLOSED before that wait even elapsed. So
-      // instead of trusting a single attempt, retry the whole subscribe from scratch with backoff
-      // whenever the channel reports CHANNEL_ERROR/CLOSED/TIMED_OUT, and only pass 'SUBSCRIBED' up
-      // to the caller after it has held for REALTIME_SUBSCRIBE_SETTLE_MS without failing.
+      // after join). Retry the whole subscribe from scratch with backoff whenever the channel
+      // reports CHANNEL_ERROR/CLOSED/TIMED_OUT, and only pass 'SUBSCRIBED' up to the caller after
+      // it has held for REALTIME_SUBSCRIBE_SETTLE_MS without failing. NOTE this is a best-effort
+      // mitigation, not a guaranteed fix: SW-022 also observed a third failure mode in CI where the
+      // channel stays open and reports nothing wrong at all, yet the event is simply never
+      // delivered — that failure is invisible to the client, so no retry-on-status logic can catch
+      // it. Callers relying on Realtime delivery being real should not assume this makes it so.
       let settleTimer = null;
       let retryTimer = null;
       let attempt = 0;
