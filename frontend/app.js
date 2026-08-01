@@ -50,7 +50,16 @@ Object.values(driverSimulators).forEach((simulator) => positionHistory.record(si
 function tickDriverTelemetry() {
   Object.entries(driverSimulators).forEach(([truckId, simulator]) => {
     const truck = trucks.find((item) => item.id === truckId);
-    if (!truck || truck.state === 'offline' || truck.state === 'completed') return;
+    // Only 'active'/'delayed' trucks are actually moving — 'stopped' has speedKmh 0 by definition
+    // (shared/demo-data.js), and 'offline'/'completed' aren't reporting either; advancing the
+    // simulator for any of those would move a marker that's supposed to be stationary.
+    if (!truck || (truck.state !== 'active' && truck.state !== 'delayed')) return;
+    const path = routePaths[truck.routeId] ?? [];
+    // emit() reads path[index % path.length] then increments index, so index === path.length is the
+    // first tick that would wrap back to the route's first point. Stop there — this still records
+    // the true final point (index === path.length - 1) before capping, instead of stopping one
+    // point short of the route's actual end.
+    if (simulator.index >= path.length) return;
     positionHistory.record(simulator.emit());
   });
 }
@@ -166,12 +175,20 @@ function renderMaster() { return `<section id="master" class="section card"><h2>
 
 app.innerHTML = `${renderMap()}${renderMunicipal()}${renderSupervisor()}${renderCitizen()}${renderImpactCenter()}${renderMaster()}`;
 
+// initMap() and initDriverMap() both call this at page load, before window.L exists yet — without
+// caching the in-flight promise, the second call would inject a second <script> tag, and whichever
+// one resolves last silently replaces window.L out from under the map already built with the first
+// instance (Leaflet ID collisions, layers detached from the visible map). Cache it so every caller
+// awaits the same load.
+let leafletLoadPromise = null;
 function loadLeaflet() {
-  return new Promise((resolve, reject) => {
+  if (leafletLoadPromise) return leafletLoadPromise;
+  leafletLoadPromise = new Promise((resolve, reject) => {
     if (window.L) return resolve(window.L);
     const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'; document.head.append(css);
     const script = document.createElement('script'); script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'; script.onload = () => resolve(window.L); script.onerror = reject; document.head.append(script);
-  });
+  }).catch((error) => { leafletLoadPromise = null; throw error; }); // allow a retry later instead of caching a permanent failure
+  return leafletLoadPromise;
 }
 function initMap() {
   loadLeaflet().then((L) => {
@@ -215,6 +232,11 @@ function drawDriverPositions() {
   const L = window.L;
   const truck = trucks.find((item) => item.id === driverVehicleId);
   if (!truck?.routeId) return;
+  // Keep the route/status text current on every poll, not just when the vehicle selector changes —
+  // startSimulation() (the main operational map's simulation) mutates truck.progress/state on its
+  // own timer, so a driver who stays on one vehicle would otherwise keep seeing a stale percentage.
+  const routeInfo = $('#driverRouteInfo');
+  if (routeInfo) routeInfo.innerHTML = `${pill(truck.state)} ${routeName(truck.routeId)} · ${truck.progress}% completado`;
   if (driverPlannedLayer) driverPlannedLayer.remove();
   driverPlannedLayer = L.polyline(routePaths[truck.routeId] ?? [], { color: '#94a3b8', weight: 4, opacity: .6, dashArray: '6 8' }).addTo(driverMap);
 
@@ -278,9 +300,7 @@ document.querySelectorAll('#fuelPrice,#fuelEfficiency,#operatingDays,#hourlyCost
 $('#evidence').addEventListener('change', (event) => { const file = event.target.files?.[0]; const result = validateEvidenceFile(file); $('#evidencePreview').textContent = result.ok ? `${file?.name ?? 'Sin archivo'} · ${result.reason}` : `Evidencia rechazada: ${result.reason}`; });
 $('#driverVehicleSelect').addEventListener('change', (event) => {
   driverVehicleId = event.target.value;
-  const truck = trucks.find((item) => item.id === driverVehicleId);
-  $('#driverRouteInfo').innerHTML = `${pill(truck.state)} ${routeName(truck.routeId)} · ${truck.progress}% completado`;
-  drawDriverPositions();
+  drawDriverPositions(); // also refreshes #driverRouteInfo for the newly selected vehicle
 });
 function requestGeolocation() { const target = $('#geoStatus'); if (!navigator.geolocation) { target.textContent = 'Ubicación no disponible en este navegador.'; return; } target.textContent = 'Solicitando permiso de ubicación...'; navigator.geolocation.getCurrentPosition((pos) => { target.textContent = `Ubicación recibida localmente: ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)} (no enviada)`; }, (err) => { target.textContent = `Permiso denegado, timeout o ubicación no disponible: ${err.message}`; }, { enableHighAccuracy:true, timeout:8000, maximumAge:60000 }); }
 initMap();
