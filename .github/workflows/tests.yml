@@ -20,12 +20,13 @@ jobs:
         with:
           node-version: '22'
       # None of these test files import @supabase/supabase-js, so no npm install is needed here —
-      # keeps this job fast. tests/rls-adversarial.test.mjs and tests/operational-cycle.test.mjs are
-      # excluded on purpose: they need a live Supabase instance and run in the integration-tests job.
+      # keeps this job fast. tests/rls-adversarial.test.mjs, tests/operational-cycle.test.mjs, and
+      # tests/telemetry-realtime.test.mjs are excluded on purpose: they need a live Supabase
+      # instance and run in the integration-tests job.
       - name: Run each tests/*.test.mjs file as an independent node process
         run: |
           set -e
-          skip_list="tests/rls-adversarial.test.mjs tests/operational-cycle.test.mjs"
+          skip_list="tests/rls-adversarial.test.mjs tests/operational-cycle.test.mjs tests/telemetry-realtime.test.mjs"
           for f in tests/*.test.mjs; do
             skip=false
             for s in $skip_list; do
@@ -54,11 +55,12 @@ jobs:
         run: npm ci
       - name: Start Supabase local
         run: npx supabase start
-      - name: Run RLS adversarial and operational cycle tests
+      - name: Run RLS adversarial, operational cycle, and telemetry Realtime tests
         run: |
           set -e
           node tests/rls-adversarial.test.mjs
           node tests/operational-cycle.test.mjs
+          node tests/telemetry-realtime.test.mjs
       - name: Stop Supabase local
         if: always()
         run: npx supabase stop

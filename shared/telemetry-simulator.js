@@ -44,9 +44,11 @@ export function createTelemetryIngestionAdapter(client, { municipality_id = null
       if (result.error) return { ok:false, source:'REAL', error:{ code: result.error.code ?? 'SUPABASE_ERROR', message: result.error.message }, correlation_id: payload.correlation_id };
       return { ok:true, source:'REAL', data:result.data, correlation_id: payload.correlation_id };
     },
-    subscribe(vehicleId, onPosition) {
+    subscribe(vehicleId, onPosition, { onStatus } = {}) {
       if (!client?.channel) return { status:'REALTIME_NOT_RUN', unsubscribe() {} };
-      const channel = client.channel(`vehicle_positions:${vehicleId}`).on('postgres_changes', { event:'INSERT', schema:'public', table:'vehicle_positions', filter:`vehicle_id=eq.${vehicleId}` }, (payload) => onPosition(payload.new)).subscribe();
+      const channel = client.channel(`vehicle_positions:${vehicleId}`)
+        .on('postgres_changes', { event:'INSERT', schema:'public', table:'vehicle_positions', filter:`vehicle_id=eq.${vehicleId}` }, (payload) => onPosition(payload.new))
+        .subscribe((status) => onStatus?.(status));
       return { status:'REALTIME_SUBSCRIBED', unsubscribe: () => channel.unsubscribe() };
     }
   };
