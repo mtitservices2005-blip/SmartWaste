@@ -39,7 +39,25 @@ export function createTelemetryIngestionAdapter(client, { municipality_id = null
       if (!validation.valid) return { ok:false, source:this.mode, error:{ code:'INVALID_TELEMETRY', message:validation.errors.join('; ') }, correlation_id: opts.correlation_id ?? position?.correlation_id ?? null };
       if (municipality_id && position.municipality_id !== municipality_id) return { ok:false, source:this.mode, error:{ code:'CROSS_TENANT_TELEMETRY', message:'Telemetry municipality does not match active municipality.' }, correlation_id: opts.correlation_id ?? position.correlation_id ?? null };
       if (!client?.from) return { ok:false, source:'REAL_NOT_RUN', error:{ code:'SUPABASE_CLIENT_MISSING', message:'Telemetry persistence was prepared but not executed.' }, correlation_id: opts.correlation_id ?? position.correlation_id ?? null };
-      const payload = { ...position, captured_at: position.captured_at ?? position.recorded_at, correlation_id: opts.correlation_id ?? position.correlation_id };
+      // Only the columns vehicle_positions actually has (supabase/migrations/202607150001_sw007_
+      // foundation.sql:13) — DeviceSimulator.emit() (above) returns { status, ...telemetry } where
+      // `status` describes simulated route progress for the map UI, not a vehicle_positions column;
+      // spreading `position` directly into the insert would send that extra field to PostgREST and
+      // fail with "Could not find the 'status' column" (PGRST204).
+      const payload = {
+        vehicle_id: position.vehicle_id,
+        municipality_id: position.municipality_id,
+        latitude: position.latitude,
+        longitude: position.longitude,
+        accuracy: position.accuracy,
+        speed: position.speed,
+        heading: position.heading,
+        captured_at: position.captured_at ?? position.recorded_at,
+        received_at: position.received_at,
+        source: position.source,
+        device_id: position.device_id,
+        correlation_id: opts.correlation_id ?? position.correlation_id
+      };
       const result = await client.from('vehicle_positions').insert(payload).select('*').single();
       if (result.error) return { ok:false, source:'REAL', error:{ code: result.error.code ?? 'SUPABASE_ERROR', message: result.error.message }, correlation_id: payload.correlation_id };
       return { ok:true, source:'REAL', data:result.data, correlation_id: payload.correlation_id };
