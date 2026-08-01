@@ -60,19 +60,14 @@ assert.equal(persisted.data.source, 'simulator');
 // 3. Subscribe to Realtime for this vehicle and wait for the channel to actually confirm
 // 'SUBSCRIBED' before ingesting the next point — otherwise there's a race where the INSERT could
 // land before the websocket subscription is live server-side. Requires vehicle_positions to be in
-// the supabase_realtime publication (202607150007_sw016_telemetry_realtime.sql) and a tenant_read
-// RLS policy that covers 'driver' (202607150004_sw014_auth_rls_policies.sql).
-//
-// DIAGNOSTIC (temporary): subscribing with the service_role adapter instead of the driver's —
-// service_role bypasses RLS entirely. If this still times out, the problem is Realtime plumbing
-// in this environment (publication/replication/config), not RLS/JWT propagation to the driver's
-// socket, which the two prior CI runs already ruled out on their own. Revert to `telemetry`
-// (driver-scoped) once the real cause is confirmed either way.
-const serviceTelemetry = createTelemetryIngestionAdapter(service);
+// the supabase_realtime publication AND the supabase_realtime_admin role (the one Realtime's own
+// server uses to read the WAL, separate from anon/authenticated/service_role) to have SELECT on it
+// (202607150007_sw016_telemetry_realtime.sql), plus a tenant_read RLS policy that covers 'driver'
+// (202607150004_sw014_auth_rls_policies.sql) so the driver's own subscription is authorized.
 let secondCorrelation;
 const received = new Promise((resolve, reject) => {
   const timeout = setTimeout(() => reject(new Error('Realtime event not received within 15s (channel never reached SUBSCRIBED, or the INSERT it saw did not match)')), 15000);
-  const subscription = serviceTelemetry.subscribe(
+  const subscription = telemetry.subscribe(
     scenario.vehicleA.id,
     (row) => {
       if (row.correlation_id !== secondCorrelation) return;
