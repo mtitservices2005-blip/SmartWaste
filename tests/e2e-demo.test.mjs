@@ -1,3 +1,7 @@
+// SCOPE: static text check on a demo-scenario script — does NOT open a browser and does NOT
+// exercise the actual frontend. It only guards against the scenario copy losing these phrases.
+// There is no real (browser-driven) E2E coverage of the frontend yet; see
+// docs/TECHNICAL_DEBT_REGISTER.md item #5 and shared/integration/status.json (sw017.e2eReal).
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
