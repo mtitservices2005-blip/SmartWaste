@@ -4,6 +4,7 @@
 // docs/SW020_CLAUDE_CODE_TASK_BRIEF.md section 0 for the same local-instance setup used by
 // tests/operational-cycle.test.mjs.
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { loadLocalSupabaseEnv, createServiceClient, createSignedInClient } from './integration/local-supabase-env.mjs';
 import { seedScenario } from './integration/seed.mjs';
 import { createSupabaseOperationsAdapter } from '../shared/operations-adapter.js';
@@ -37,10 +38,15 @@ assert.equal(telemetry.mode, 'REAL');
 
 const simulator = new DeviceSimulator(scenario.vehicleA.id);
 simulator.reset();
+// makeTelemetry() (shared/telemetry-simulator.js) defaults municipality_id to the demo constant
+// 'laguna-salada-rd', not the seeded municipality's UUID — every emitted point must be rescoped to
+// scenario.municipalityA.id or the adapter's own municipality_id guard rejects it before Supabase
+// is ever contacted.
+const scoped = (point) => ({ ...point, municipality_id: scenario.municipalityA.id });
 
 // 2. Ingest one point and confirm it actually persisted in vehicle_positions (sw016.telemetryPersistence).
-const firstPoint = simulator.start();
-const firstCorrelation = `sw016-persist-${Date.now()}`;
+const firstPoint = scoped(simulator.start());
+const firstCorrelation = randomUUID();
 const ingested = await telemetry.ingest(firstPoint, { correlation_id: firstCorrelation });
 assert.equal(ingested.ok, true, `ingest failed: ${JSON.stringify(ingested.error)}`);
 assert.equal(ingested.source, 'REAL');
@@ -70,8 +76,8 @@ const received = new Promise((resolve, reject) => {
     {
       onStatus: (status) => {
         if (status !== 'SUBSCRIBED') return;
-        secondCorrelation = `sw016-realtime-${Date.now()}`;
-        const secondPoint = simulator.emit();
+        secondCorrelation = randomUUID();
+        const secondPoint = scoped(simulator.emit());
         telemetry.ingest(secondPoint, { correlation_id: secondCorrelation }).then((result) => {
           if (!result.ok) { clearTimeout(timeout); reject(new Error(`second ingest failed: ${JSON.stringify(result.error)}`)); }
         });
@@ -88,8 +94,8 @@ assert.equal(realtimeRow.correlation_id, secondCorrelation);
 // 4. Real RLS rejection (not just the app-level municipality_id guard): same municipality, but a
 // vehicle this driver has no vehicle_assignments row for. driver_insert_own_vehicle_position's
 // EXISTS(...) finds nothing, so Postgres itself must deny the insert.
-const unassignedPoint = { ...simulator.emit(), vehicle_id: vehicleA2.data.id, municipality_id: scenario.municipalityA.id };
-const rejected = await telemetry.ingest(unassignedPoint, { correlation_id: `sw016-unassigned-${Date.now()}` });
+const unassignedPoint = { ...scoped(simulator.emit()), vehicle_id: vehicleA2.data.id };
+const rejected = await telemetry.ingest(unassignedPoint, { correlation_id: randomUUID() });
 assert.equal(rejected.ok, false, 'driver must not be able to write telemetry for a vehicle they are not assigned to');
 assert.notEqual(rejected.error?.code, 'CROSS_TENANT_TELEMETRY', 'rejection must come from RLS at the database, not the app-level municipality_id guard');
 
