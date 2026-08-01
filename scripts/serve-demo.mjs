@@ -27,8 +27,17 @@ const MIME = {
 
 const server = http.createServer(async (req, res) => {
   try {
-    let urlPath = decodeURIComponent((req.url ?? '/').split('?')[0]);
-    if (urlPath === '/') urlPath = '/frontend/index.html';
+    const urlPath = decodeURIComponent((req.url ?? '/').split('?')[0]);
+    // Real redirect, not an internal rewrite: if we just served frontend/index.html's bytes under
+    // the URL "/", the browser's base URL for resolving index.html's relative <link>/<script> paths
+    // (./styles.css, ./app.js) would stay "/" — producing 404s for /styles.css and /app.js instead
+    // of the real /frontend/styles.css and /frontend/app.js. A 302 makes the browser's address bar
+    // (and therefore its relative-URL base) actually become /frontend/index.html.
+    if (urlPath === '/') {
+      res.writeHead(302, { Location: '/frontend/index.html' });
+      res.end();
+      return;
+    }
     const filePath = normalize(join(ROOT, urlPath));
     // Guard against path traversal outside the repo root.
     if (!filePath.startsWith(ROOT + sep) && filePath !== ROOT) {
