@@ -3,7 +3,7 @@ import { operationsAdapter } from '../shared/operations-adapter.js';
 import { DeviceSimulator, createDemoPositionHistory } from '../shared/telemetry-simulator.js';
 import { validateEvidenceFile } from '../shared/channel-contracts.js';
 import { createDemoFolio, findSectorService, findIncidentStatus } from '../shared/citizen-portal.js';
-import { generateRouteStopPoints, deriveStopStatus, haversineMeters } from '../shared/route-engine.js';
+import { generateRouteStopPoints, deriveStopStatus, haversineMeters, splitIntoTrips } from '../shared/route-engine.js';
 import { IMPACT_DEMO_NOTICE, IMPACT_SCENARIO_NOTICE, defaultImpactAssumptions, metricReadiness, calculateImpactMetrics } from '../shared/impact-center.js';
 import { initAuthGate } from './auth-gate.js';
 
@@ -184,6 +184,7 @@ function renderCreateRoute() {
     <div id="createRouteMap" class="real-map driver-map" role="application" aria-label="Dibujar trazo de ruta nueva"></div>
     <div class="controls"><button type="button" data-create-route="undo">Deshacer último punto</button><button type="button" data-create-route="finish">Finalizar y guardar</button></div>
     <p id="createRouteStatus" class="demo">${drawnRoutePoints.length} punto(s) trazado(s).</p>
+    <p id="createRouteTripPreview" class="demo"></p>
   </div>`;
 }
 function renderDriverMobile() {
@@ -447,8 +448,21 @@ function undoLastRoutePoint() { drawnRoutePoints.pop(); redrawCreateRouteTrace()
 // collection points automatically. routePaths[routeId] = path is what actually plugs the new route
 // into DeviceSimulator/routePosition/drawMapLayers/drawDriverPositions: they all read routePaths
 // directly and don't otherwise know or care whether a route is one of the 5 bundled demo ones.
+// SW-028: matches the default in supabase/migrations/202607150008_sw025_vehicle_capacity.sql
+// (vehicles.max_stops default 20) — demo trucks (shared/demo-data.js) have no max_stops field at
+// all, so this is the fallback when computing the trip preview below for a demo vehicle.
+const DEFAULT_MAX_STOPS = 20;
+// Pure formatting, no persistence: splitIntoTrips()'s grouping is purely informational here (see
+// docs/TECHNICAL_DEBT_REGISTER.md and the architecture decision already made for SW-025/026 —
+// trips are NOT their own persisted concept; route_runs remains the natural extension for that once
+// there's real dispatch). Never touches route_stops/route_paths.
+function formatTripPreview(trips) {
+  if (trips.length <= 1) return `1 viaje, ${trips[0]?.length ?? 0} parada(s).`;
+  return trips.map((trip, index) => `Viaje ${index + 1}: paradas ${trip[0].sequence}-${trip[trip.length - 1].sequence}`).join(' · ');
+}
 function finishCreateRoute() {
   const status = $('#createRouteStatus');
+  const tripPreview = $('#createRouteTripPreview');
   const nameInput = $('#createRouteName');
   const name = nameInput?.value.trim();
   if (!name) { if (status) status.textContent = 'Ingresa un nombre para la ruta.'; return; }
@@ -458,6 +472,10 @@ function finishCreateRoute() {
   const path = drawnRoutePoints.slice();
   const stopPoints = generateRouteStopPoints(path);
   const distanceMeters = path.slice(1).reduce((total, point, index) => total + haversineMeters(path[index], point), 0);
+
+  const vehicleSelect = $('#createRouteVehicle');
+  const vehicleId = vehicleSelect?.value;
+  const truck = vehicleId ? trucks.find((item) => item.id === vehicleId) : null;
 
   operationsAdapter.createRoute({ id: routeId, name, municipality_id: pilotMunicipality.id, sectors: ['Ruta personalizada'], sector: 'Ruta personalizada' });
   routePaths[routeId] = path;
@@ -471,25 +489,21 @@ function finishCreateRoute() {
     stops: stopPoints.length, covered: 0, pending: stopPoints.length, incidents: []
   });
 
-  const vehicleSelect = $('#createRouteVehicle');
-  const vehicleId = vehicleSelect?.value;
-  if (vehicleId) {
-    const truck = trucks.find((item) => item.id === vehicleId);
-    if (truck) {
-      operationsAdapter.assignVehicle(routeId, vehicleId);
-      truck.routeId = routeId; truck.state = 'active'; truck.positionIndex = 0; truck.progress = 0; truck.sector = 'Ruta personalizada'; truck.updatedAt = 'Recién asignado';
-      simState[truck.id] = { index: 0, progress: 0 };
-      registerDriverSimulator(truck);
-    }
+  if (truck) {
+    operationsAdapter.assignVehicle(routeId, vehicleId);
+    truck.routeId = routeId; truck.state = 'active'; truck.positionIndex = 0; truck.progress = 0; truck.sector = 'Ruta personalizada'; truck.updatedAt = 'Recién asignado';
+    simState[truck.id] = { index: 0, progress: 0 };
+    registerDriverSimulator(truck);
   }
 
   drawnRoutePoints = [];
   redrawCreateRouteTrace();
   if (nameInput) nameInput.value = '';
-  if (vehicleSelect) vehicleSelect.innerHTML = `<option value="">Sin vehículo asignado (asignar después)</option>${trucks.filter((truck) => !truck.routeId).map((truck) => `<option value="${truck.id}">${truck.unit}</option>`).join('')}`;
+  if (vehicleSelect) vehicleSelect.innerHTML = `<option value="">Sin vehículo asignado (asignar después)</option>${trucks.filter((item) => !item.routeId).map((item) => `<option value="${item.id}">${item.unit}</option>`).join('')}`;
   $('#routeList').innerHTML = renderRoutes(routes);
   if (mapReady) drawMapLayers();
   if (status) status.textContent = `Ruta "${name}" creada con ${stopPoints.length} puntos de recolección.`;
+  if (tripPreview) tripPreview.textContent = truck ? formatTripPreview(splitIntoTrips(stopPoints, truck.max_stops ?? DEFAULT_MAX_STOPS)) : '';
 }
 
 function drawerContent(content) { return `<button class="drawer-close" data-close-detail aria-label="Cerrar detalle">✕ Cerrar</button><div class="drawer-scroll">${content}</div>`; }
