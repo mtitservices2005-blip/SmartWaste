@@ -405,6 +405,11 @@ function redrawCreateRouteTrace() {
   createRouteMarkers = drawnRoutePoints.map((point, index) => L.circleMarker(point, { radius: 5, color: '#155eef', fillColor: '#155eef', fillOpacity: .9 }).bindTooltip(`Punto ${index + 1}`).addTo(createRouteMap));
   const status = $('#createRouteStatus');
   if (status) status.textContent = `${drawnRoutePoints.length} punto(s) trazado(s).`;
+  // Codex review on PR #31: a saved route's trip preview stayed visible while a new draft was
+  // already being traced (or failed validation) — clear it as soon as the trace changes so it
+  // can't be mistaken for the new draft's breakdown.
+  const tripPreview = $('#createRouteTripPreview');
+  if (tripPreview) tripPreview.textContent = '';
 }
 
 // SW-029: tab navigation — only one top-level section visible at a time, switched by the existing
@@ -465,6 +470,7 @@ function finishCreateRoute() {
   const tripPreview = $('#createRouteTripPreview');
   const nameInput = $('#createRouteName');
   const name = nameInput?.value.trim();
+  if (tripPreview) tripPreview.textContent = '';
   if (!name) { if (status) status.textContent = 'Ingresa un nombre para la ruta.'; return; }
   if (drawnRoutePoints.length < 2) { if (status) status.textContent = 'Traza al menos 2 puntos en el mapa.'; return; }
 
