@@ -65,6 +65,9 @@ assert.equal(started.data.status, 'started');
 const progressed = await driverAdapter.updateProgress(routeId, 50);
 assert.equal(progressed.ok, true, `updateProgress failed: ${JSON.stringify(progressed.error)}`);
 assert.equal(progressed.data.status, 'in_progress');
+// SW-030: route_runs.progress used to have no column to persist to, so this numeric value was
+// silently discarded (docs/TECHNICAL_DEBT_REGISTER.md item 4) — assert it actually landed.
+assert.equal(progressed.data.progress, 50, 'progress must persist on route_runs, not be discarded');
 
 // 5. Driver completes the route.
 const completed = await driverAdapter.completeRoute(routeId);
