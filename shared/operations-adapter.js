@@ -130,7 +130,13 @@ export function createSupabaseOperationsAdapter(client, { fallback = createDemoO
       );
       if (!stopsResult.ok) return stopsResult;
       const positionsResult = await run(() => scoped(table(client, 'vehicle_positions').select('*').order('captured_at', { ascending:false })), () => fallback.listPositions(), opts.correlation_id);
-      const vehiclePositions = positionsResult.ok ? positionsResult.data.filter((position) => position.vehicle_id === vehicleId) : [];
+      // deriveStopStatus() now checks trail SEGMENTS and requires chronological (oldest-first)
+      // order — the query above orders descending (most-recent-first, right for other display
+      // uses), so re-sort ascending here rather than change what every other caller of listPositions
+      // gets.
+      const vehiclePositions = positionsResult.ok
+        ? positionsResult.data.filter((position) => position.vehicle_id === vehicleId).sort((a, b) => Date.parse(a.captured_at) - Date.parse(b.captured_at))
+        : [];
       return ok(stopsResult.data.map((stop) => ({ ...stop, status: deriveStopStatus(stop, vehiclePositions) })), opts);
     }
   };
