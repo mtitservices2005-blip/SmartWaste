@@ -168,7 +168,7 @@ function renderRouteDetail(route) {
 }
 function renderIncidentDetail(incident) { return `<div class="drawer-head"><p class="eyebrow">Incidencia operativa demo</p><h2>${incident.type}</h2>${pill('open')}</div><p><b>Folio:</b> ${incident.id}</p><p><b>Sector:</b> ${incident.sector}</p><p><b>Prioridad:</b> ${incident.priority}</p><p><b>Estado:</b> ${incident.status}</p><p>${incident.detail}</p><p class="demo">${demoNotice}</p>`; }
 
-function renderMunicipal() { return `<section id="municipal" class="section card"><h2>Panel municipal</h2><p class="demo">${demoNotice} · Municipio piloto configurable: ${pilotMunicipality.name}, ${pilotMunicipality.country}</p><div class="controls"><input id="search" placeholder="Buscar ruta, camión o sector"><select id="sectorFilter"><option value="">Todos los sectores</option>${sectors.map((s) => `<option>${s.name}</option>`).join('')}</select></div><div class="panel-grid"><div><h3>Rutas del día</h3><div class="list" id="routeList">${renderRoutes(routes)}</div></div><div><h3>Vehículos demo</h3>${trucks.map((truck) => `<button class="row selectable" data-truck="${truck.id}"><span>${truckIcon(truck)} ${truck.unit}<br>${driverName(truck.driverId)}</span>${pill(truck.state)}</button>`).join('')}</div><div><h3>Incidencias en mapa</h3>${incidents.map((incident) => `<button class="row selectable" data-incident="${incident.code}"><span>${incident.type}<br>${incident.sector}</span>${pill('open')}</button>`).join('')}</div></div>${renderCreateRoute()}<h3>Vista móvil conductor</h3>${renderDriverMobile()}</section>`; }
+function renderMunicipal() { return `<section id="municipal" class="section card"><h2>Panel municipal</h2><p class="demo">${demoNotice} · Municipio piloto configurable: ${pilotMunicipality.name}, ${pilotMunicipality.country}</p><div class="controls"><input id="search" placeholder="Buscar ruta, camión o sector"><select id="sectorFilter"><option value="">Todos los sectores</option>${sectors.map((s) => `<option>${s.name}</option>`).join('')}</select></div><div class="panel-grid"><div><h3>Rutas del día</h3><div class="list" id="routeList">${renderRoutes(routes)}</div></div><div><h3>Vehículos demo</h3>${trucks.map((truck) => `<button class="row selectable${truck.id === selectedTruckId ? ' selected' : ''}" data-truck="${truck.id}"><span>${truckIcon(truck)} ${truck.unit}<br>${driverName(truck.driverId)}</span>${pill(truck.state)}</button>`).join('')}</div><div><h3>Incidencias en mapa</h3>${incidents.map((incident) => `<button class="row selectable${incident.code === selectedIncidentId ? ' selected' : ''}" data-incident="${incident.code}"><span>${incident.type}<br>${incident.sector}</span>${pill('open')}</button>`).join('')}</div></div>${renderCreateRoute()}<h3>Vista móvil conductor</h3>${renderDriverMobile()}</section>`; }
 // SW-027: municipal_admin/supervisor/dispatcher only in real Supabase (RLS: tenant_insert_staff on
 // routes and, per 202607150009_sw027_route_paths.sql, on route_paths too — same 3 roles as
 // route_stops writes). This demo UI has no live Supabase session/role gating (frontend/app.js has
@@ -196,7 +196,7 @@ function renderDriverMobile() {
     <p class="demo">${simulationNotice} · trazo histórico vía polling cada ${DRIVER_POLL_INTERVAL_MS / 1000}s (sin Realtime, ver docs/TECHNICAL_DEBT_REGISTER.md #14)</p>
   </div>`;
 }
-function renderRoutes(items) { return items.map((route) => `<article class="row selectable" data-route="${route.id}"><div><strong>${route.name}</strong><br>${route.sectors.join(' · ')} · ETA ${route.eta}<br>${progress(route.progress)}</div><div>${pill(routeStatus(route))}<br>${route.covered}/${route.stops} paradas</div></article>`).join(''); }
+function renderRoutes(items) { return items.map((route) => `<article class="row selectable${route.id === selectedRouteId ? ' selected' : ''}" data-route="${route.id}"><div><strong>${route.name}</strong><br>${route.sectors.join(' · ')} · ETA ${route.eta}<br>${progress(route.progress)}</div><div>${pill(routeStatus(route))}<br>${route.covered}/${route.stops} paradas</div></article>`).join(''); }
 function renderSupervisor() {
   const pendingVerification = routes.filter((route) => route.status === 'completed');
   const openIncidents = incidents.filter((incident) => incident.status !== 'Cerrada');
@@ -430,6 +430,16 @@ function showSection(id) {
   }
 }
 window.addEventListener('hashchange', () => showSection(sectionFromHash()));
+// Selecting a truck/route/incident updates #detail and the map, but both live inside the "mapa"
+// section — invisible while the click came from another tab (e.g. the route list in "municipal").
+// Jumping to "mapa" on selection is what actually shows the user the result of their click. Only
+// called from the real click handler below, never from selectTruck()/selectRoute()/selectIncident()
+// themselves, since the simulation loop re-calls those every tick just to refresh the open detail
+// panel — doing it there would yank the user back to "mapa" every ~2s even after they navigate away.
+function goToMapTab() {
+  if (location.hash.slice(1) === 'mapa') showSection('mapa');
+  else location.hash = 'mapa';
+}
 function undoLastRoutePoint() { drawnRoutePoints.pop(); redrawCreateRouteTrace(); }
 // (a) createRoute() for the metadata, (b) persist the drawn geometry (route_paths), (c)
 // generateRouteStopPoints()/saveRouteStops() — the exact same SW-025/026 functions used for the
@@ -484,10 +494,18 @@ function finishCreateRoute() {
 
 function drawerContent(content) { return `<button class="drawer-close" data-close-detail aria-label="Cerrar detalle">✕ Cerrar</button><div class="drawer-scroll">${content}</div>`; }
 function openDetail(content) { const detail = $('#detail'); detail.innerHTML = drawerContent(content); detail.classList.remove('is-hidden'); detail.setAttribute('aria-hidden', 'false'); }
-function closeDetail() { const detail = $('#detail'); detail.classList.add('is-hidden'); detail.setAttribute('aria-hidden', 'true'); detail.innerHTML = ''; selectedTruckId = null; selectedRouteId = null; selectedIncidentId = null; drawMapLayers(); }
-function selectTruck(id) { selectedTruckId = id; selectedRouteId = null; selectedIncidentId = null; const truck = trucks.find((item) => item.id === id); openDetail(renderTruckDetail(truck)); drawMapLayers(); }
-function selectRoute(id) { selectedRouteId = id; selectedTruckId = null; selectedIncidentId = null; const route = routeById(id); openDetail(renderRouteDetail(route)); drawMapLayers(); }
-function selectIncident(code) { selectedIncidentId = code; selectedTruckId = null; selectedRouteId = null; const incident = incidents.find((item) => item.code === code); openDetail(renderIncidentDetail(incident)); drawMapLayers(); }
+// Reflects the current selection on whatever [data-route]/[data-truck]/[data-incident] elements are
+// in the DOM right now (list rows, map layers wired up later don't need this) — run on every
+// selection change so a click gives visible feedback even though the row markup itself isn't re-rendered.
+function markSelection() {
+  document.querySelectorAll('[data-route]').forEach((el) => el.classList.toggle('selected', el.dataset.route === selectedRouteId));
+  document.querySelectorAll('[data-truck]').forEach((el) => el.classList.toggle('selected', el.dataset.truck === selectedTruckId));
+  document.querySelectorAll('[data-incident]').forEach((el) => el.classList.toggle('selected', el.dataset.incident === selectedIncidentId));
+}
+function closeDetail() { const detail = $('#detail'); detail.classList.add('is-hidden'); detail.setAttribute('aria-hidden', 'true'); detail.innerHTML = ''; selectedTruckId = null; selectedRouteId = null; selectedIncidentId = null; drawMapLayers(); markSelection(); }
+function selectTruck(id) { selectedTruckId = id; selectedRouteId = null; selectedIncidentId = null; const truck = trucks.find((item) => item.id === id); openDetail(renderTruckDetail(truck)); drawMapLayers(); markSelection(); }
+function selectRoute(id) { selectedRouteId = id; selectedTruckId = null; selectedIncidentId = null; const route = routeById(id); openDetail(renderRouteDetail(route)); drawMapLayers(); markSelection(); }
+function selectIncident(code) { selectedIncidentId = code; selectedTruckId = null; selectedRouteId = null; const incident = incidents.find((item) => item.code === code); openDetail(renderIncidentDetail(incident)); drawMapLayers(); markSelection(); }
 function startSimulation() { if (simulationTimer) return; simulationTimer = setInterval(() => { trucks.filter((truck) => truck.routeId && truck.state !== 'offline' && truck.state !== 'completed').forEach((truck) => { const path = routePaths[truck.routeId]; simState[truck.id].index = (simState[truck.id].index + 1) % path.length; simState[truck.id].progress = Math.min(99, simState[truck.id].progress + 3); truck.progress = simState[truck.id].progress; truck.updatedAt = 'Ahora (simulación)'; truck.sector = routeById(truck.routeId)?.sector ?? truck.sector; }); drawMapLayers(); if (selectedTruckId) selectTruck(selectedTruckId); if (selectedRouteId) selectRoute(selectedRouteId); if (selectedIncidentId) selectIncident(selectedIncidentId); }, 1800 / simulationSpeed); }
 function pauseSimulation() { clearInterval(simulationTimer); simulationTimer = null; }
 function resetSimulation() { pauseSimulation(); trucks.forEach((truck) => { const original = initialTruckState[truck.id]; simState[truck.id] = { index: original.index, progress: original.progress }; truck.progress = original.progress; truck.updatedAt = original.updatedAt; truck.sector = original.sector; }); drawMapLayers(); if (selectedTruckId) selectTruck(selectedTruckId); if (selectedRouteId) selectRoute(selectedRouteId); if (selectedIncidentId) selectIncident(selectedIncidentId); }
@@ -497,9 +515,9 @@ document.addEventListener('click', (event) => {
   const createRouteAction = event.target.closest('[data-create-route]')?.dataset.createRoute;
   if (createRouteAction === 'undo') undoLastRoutePoint();
   if (createRouteAction === 'finish') finishCreateRoute();
-  const truckButton = event.target.closest('[data-truck]'); if (truckButton) selectTruck(truckButton.dataset.truck);
-  const routeButton = event.target.closest('[data-route]'); if (routeButton?.dataset.route) selectRoute(routeButton.dataset.route);
-  const incidentButton = event.target.closest('[data-incident]'); if (incidentButton) selectIncident(incidentButton.dataset.incident);
+  const truckButton = event.target.closest('[data-truck]'); if (truckButton) { selectTruck(truckButton.dataset.truck); goToMapTab(); }
+  const routeButton = event.target.closest('[data-route]'); if (routeButton?.dataset.route) { selectRoute(routeButton.dataset.route); goToMapTab(); }
+  const incidentButton = event.target.closest('[data-incident]'); if (incidentButton) { selectIncident(incidentButton.dataset.incident); goToMapTab(); }
   const verifyButton = event.target.closest('[data-verify-route]');
   if (verifyButton) { const route = routeById(verifyButton.dataset.verifyRoute); if (route) { route.status = 'verified'; $('#supervisor').outerHTML = renderSupervisor(); } }
   const resolveButton = event.target.closest('[data-resolve-incident]');
