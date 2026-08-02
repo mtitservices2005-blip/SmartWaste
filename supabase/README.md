@@ -7,3 +7,14 @@ Las 7 migraciones en `migrations/` (`sw007_foundation` → `sw008_rls_draft` →
 **Orden de aplicación:** `npx supabase start` (y por lo tanto el job `integration-tests` de `.github/workflows/tests.yml`) aplica los archivos de `migrations/` en orden alfabético por nombre de archivo — de ahí el prefijo de fecha `202607150001`...`202607150007`. Ese orden importa porque `sw008_rls_draft` habilita RLS en varias tablas sin políticas propias, dejándolas efectivamente bloqueadas hasta que `sw014_auth_rls_policies` (aplicada después) agregue las políticas reales; invertir ese orden dejaría esas tablas abiertas o bloqueadas según cómo se edite. Cada corrida de CI desde el PR #16 aplica las 7 migraciones en este orden automáticamente, dando evidencia real y repetida de que la secuencia es correcta (ver `docs/TECHNICAL_DEBT_REGISTER.md` ítem #3).
 
 `frontend/auth-gate.js` ya se conecta a esta base cuando `window.SMARTWASTE_SUPABASE_CONFIG` está configurado: crea un cliente Supabase real y resuelve la sesión/rol vía `resolveSupabaseAuthContext()` (lecturas reales a `profiles`/`memberships`). Lo que sigue sin conectarse son las rutas y vehículos operativos: `frontend/app.js` sigue usando `createDemoOperationsAdapter()` en memoria, no `createSupabaseOperationsAdapter()`. Conectar Supabase a producción o exponer credenciales al navegador requiere revisión de seguridad aparte (ver regla #8 en `CLAUDE.md`).
+
+## Edge Functions
+
+`functions/create-driver-account/` (SW-032) aprovisiona la cuenta de acceso real de un chofer (`auth.admin.createUser` + `profiles` + `memberships` + `drivers.profile_id`) — necesita `service_role`, así que corre server-side, nunca en el navegador (regla 8). Para probarla en local:
+
+```bash
+npx supabase start
+npx supabase functions serve create-driver-account
+```
+
+El frontend la invoca vía `client.functions.invoke('create-driver-account', { body: { driver_id, email } })`, reusando la sesión ya iniciada por `auth-gate.js` (`getAuthClient()`) — solo visible/funcional cuando `SMARTWASTE_SUPABASE_CONFIG` está configurado. Solo hace algo útil una vez que ese `driver_id` existe como fila real en Supabase; mientras `frontend/app.js` siga en modo demo (antes de SW-034), fallará de forma segura con "Driver not found".

@@ -5,7 +5,7 @@ import { validateEvidenceFile } from '../shared/channel-contracts.js';
 import { createDemoFolio, findSectorService, findIncidentStatus } from '../shared/citizen-portal.js';
 import { generateRouteStopPoints, deriveStopStatus, haversineMeters, splitIntoTrips } from '../shared/route-engine.js';
 import { IMPACT_DEMO_NOTICE, IMPACT_SCENARIO_NOTICE, defaultImpactAssumptions, metricReadiness, calculateImpactMetrics } from '../shared/impact-center.js';
-import { initAuthGate } from './auth-gate.js';
+import { initAuthGate, readSupabaseConfig, getAuthClient } from './auth-gate.js';
 
 const $ = (selector) => document.querySelector(selector);
 const app = $('#app');
@@ -174,7 +174,19 @@ function renderIncidentDetail(incident) { return `<div class="drawer-head"><p cl
 
 function renderMunicipal() { return `<section id="municipal" class="section card"><h2>Panel municipal</h2><p class="demo">${demoNotice} · Municipio piloto configurable: ${pilotMunicipality.name}, ${pilotMunicipality.country}</p><div class="controls"><input id="search" placeholder="Buscar ruta, camión o sector"><select id="sectorFilter"><option value="">Todos los sectores</option>${sectors.map((s) => `<option>${s.name}</option>`).join('')}</select></div><div class="panel-grid"><div><h3>Rutas del día</h3><div class="list" id="routeList">${renderRoutes(routes)}</div></div><div><h3>Vehículos demo</h3><div id="vehicleList">${renderVehicleList()}</div></div><div><h3>Incidencias en mapa</h3>${incidents.map((incident) => `<button class="row selectable${incident.code === selectedIncidentId ? ' selected' : ''}" data-incident="${incident.code}"><span>${incident.type}<br>${incident.sector}</span>${pill('open')}</button>`).join('')}</div></div>${renderFleetManagement()}${renderCreateRoute()}<h3>Vista móvil conductor</h3>${renderDriverMobile()}</section>`; }
 function renderVehicleList() { return trucks.map((truck) => `<button class="row selectable${truck.id === selectedTruckId ? ' selected' : ''}" data-truck="${truck.id}"><span>${truckIcon(truck)} ${truck.unit}<br>${driverName(truck.driverId)}</span>${pill(truck.state)}</button>`).join(''); }
-function renderDriverList() { return drivers.map((driver) => `<div class="row"><span>${driver.name}<br>${driver.phone || 'Sin teléfono'}</span>${pill(driver.status === 'Disponible' ? 'active' : 'assigned')}</div>`).join(''); }
+// SW-032: the "Crear cuenta de acceso" button only makes sense once Supabase is configured (it
+// calls a real Edge Function, see supabase/functions/create-driver-account) and only for a driver
+// that has an email on file and no account yet — readSupabaseConfig() is the same opt-in check
+// frontend/auth-gate.js already uses, reused here rather than reimplemented.
+function renderDriverList() {
+  const supabaseConfigured = Boolean(readSupabaseConfig());
+  return drivers.map((driver) => {
+    const canProvision = supabaseConfigured && driver.email && !driver.profile_id;
+    const accountButton = canProvision ? `<button type="button" data-fleet-driver-account="${driver.id}">Crear cuenta de acceso</button>` : '';
+    const accountPill = driver.profile_id ? pill('active') : '';
+    return `<div class="row"><span>${driver.name}<br>${driver.phone || 'Sin teléfono'}</span>${pill(driver.status === 'Disponible' ? 'active' : 'assigned')}${accountPill}${accountButton}</div>`;
+  }).join('');
+}
 // SW-031: fixes the original gap — there was no screen anywhere to register a new vehicle or
 // driver; both were hardcoded arrays in shared/demo-data.js, so operationsAdapter.createVehicle/
 // createDriver existed only on the Supabase adapter and had no demo equivalent at all. This
@@ -197,7 +209,7 @@ function renderFleetManagement() {
       </div>
       <div>
         <h4>Nuevo chofer</h4>
-        <div class="controls"><input id="fleetDriverName" placeholder="Nombre del chofer"><input id="fleetDriverPhone" placeholder="Teléfono"></div>
+        <div class="controls"><input id="fleetDriverName" placeholder="Nombre del chofer"><input id="fleetDriverPhone" placeholder="Teléfono"><input id="fleetDriverEmail" type="email" placeholder="Correo (para cuenta de acceso, opcional)"></div>
         <div class="controls"><button type="button" data-fleet="create-driver">Registrar chofer</button></div>
         <p id="fleetDriverStatus" class="demo"></p>
         <div class="list" id="driverList">${renderDriverList()}</div>
@@ -224,13 +236,32 @@ function createVehicleFromForm() {
   refreshFleetSelects();
 }
 function createDriverFromForm() {
-  const nameInput = $('#fleetDriverName'); const phoneInput = $('#fleetDriverPhone'); const status = $('#fleetDriverStatus');
+  const nameInput = $('#fleetDriverName'); const phoneInput = $('#fleetDriverPhone'); const emailInput = $('#fleetDriverEmail'); const status = $('#fleetDriverStatus');
   const name = nameInput?.value.trim();
   if (!name) { if (status) status.textContent = 'Ingresa un nombre para el chofer.'; return; }
-  const created = operationsAdapter.createDriver({ name, phone: phoneInput?.value.trim() ?? '' });
+  const created = operationsAdapter.createDriver({ name, phone: phoneInput?.value.trim() ?? '', email: emailInput?.value.trim() || undefined });
   drivers.push(created);
-  if (nameInput) nameInput.value = ''; if (phoneInput) phoneInput.value = '';
+  if (nameInput) nameInput.value = ''; if (phoneInput) phoneInput.value = ''; if (emailInput) emailInput.value = '';
   if (status) status.textContent = `Chofer "${created.name}" registrado (sin cuenta de acceso todavía).`;
+  refreshFleetSelects();
+}
+// SW-032: calls the supabase/functions/create-driver-account Edge Function with the currently
+// signed-in session (getAuthClient(), set by auth-gate.js) — never touches service_role from here.
+// Only reachable in real Supabase mode (renderDriverList() only shows the button then), and only
+// does anything useful once this driver actually exists as a row in real Supabase (see the
+// function's own header comment) — until SW-034 wires the frontend to createSupabaseOperationsAdapter,
+// drivers registered here are demo-only and this will safely 404 with "Driver not found".
+async function createDriverAccount(driverId) {
+  const status = $('#fleetDriverStatus');
+  const client = getAuthClient();
+  if (!client) { if (status) status.textContent = 'No hay sesión de Supabase activa.'; return; }
+  const driver = drivers.find((item) => item.id === driverId);
+  if (!driver) return;
+  if (status) status.textContent = `Creando cuenta de acceso para "${driver.name}"...`;
+  const { data, error } = await client.functions.invoke('create-driver-account', { body: { driver_id: driverId, email: driver.email } });
+  if (error) { if (status) status.textContent = `No se pudo crear la cuenta: ${error.message}`; return; }
+  driver.profile_id = data.profile_id;
+  if (status) status.textContent = data.invite_action_link ? `Cuenta creada para "${driver.name}". Enlace de invitación: ${data.invite_action_link}` : `Cuenta creada para "${driver.name}".`;
   refreshFleetSelects();
 }
 // SW-027: municipal_admin/supervisor/dispatcher only in real Supabase (RLS: tenant_insert_staff on
@@ -606,6 +637,8 @@ document.addEventListener('click', (event) => {
   const fleetAction = event.target.closest('[data-fleet]')?.dataset.fleet;
   if (fleetAction === 'create-vehicle') createVehicleFromForm();
   if (fleetAction === 'create-driver') createDriverFromForm();
+  const driverAccountButton = event.target.closest('[data-fleet-driver-account]');
+  if (driverAccountButton) createDriverAccount(driverAccountButton.dataset.fleetDriverAccount);
   const truckButton = event.target.closest('[data-truck]'); if (truckButton) { selectTruck(truckButton.dataset.truck); goToMapTab(); }
   const routeButton = event.target.closest('[data-route]'); if (routeButton?.dataset.route) { selectRoute(routeButton.dataset.route); goToMapTab(); }
   const incidentButton = event.target.closest('[data-incident]'); if (incidentButton) { selectIncident(incidentButton.dataset.incident); goToMapTab(); }
