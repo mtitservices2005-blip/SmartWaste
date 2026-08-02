@@ -26,6 +26,15 @@ assert.ok(haversineMeters([points[points.length - 1].latitude, points[points.len
 
 assert.throws(() => generateRouteStopPoints('route-does-not-exist'), /Unknown routePath id/);
 
+// 1b. count option: exact total regardless of the path's own sparse waypoint count, including the
+// exact start/end (Codex review on PR #26 — generated totals must match a route's declared `stops`
+// so every view of "N stops" agrees).
+const exactCount = generateRouteStopPoints('route-centro', { count: 12 });
+assert.equal(exactCount.length, 12);
+assert.deepEqual([exactCount[0].latitude, exactCount[0].longitude], routePaths['route-centro'][0]);
+assert.ok(haversineMeters([exactCount[11].latitude, exactCount[11].longitude], lastPathPoint) < 1);
+assert.equal(generateRouteStopPoints('route-centro', { count: 1 }).length, 1);
+
 // 2. Capacity cut: falls on a point boundary, never mid-segment; sequence stays continuous across
 // trips (trips are a planning grouping, not a separate numbering).
 const trips = splitIntoTrips(points, 5);
@@ -47,5 +56,19 @@ assert.equal(deriveStopStatus(stop, [farPosition]), 'pendiente');
 assert.equal(deriveStopStatus(stop, [nearbyPosition]), 'recolectado');
 assert.equal(deriveStopStatus(stop, []), 'pendiente', 'no positions at all must stay pendiente');
 assert.equal(deriveStopStatus(stop, [farPosition, nearbyPosition]), 'recolectado', 'any matching position is enough');
+
+// 3b. Segment crossing (Codex review on PR #26): a sparse trail that jumps from one side of a stop
+// to the other, without any single sample landing near it, must still mark it recolectado — the
+// vehicle's path clearly passed right by it.
+const before = routePaths['route-centro'][0];
+const after = routePaths['route-centro'][1];
+const midStop = { latitude: (before[0] + after[0]) / 2, longitude: (before[1] + after[1]) / 2 };
+assert.ok(haversineMeters([midStop.latitude, midStop.longitude], before) > 40, 'sanity: midpoint must be farther than radiusMeters from either endpoint alone');
+assert.equal(deriveStopStatus(midStop, [{ latitude: before[0], longitude: before[1] }]), 'pendiente', 'a single distant sample must not mark it collected');
+assert.equal(
+  deriveStopStatus(midStop, [{ latitude: before[0], longitude: before[1] }, { latitude: after[0], longitude: after[1] }]),
+  'recolectado',
+  'a trail segment crossing near the stop must mark it collected even with no sample directly on it'
+);
 
 console.log('route-engine ok');

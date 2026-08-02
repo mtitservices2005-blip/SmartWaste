@@ -58,10 +58,27 @@ const DRIVER_POLL_INTERVAL_MS = 7000; // dentro del rango pedido de 5-10s
 // route with a routePath geometry, through the same in-memory operationsAdapter other writes here
 // already go through — mirrors how a real deployment would call this once per route at creation
 // time (building that creation UI is explicitly out of scope). Guarded so re-running this module
-// doesn't duplicate points against the same route_id.
+// doesn't duplicate points against the same route_id. count:route.stops keeps the generated total
+// consistent with the same number demo-data.js/the route list already display elsewhere (Codex
+// review on PR #26 — a fixed meter spacing produced a different total per route).
 routes.filter((route) => routePaths[route.id]).forEach((route) => {
   if (operationsAdapter.listRouteStops(route.id).length > 0) return;
-  operationsAdapter.saveRouteStops(route.id, generateRouteStopPoints(route.id));
+  operationsAdapter.saveRouteStops(route.id, generateRouteStopPoints(route.id, { count: route.stops }));
+});
+
+// SW-026 fix (Codex review on PR #26): a truck that starts partway through its route — or is
+// already 'completed', like the demo's truck-04 — otherwise has no recorded history for the
+// waypoints it already passed before this page loaded, so every stop before truck.positionIndex
+// would show pendiente forever. Backfill the path prefix as historical trail, timestamped strictly
+// before the "live" telemetry below, so deriveStopStatus() sees it as already-covered ground.
+trucksWithRoute.forEach((truck) => {
+  const path = routePaths[truck.routeId] ?? [];
+  const upToIndex = Math.min(truck.positionIndex ?? 0, path.length - 1);
+  const backfillStart = Date.now() - (upToIndex + 1) * 1000;
+  for (let i = 0; i <= upToIndex; i += 1) {
+    const [latitude, longitude] = path[i];
+    positionHistory.record({ vehicle_id: truck.id, latitude, longitude, captured_at: new Date(backfillStart + i * 1000).toISOString() });
+  }
 });
 
 Object.values(driverSimulators).forEach((simulator) => positionHistory.record(simulator.start()));
