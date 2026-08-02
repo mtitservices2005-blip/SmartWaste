@@ -74,14 +74,19 @@ function evenlySpacedPoints(path, count) {
   return Array.from({ length: count }, (_, i) => pointAtDistance(path, (i / (count - 1)) * total));
 }
 
-// Generates the full, sequence-ordered list of synthetic collection points for a routePath id.
+// Generates the full, sequence-ordered list of synthetic collection points for a routePath.
 // sequence always follows the path's own order (1..N) — never reordered by distance/nearest-
 // neighbor, since the path already follows real street geometry and doing so would zig-zag across
 // streets that only look close in straight-line terms. Pass `count` to generate exactly that many
 // points (e.g. to match a route's declared `stops` field) instead of spacing by `stepMeters`.
-export function generateRouteStopPoints(pathId, { stepMeters = 100, count } = {}) {
-  const path = routePaths[pathId];
-  if (!path) throw new Error(`Unknown routePath id: ${pathId}`);
+//
+// `pathOrId` accepts either a routePaths key (shared/demo-data.js's 5 bundled demo routes) or a raw
+// [[lat,lng], ...] array directly (SW-027: a route drawn through the "Crear ruta" UI, whose geometry
+// lives in route_paths, not in the fixed demo dictionary) — same generation logic either way, no
+// separate implementation for drawn routes.
+export function generateRouteStopPoints(pathOrId, { stepMeters = 100, count } = {}) {
+  const path = Array.isArray(pathOrId) ? pathOrId : routePaths[pathOrId];
+  if (!path) throw new Error(`Unknown routePath id: ${pathOrId}`);
   const rawPoints = Number.isFinite(count) && count > 0 ? evenlySpacedPoints(path, count) : interpolatePath(path, stepMeters);
   return rawPoints.map(([latitude, longitude], index) => ({
     sequence: index + 1,
