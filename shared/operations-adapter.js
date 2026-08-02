@@ -100,10 +100,10 @@ export function createSupabaseOperationsAdapter(client, { fallback = createDemoO
     assignDriver: (routeId, driverId, opts = {}) => assignToRouteRun(client, fallback, municipality_id, routeId, { driver_id: driverId }, opts, () => fallback.assignDriver(routeId, driverId)),
     startRoute: (routeId, opts = {}) => transitionRouteRun(client, fallback, municipality_id, routeId, 'started', opts),
     updateProgress: (routeId, progress, opts = {}) => hasClient
-      ? transitionRouteRun(client, fallback, municipality_id, routeId, progress >= 100 ? 'completed' : 'in_progress', opts)
+      ? transitionRouteRun(client, fallback, municipality_id, routeId, progress >= 100 ? 'completed' : 'in_progress', opts, { progress })
       : ok(fallback.updateProgress(routeId, progress), { source:'DEMO_FALLBACK', correlation_id: opts.correlation_id }),
     markDelayed: (routeId, opts = {}) => transitionRouteRun(client, fallback, municipality_id, routeId, 'delayed', opts),
-    completeRoute: (routeId, opts = {}) => transitionRouteRun(client, fallback, municipality_id, routeId, 'completed', opts),
+    completeRoute: (routeId, opts = {}) => transitionRouteRun(client, fallback, municipality_id, routeId, 'completed', opts, { progress: 100 }),
     verifyRoute: (routeId, opts = {}) => transitionRouteRun(client, fallback, municipality_id, routeId, 'verified', opts),
     registerIncident: (incident, opts = {}) => run(() => table(client, 'incidents').insert({ ...incident, municipality_id: incident.municipality_id ?? municipality_id, correlation_id: opts.correlation_id ?? incident.correlation_id }).select('*').single(), () => fallback.registerIncident(incident), opts.correlation_id),
     listPositions: (opts = {}) => run(() => scoped(table(client, 'vehicle_positions').select('*').order('captured_at', { ascending:false })), () => fallback.listPositions(), opts.correlation_id),
@@ -225,7 +225,10 @@ async function assignToRouteRun(client, fallback, municipality_id, routeId, patc
 // route_runs, the execution record — not on routes, the route definition. This also keeps driver-
 // initiated transitions (start/progress) inside what the driver RLS policy on route_runs allows;
 // routes stays staff-write-only (see supabase/migrations/202607150006_sw020_rls_fixes.sql).
-async function transitionRouteRun(client, fallback, municipality_id, routeId, next, opts = {}) {
+// patch carries fields beyond {status} to write in the same update — currently only updateProgress's
+// numeric progress (route_runs has no column for it otherwise the value was silently discarded, see
+// docs/TECHNICAL_DEBT_REGISTER.md item 4).
+async function transitionRouteRun(client, fallback, municipality_id, routeId, next, opts = {}, patch = {}) {
   const adapterMissing = !client?.from;
   const fallbackMethod = { started:'startRoute', delayed:'markDelayed', completed:'completeRoute', verified:'verifyRoute', in_progress:'updateProgress' }[next] ?? 'markDelayed';
   if (adapterMissing) return ok(fallback[fallbackMethod]?.(routeId) ?? fallback.getRoute(routeId), { source:'DEMO_FALLBACK', correlation_id: opts.correlation_id });
@@ -235,7 +238,7 @@ async function transitionRouteRun(client, fallback, municipality_id, routeId, ne
   if (current.error) return fail(current.error.code ?? 'SUPABASE_ERROR', current.error.message, opts);
   if (!current.data) return fail('ROUTE_RUN_NOT_FOUND', 'No route_run found for route; assign it first', opts);
   if (!canTransitionRoute(current.data.status, next)) return fail('INVALID_ROUTE_TRANSITION', `Rejected route transition ${current.data.status}->${next}`, opts);
-  let q = client.from('route_runs').update({ status: next }).eq('id', current.data.id);
+  let q = client.from('route_runs').update({ status: next, ...patch }).eq('id', current.data.id);
   if (opts.version !== undefined) q = q.eq('version', opts.version);
   const updated = await q.select('*').single();
   if (updated.error) return fail(updated.error.code ?? 'SUPABASE_ERROR', updated.error.message, opts);

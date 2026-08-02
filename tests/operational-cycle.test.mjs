@@ -65,11 +65,17 @@ assert.equal(started.data.status, 'started');
 const progressed = await driverAdapter.updateProgress(routeId, 50);
 assert.equal(progressed.ok, true, `updateProgress failed: ${JSON.stringify(progressed.error)}`);
 assert.equal(progressed.data.status, 'in_progress');
+// SW-030: route_runs.progress used to have no column to persist to, so this numeric value was
+// silently discarded (docs/TECHNICAL_DEBT_REGISTER.md item 4) — assert it actually landed.
+assert.equal(progressed.data.progress, 50, 'progress must persist on route_runs, not be discarded');
 
 // 5. Driver completes the route.
 const completed = await driverAdapter.completeRoute(routeId);
 assert.equal(completed.ok, true, `completeRoute failed: ${JSON.stringify(completed.error)}`);
 assert.equal(completed.data.status, 'completed');
+// Codex review on PR #33: completing a run must force progress to 100 regardless of the last
+// updateProgress() value, matching the demo adapter's completeRoute() semantics.
+assert.equal(completed.data.progress, 100, 'completing a route must set progress to 100');
 
 // 6. Driver reports an incident tied to their own route_run (driver_insert_own_incident policy).
 const incident = await driverAdapter.registerIncident({ route_run_id: routeRunCheck.data.id, vehicle_id: scenario.vehicleA.id, type: 'missed_pickup', description: 'Contenedor bloqueado' });
