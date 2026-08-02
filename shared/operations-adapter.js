@@ -270,3 +270,11 @@ async function transitionRouteRun(client, fallback, municipality_id, routeId, ne
 }
 
 export const operationsAdapter = createDemoOperationsAdapter();
+
+// SW-034: the runtime switch between demo and real Supabase — same opt-in shape as
+// frontend/auth-gate.js's readSupabaseConfig() (no client -> demo, exactly like today; a client ->
+// real). Kept as a plain factory rather than a singleton so callers control exactly when/with what
+// municipality_id it gets built (only known once the session's auth context resolves).
+export function resolveOperationsAdapter({ client, municipality_id } = {}) {
+  return client ? createSupabaseOperationsAdapter(client, { municipality_id }) : createDemoOperationsAdapter();
+}

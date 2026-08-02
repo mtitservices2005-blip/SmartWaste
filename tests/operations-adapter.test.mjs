@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
-import { createDemoOperationsAdapter } from '../shared/operations-adapter.js';
+import { createDemoOperationsAdapter, resolveOperationsAdapter } from '../shared/operations-adapter.js';
 import { generateRouteStopPoints } from '../shared/route-engine.js';
 const adapter = createDemoOperationsAdapter();
+
+// SW-034: resolveOperationsAdapter() is the runtime switch frontend/app.js uses — no client means
+// demo (same as always), a client means real, mirroring frontend/auth-gate.js's readSupabaseConfig()
+// opt-in pattern (no config -> no-op).
+assert.equal(resolveOperationsAdapter().mode, 'DEMO_ONLY');
+assert.equal(resolveOperationsAdapter({ client: null }).mode, 'DEMO_ONLY');
+assert.equal(resolveOperationsAdapter({ client: { from: () => {} } }).mode, 'REAL');
 assert(adapter.listVehicles().length > 0);
 const route = adapter.createRoute({ id:'route-test', name:'Test', sectors:[], sector:'Centro urbano' });
 assert.equal(route.status, 'planned');

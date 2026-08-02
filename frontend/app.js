@@ -1,5 +1,5 @@
 import { demoNotice, simulationNotice, pilotMunicipality, trucks, routes, sectors, drivers, incidents, notifications, municipalities, routeFlow, routePaths, stateLabels } from '../shared/demo-data.js';
-import { operationsAdapter } from '../shared/operations-adapter.js';
+import { operationsAdapter, resolveOperationsAdapter } from '../shared/operations-adapter.js';
 import { DeviceSimulator, createDemoPositionHistory } from '../shared/telemetry-simulator.js';
 import { validateEvidenceFile } from '../shared/channel-contracts.js';
 import { createDemoFolio, findSectorService, findIncidentStatus } from '../shared/citizen-portal.js';
@@ -17,6 +17,24 @@ const routePosition = (truck) => truck.position ?? routeGeometry(truck.routeId)[
 let selectedTruckId = null;
 let selectedRouteId = null;
 let selectedIncidentId = null;
+// SW-034: `operationsAdapter` (imported above) stays bound to the in-memory demo instance for
+// every existing synchronous read (routeGeometry(), drawMapLayers(), drawDriverPositions(), the
+// seeding blocks below) — none of that changes. `realAdapter` is only set once Supabase is
+// configured AND the signed-in session resolves a municipality_id (see bootstrapRealBackend() near
+// the bottom of this file); mutation handlers (createVehicleFromForm/createDriverFromForm/
+// finishCreateRoute) mirror their write to it, best-effort, after already doing their existing
+// demo-adapter write. This keeps the entire rendering/simulation architecture untouched (rule 5 —
+// never break the approved demo) while still persisting real writes when configured.
+//
+// Deliberately NOT in scope here: hydrating pre-existing real vehicles/drivers/routes into the
+// running page. trucksWithRoute/simState/driverSimulators/initialTruckState/initialRouteProgress
+// are all derived from trucks/routes exactly once at module load (below); overwriting
+// trucks/routes/drivers with fetched data afterward would leave all of those stale and pointing at
+// the wrong (demo) objects, which risks the simulation engine itself, not just what's displayed.
+// Doing this properly means re-deriving that whole cascade on demand, which is a separate,
+// larger refactor — tracked as a follow-up (SW-035), not force-fit into this change.
+let realAdapter = null;
+let backendMode = 'DEMO_ONLY';
 let map;
 let mapReady = false;
 let routeLayers = [];
@@ -159,7 +177,7 @@ function renderMap() {
     <div class="map-card">
       <div class="map-header">
         <div><p class="eyebrow">${pilotMunicipality.branding.label}</p><h1>Mapa operativo real de ${pilotMunicipality.name}</h1><p class="demo">${demoNotice} · Las rutas son simuladas, no oficiales del ayuntamiento.</p></div>
-        <div class="sim-controls" aria-label="Controles de simulación"><span>${simulationNotice} · fuente desacoplada: ${operationsAdapter.mode}</span><select id="simVehicle">${trucks.map((t) => `<option value="${t.id}">${t.unit}</option>`).join('')}</select><button data-sim="start">Iniciar</button><button data-sim="pause">Pausar</button><button data-sim="reset">Reiniciar</button><button data-sim="speed">${simulationSpeed}×</button><button data-sim="fullscreen">Pantalla completa</button></div>
+        <div class="sim-controls" aria-label="Controles de simulación"><span>${simulationNotice} · fuente desacoplada: ${backendMode}</span><select id="simVehicle">${trucks.map((t) => `<option value="${t.id}">${t.unit}</option>`).join('')}</select><button data-sim="start">Iniciar</button><button data-sim="pause">Pausar</button><button data-sim="reset">Reiniciar</button><button data-sim="speed">${simulationSpeed}×</button><button data-sim="fullscreen">Pantalla completa</button></div>
       </div>
       <div class="kpis compact">${operationalKpis().map(([name, value]) => `<div class="kpi"><strong>${value}</strong><br>${name}</div>`).join('')}</div>
       <div id="realMap" class="real-map" role="application" aria-label="Mapa OpenStreetMap de Laguna Salada"><div class="map-fallback"><strong>Mapa externo no disponible.</strong><span>Fallback operativo demo: use listas, paneles y coordenadas simuladas.</span></div></div>
@@ -196,7 +214,7 @@ function renderVehicleList() { return trucks.map((truck) => `<button class="row 
 function renderDriverList() {
   const supabaseConfigured = Boolean(readSupabaseConfig());
   return drivers.map((driver) => {
-    const canProvision = supabaseConfigured && driver.email && !driver.profile_id;
+    const canProvision = supabaseConfigured && driver.email && driver.real_id && !driver.profile_id;
     const accountButton = canProvision ? `<button type="button" data-fleet-driver-account="${driver.id}">Crear cuenta de acceso</button>` : '';
     const accountPill = driver.profile_id ? pill('active') : '';
     return `<div class="row"><span>${driver.name}<br>${driver.phone || 'Sin teléfono'}</span>${pill(driver.status === 'Disponible' ? 'active' : 'assigned')}${accountPill}${accountButton}</div>`;
@@ -240,40 +258,69 @@ function refreshFleetSelects() {
   const driverList = $('#driverList');
   if (driverList) driverList.innerHTML = renderDriverList();
 }
-function createVehicleFromForm() {
+// SW-034: best-effort mirror of a mutation to the real adapter, on top of the existing demo-
+// adapter write every mutation handler already does first (unchanged, so the UI still updates
+// instantly regardless of network latency or whether Supabase is configured at all). Appends a
+// note to the given status element only on failure — success stays silent since the optimistic
+// demo update already told the user it worked. Returns the real row's data on success (null
+// otherwise) so callers that need the real id (e.g. to later link a driver's login account) can
+// keep it — the demo id and the real id are never the same value.
+async function mirrorToRealAdapter(promise, status) {
+  if (!realAdapter) return null;
+  try {
+    const result = await promise;
+    if (!result?.ok) { if (status) status.textContent += ` (no se pudo sincronizar con Supabase: ${result?.error?.message ?? 'error desconocido'})`; return null; }
+    return result.data;
+  } catch (error) {
+    if (status) status.textContent += ` (no se pudo sincronizar con Supabase: ${error.message})`;
+    return null;
+  }
+}
+async function createVehicleFromForm() {
   const unitInput = $('#fleetVehicleUnit'); const plateInput = $('#fleetVehiclePlate'); const maxStopsInput = $('#fleetVehicleMaxStops'); const status = $('#fleetVehicleStatus');
   const unit = unitInput?.value.trim();
   if (!unit) { if (status) status.textContent = 'Ingresa una unidad para el vehículo.'; return; }
-  const created = operationsAdapter.createVehicle({ unit, name: unit, plate: plateInput?.value.trim() ?? '', max_stops: Number(maxStopsInput?.value) || DEFAULT_MAX_STOPS });
+  const plate = plateInput?.value.trim() ?? ''; const maxStops = Number(maxStopsInput?.value) || DEFAULT_MAX_STOPS;
+  const created = operationsAdapter.createVehicle({ unit, name: unit, plate, max_stops: maxStops });
   trucks.push(created);
   if (unitInput) unitInput.value = ''; if (plateInput) plateInput.value = ''; if (maxStopsInput) maxStopsInput.value = '20';
   if (status) status.textContent = `Vehículo "${created.unit}" registrado.`;
   refreshFleetSelects();
+  // Same real-id linking as drivers below — a real vehicles row gets its own Postgres id, kept on
+  // the demo-shaped truck object so a later route assignment can reference the real row too.
+  const realVehicle = await mirrorToRealAdapter(realAdapter?.createVehicle({ code: unit, plate, max_stops: maxStops }), status);
+  if (realVehicle) created.real_id = realVehicle.id;
 }
-function createDriverFromForm() {
+async function createDriverFromForm() {
   const nameInput = $('#fleetDriverName'); const phoneInput = $('#fleetDriverPhone'); const emailInput = $('#fleetDriverEmail'); const status = $('#fleetDriverStatus');
   const name = nameInput?.value.trim();
   if (!name) { if (status) status.textContent = 'Ingresa un nombre para el chofer.'; return; }
-  const created = operationsAdapter.createDriver({ name, phone: phoneInput?.value.trim() ?? '', email: emailInput?.value.trim() || undefined });
+  const email = emailInput?.value.trim() || undefined;
+  const created = operationsAdapter.createDriver({ name, phone: phoneInput?.value.trim() ?? '', email });
   drivers.push(created);
   if (nameInput) nameInput.value = ''; if (phoneInput) phoneInput.value = ''; if (emailInput) emailInput.value = '';
   if (status) status.textContent = `Chofer "${created.name}" registrado (sin cuenta de acceso todavía).`;
   refreshFleetSelects();
+  // The real drivers row gets its own id (a Postgres uuid, never the same as the demo id above) —
+  // createDriverAccount() needs THAT id to call the Edge Function against a row that actually
+  // exists in Supabase, so it's kept on the demo-shaped object rather than discarded.
+  const realDriver = await mirrorToRealAdapter(realAdapter?.createDriver({ display_name: name }), status);
+  if (realDriver) created.real_id = realDriver.id;
 }
-// SW-032: calls the supabase/functions/create-driver-account Edge Function with the currently
-// signed-in session (getAuthClient(), set by auth-gate.js) — never touches service_role from here.
-// Only reachable in real Supabase mode (renderDriverList() only shows the button then), and only
-// does anything useful once this driver actually exists as a row in real Supabase (see the
-// function's own header comment) — until SW-034 wires the frontend to createSupabaseOperationsAdapter,
-// drivers registered here are demo-only and this will safely 404 with "Driver not found".
+// SW-032/SW-034: calls the supabase/functions/create-driver-account Edge Function with the
+// currently signed-in session (getAuthClient(), set by auth-gate.js) — never touches service_role
+// from here. Only reachable in real Supabase mode (renderDriverList() only shows the button then).
+// Note this operates on real Supabase driver rows specifically — a driver registered through the
+// form above only gets one once its own createDriver mirror (just above) has succeeded.
 async function createDriverAccount(driverId) {
   const status = $('#fleetDriverStatus');
   const client = getAuthClient();
   if (!client) { if (status) status.textContent = 'No hay sesión de Supabase activa.'; return; }
   const driver = drivers.find((item) => item.id === driverId);
   if (!driver) return;
+  if (!driver.real_id) { if (status) status.textContent = `"${driver.name}" todavía no está sincronizado con Supabase — espera a que la sincronización termine e intenta de nuevo.`; return; }
   if (status) status.textContent = `Creando cuenta de acceso para "${driver.name}"...`;
-  const { data, error } = await client.functions.invoke('create-driver-account', { body: { driver_id: driverId, email: driver.email } });
+  const { data, error } = await client.functions.invoke('create-driver-account', { body: { driver_id: driver.real_id, email: driver.email } });
   if (error) { if (status) status.textContent = `No se pudo crear la cuenta: ${error.message}`; return; }
   driver.profile_id = data.profile_id;
   if (status) status.textContent = data.invite_action_link ? `Cuenta creada para "${driver.name}". Enlace de invitación: ${data.invite_action_link}` : `Cuenta creada para "${driver.name}".`;
@@ -576,7 +623,7 @@ function formatTripPreview(trips) {
   if (trips.length <= 1) return `1 viaje, ${trips[0]?.length ?? 0} parada(s).`;
   return trips.map((trip, index) => `Viaje ${index + 1}: paradas ${trip[0].sequence}-${trip[trip.length - 1].sequence}`).join(' · ');
 }
-function finishCreateRoute() {
+async function finishCreateRoute() {
   const status = $('#createRouteStatus');
   const tripPreview = $('#createRouteTripPreview');
   const nameInput = $('#createRouteName');
@@ -624,6 +671,16 @@ function finishCreateRoute() {
     truck.routeId = routeId; truck.state = 'active'; truck.positionIndex = 0; truck.progress = 0; truck.sector = 'Ruta personalizada'; truck.updatedAt = 'Recién asignado';
     simState[truck.id] = { index: 0, progress: 0 };
     registerDriverSimulator(truck);
+  }
+
+  // Real route/vehicle ids never match their demo counterparts (see createVehicleFromForm/
+  // createDriverFromForm above) — createRoute must resolve first so the real route id is known
+  // before mirroring the geometry/stops/assignment that reference it.
+  const realRoute = await mirrorToRealAdapter(realAdapter?.createRoute({ name }), status);
+  if (realRoute) {
+    await mirrorToRealAdapter(realAdapter.savePathPoints(realRoute.id, path.map(([latitude, longitude], index) => ({ sequence: index + 1, latitude, longitude }))), status);
+    await mirrorToRealAdapter(realAdapter.saveRouteStops(realRoute.id, stopPoints), status);
+    if (truck?.real_id) await mirrorToRealAdapter(realAdapter.assignVehicle(realRoute.id, truck.real_id), status);
   }
 
   drawnRoutePoints = [];
@@ -695,6 +752,18 @@ initMap();
 initDriverMap();
 initDriverPolling();
 initCreateRouteMap();
+// SW-034: once a real session resolves (municipality_id known), builds the real adapter that
+// createVehicleFromForm/createDriverFromForm/finishCreateRoute mirror their writes to. Patches only
+// the "fuente desacoplada" label directly (not a full section re-render) so the already-initialized
+// Leaflet map instance is never touched by this.
+async function bootstrapRealBackend(ctx) {
+  const client = getAuthClient();
+  if (!client || !ctx?.municipality_id) return;
+  realAdapter = resolveOperationsAdapter({ client, municipality_id: ctx.municipality_id });
+  backendMode = realAdapter.mode;
+  const sourceLabel = document.querySelector('.sim-controls span');
+  if (sourceLabel) sourceLabel.textContent = `${simulationNotice} · fuente desacoplada: ${backendMode}`;
+}
 // No-ops entirely (leaves every section visible, same as before this line existed) unless the
 // page sets window.SMARTWASTE_SUPABASE_CONFIG — see frontend/auth-gate.js and CLAUDE.md rule 5.
-initAuthGate();
+initAuthGate().then((ctx) => { if (ctx) bootstrapRealBackend(ctx); });
