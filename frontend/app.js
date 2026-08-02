@@ -13,7 +13,7 @@ const driverName = (id) => drivers.find((driver) => driver.id === id)?.name ?? '
 const routeById = (id) => routes.find((route) => route.id === id);
 const routeName = (id) => routeById(id)?.name ?? 'Sin ruta asignada';
 const label = (state) => stateLabels[state] ?? state;
-const routePosition = (truck) => truck.position ?? routePaths[truck.routeId]?.[truck.positionIndex ?? 0] ?? pilotMunicipality.center;
+const routePosition = (truck) => truck.position ?? routeGeometry(truck.routeId)[truck.positionIndex ?? 0] ?? pilotMunicipality.center;
 let selectedTruckId = null;
 let selectedRouteId = null;
 let selectedIncidentId = null;
@@ -81,13 +81,28 @@ routes.filter((route) => routePaths[route.id]).forEach((route) => {
   operationsAdapter.saveRouteStops(route.id, generateRouteStopPoints(route.id, { count: route.stops }));
 });
 
+// SW-033: route geometry used to only live in the in-memory routePaths dictionary (shared/
+// demo-data.js), read directly by every consumer below and mutated at runtime by
+// finishCreateRoute() for hand-drawn routes (docs/TECHNICAL_DEBT_REGISTER.md item 16) — that only
+// works because everything runs in the same in-memory demo adapter; a real Supabase session
+// wouldn't see a mutation to a plain JS dictionary from another session at all. Seeding it into the
+// adapter here (same pattern as the route_stops seeding right above) means every consumer can read
+// through operationsAdapter.listPathPoints() instead, same as route_stops already does.
+routes.filter((route) => routePaths[route.id]).forEach((route) => {
+  if (operationsAdapter.listPathPoints(route.id).length > 0) return;
+  operationsAdapter.savePathPoints(route.id, routePaths[route.id].map(([latitude, longitude], index) => ({ sequence: index + 1, latitude, longitude })));
+});
+// [lat,lng] pairs sorted by sequence — the shape every consumer below expects, mirroring what
+// routePaths[id] used to provide directly.
+function routeGeometry(routeId) { return operationsAdapter.listPathPoints(routeId).map((point) => [point.latitude, point.longitude]); }
+
 // SW-026 fix (Codex review on PR #26): a truck that starts partway through its route — or is
 // already 'completed', like the demo's truck-04 — otherwise has no recorded history for the
 // waypoints it already passed before this page loaded, so every stop before truck.positionIndex
 // would show pendiente forever. Backfill the path prefix as historical trail, timestamped strictly
 // before the "live" telemetry below, so deriveStopStatus() sees it as already-covered ground.
 trucksWithRoute.forEach((truck) => {
-  const path = routePaths[truck.routeId] ?? [];
+  const path = routeGeometry(truck.routeId);
   const upToIndex = Math.min(truck.positionIndex ?? 0, path.length - 1);
   const backfillStart = Date.now() - (upToIndex + 1) * 1000;
   for (let i = 0; i <= upToIndex; i += 1) {
@@ -104,7 +119,7 @@ function tickDriverTelemetry() {
     // (shared/demo-data.js), and 'offline'/'completed' aren't reporting either; advancing the
     // simulator for any of those would move a marker that's supposed to be stationary.
     if (!truck || (truck.state !== 'active' && truck.state !== 'delayed')) return;
-    const path = routePaths[truck.routeId] ?? [];
+    const path = routeGeometry(truck.routeId);
     // emit() reads path[index % path.length] then increments index, so index === path.length is the
     // first tick that would wrap back to the route's first point. Stop there — this still records
     // the true final point (index === path.length - 1) before capping, instead of stopping one
@@ -370,7 +385,7 @@ function drawMapLayers(L = window.L) {
   const visibleTrucks = focusRoute ? trucks.filter((truck) => truck.routeId === focusRoute.id) : trucks;
   const visibleIncidents = focusRoute ? incidents.filter((incident) => focusRoute.incidents.includes(incident.code)) : incidents;
   visibleRoutes.forEach((route) => {
-    const path = routePaths[route.id]; const cut = Math.max(1, Math.round((path.length - 1) * (route.progress / 100)));
+    const path = routeGeometry(route.id); const cut = Math.max(1, Math.round((path.length - 1) * (route.progress / 100)));
     routeLayers.push(L.polyline(path.slice(0, cut + 1), { color: '#0f7b4f', weight: 7, opacity: .9 }).addTo(map));
     routeLayers.push(L.polyline(path.slice(cut), { color: '#155eef', weight: 6, opacity: .45, dashArray: '8 10' }).addTo(map).on('click', () => selectRoute(route.id)));
     routeLayers.push(...path.map((point, index) => L.circleMarker(point, { radius: index <= cut ? 5 : 4, color: index <= cut ? '#0f7b4f' : '#155eef', fillOpacity: .85 }).addTo(map)));
@@ -380,7 +395,7 @@ function drawMapLayers(L = window.L) {
     truckMarkers.push(marker);
   });
   visibleIncidents.forEach((incident) => { incidentMarkers.push(L.marker(incident.position, { icon: L.divIcon({ className: 'leaflet-incident', html: `<span>⚠<small>${incident.type}</small></span>`, iconSize: [90, 34] }) }).addTo(map).on('click', () => selectIncident(incident.code))); });
-  if (focusRoute) map.fitBounds(routePaths[focusRoute.id], { padding: [40, 40] });
+  if (focusRoute) map.fitBounds(routeGeometry(focusRoute.id), { padding: [40, 40] });
 }
 
 // Fullscreens #realMap itself (not the whole map-card), so the header/KPIs/detail drawer step
@@ -423,7 +438,7 @@ function drawDriverPositions() {
   const routeInfo = $('#driverRouteInfo');
   if (routeInfo) routeInfo.innerHTML = `${pill(truck.state)} ${routeName(truck.routeId)} · ${truck.progress}% completado`;
   if (driverPlannedLayer) driverPlannedLayer.remove();
-  driverPlannedLayer = L.polyline(routePaths[truck.routeId] ?? [], { color: '#94a3b8', weight: 4, opacity: .6, dashArray: '6 8' }).addTo(driverMap);
+  driverPlannedLayer = L.polyline(routeGeometry(truck.routeId), { color: '#94a3b8', weight: 4, opacity: .6, dashArray: '6 8' }).addTo(driverMap);
 
   const history = positionHistory.listPositions(driverVehicleId);
   const trail = history.map((point) => [point.latitude, point.longitude]);
@@ -545,9 +560,10 @@ function undoLastRoutePoint() { drawnRoutePoints.pop(); redrawCreateRouteTrace()
 // (a) createRoute() for the metadata, (b) persist the drawn geometry (route_paths), (c)
 // generateRouteStopPoints()/saveRouteStops() — the exact same SW-025/026 functions used for the
 // bundled demo routes, not reimplemented — over the freshly drawn path, so the new route gets
-// collection points automatically. routePaths[routeId] = path is what actually plugs the new route
-// into DeviceSimulator/routePosition/drawMapLayers/drawDriverPositions: they all read routePaths
-// directly and don't otherwise know or care whether a route is one of the 5 bundled demo ones.
+// collection points automatically. savePathPoints() (SW-033: no longer a routePaths[routeId] = path
+// runtime mutation) is what plugs the new route into DeviceSimulator/routePosition/drawMapLayers/
+// drawDriverPositions: they all read geometry through routeGeometry() (module init, above), which
+// doesn't otherwise know or care whether a route is one of the 5 bundled demo ones or hand-drawn.
 // SW-028: matches the default in supabase/migrations/202607150008_sw025_vehicle_capacity.sql
 // (vehicles.max_stops default 20) — demo trucks (shared/demo-data.js) have no max_stops field at
 // all, so this is the fallback when computing the trip preview below for a demo vehicle.
@@ -579,6 +595,15 @@ function finishCreateRoute() {
   const truck = vehicleId ? trucks.find((item) => item.id === vehicleId) : null;
 
   operationsAdapter.createRoute({ id: routeId, name, municipality_id: pilotMunicipality.id, sectors: ['Ruta personalizada'], sector: 'Ruta personalizada' });
+  // SW-033: every consumer IN THIS FILE now reads geometry via routeGeometry()/
+  // operationsAdapter.listPathPoints() (module init, above), not this dictionary — savePathPoints()
+  // below is what actually makes those work for a drawn route. This mutation stays only because
+  // shared/telemetry-simulator.js's DeviceSimulator.emit() independently reads routePaths[routeId]
+  // directly (by design — that module is adapter-agnostic and doesn't know operationsAdapter
+  // exists); dropping this line would leave a driver assigned to a freshly drawn route emitting
+  // telemetry stuck at a single fallback point instead of animating along the trace. Fixing that
+  // properly means teaching DeviceSimulator to accept its path explicitly instead of reaching into
+  // this global — out of scope here, tracked as a follow-up in docs/TECHNICAL_DEBT_REGISTER.md.
   routePaths[routeId] = path;
   operationsAdapter.savePathPoints(routeId, path.map(([latitude, longitude], index) => ({ sequence: index + 1, latitude, longitude })));
   operationsAdapter.saveRouteStops(routeId, stopPoints);
