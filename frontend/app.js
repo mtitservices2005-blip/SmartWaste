@@ -172,7 +172,67 @@ function renderRouteDetail(route) {
 }
 function renderIncidentDetail(incident) { return `<div class="drawer-head"><p class="eyebrow">Incidencia operativa demo</p><h2>${incident.type}</h2>${pill('open')}</div><p><b>Folio:</b> ${incident.id}</p><p><b>Sector:</b> ${incident.sector}</p><p><b>Prioridad:</b> ${incident.priority}</p><p><b>Estado:</b> ${incident.status}</p><p>${incident.detail}</p><p class="demo">${demoNotice}</p>`; }
 
-function renderMunicipal() { return `<section id="municipal" class="section card"><h2>Panel municipal</h2><p class="demo">${demoNotice} · Municipio piloto configurable: ${pilotMunicipality.name}, ${pilotMunicipality.country}</p><div class="controls"><input id="search" placeholder="Buscar ruta, camión o sector"><select id="sectorFilter"><option value="">Todos los sectores</option>${sectors.map((s) => `<option>${s.name}</option>`).join('')}</select></div><div class="panel-grid"><div><h3>Rutas del día</h3><div class="list" id="routeList">${renderRoutes(routes)}</div></div><div><h3>Vehículos demo</h3>${trucks.map((truck) => `<button class="row selectable${truck.id === selectedTruckId ? ' selected' : ''}" data-truck="${truck.id}"><span>${truckIcon(truck)} ${truck.unit}<br>${driverName(truck.driverId)}</span>${pill(truck.state)}</button>`).join('')}</div><div><h3>Incidencias en mapa</h3>${incidents.map((incident) => `<button class="row selectable${incident.code === selectedIncidentId ? ' selected' : ''}" data-incident="${incident.code}"><span>${incident.type}<br>${incident.sector}</span>${pill('open')}</button>`).join('')}</div></div>${renderCreateRoute()}<h3>Vista móvil conductor</h3>${renderDriverMobile()}</section>`; }
+function renderMunicipal() { return `<section id="municipal" class="section card"><h2>Panel municipal</h2><p class="demo">${demoNotice} · Municipio piloto configurable: ${pilotMunicipality.name}, ${pilotMunicipality.country}</p><div class="controls"><input id="search" placeholder="Buscar ruta, camión o sector"><select id="sectorFilter"><option value="">Todos los sectores</option>${sectors.map((s) => `<option>${s.name}</option>`).join('')}</select></div><div class="panel-grid"><div><h3>Rutas del día</h3><div class="list" id="routeList">${renderRoutes(routes)}</div></div><div><h3>Vehículos demo</h3><div id="vehicleList">${renderVehicleList()}</div></div><div><h3>Incidencias en mapa</h3>${incidents.map((incident) => `<button class="row selectable${incident.code === selectedIncidentId ? ' selected' : ''}" data-incident="${incident.code}"><span>${incident.type}<br>${incident.sector}</span>${pill('open')}</button>`).join('')}</div></div>${renderFleetManagement()}${renderCreateRoute()}<h3>Vista móvil conductor</h3>${renderDriverMobile()}</section>`; }
+function renderVehicleList() { return trucks.map((truck) => `<button class="row selectable${truck.id === selectedTruckId ? ' selected' : ''}" data-truck="${truck.id}"><span>${truckIcon(truck)} ${truck.unit}<br>${driverName(truck.driverId)}</span>${pill(truck.state)}</button>`).join(''); }
+function renderDriverList() { return drivers.map((driver) => `<div class="row"><span>${driver.name}<br>${driver.phone || 'Sin teléfono'}</span>${pill(driver.status === 'Disponible' ? 'active' : 'assigned')}</div>`).join(''); }
+// SW-031: fixes the original gap — there was no screen anywhere to register a new vehicle or
+// driver; both were hardcoded arrays in shared/demo-data.js, so operationsAdapter.createVehicle/
+// createDriver existed only on the Supabase adapter and had no demo equivalent at all. This
+// registers against the adapter (for parity with how routes/route_stops are already written here)
+// and mirrors the result into the imported trucks/drivers arrays, same dual-write pattern
+// finishCreateRoute() already uses for routes (operationsAdapter.createRoute() + routes.push()) —
+// every existing render function already reads trucks/drivers directly, not through the adapter.
+// Driver login accounts are a separate, Supabase-only concern (see docs/TECHNICAL_DEBT_REGISTER.md);
+// a driver created here has no access account yet, only a record.
+function renderFleetManagement() {
+  return `<div class="card" id="fleetManagement">
+    <h3>Flota y personal</h3>
+    <p class="demo">${demoNotice} · Alta de vehículos y choferes. El chofer queda registrado sin cuenta de acceso todavía.</p>
+    <div class="panel-grid">
+      <div>
+        <h4>Nuevo vehículo</h4>
+        <div class="controls"><input id="fleetVehicleUnit" placeholder="Unidad (p. ej. SW-LS-07)"><input id="fleetVehiclePlate" placeholder="Matrícula"><input id="fleetVehicleMaxStops" type="number" min="1" placeholder="Paradas máx. por viaje" value="20"></div>
+        <div class="controls"><button type="button" data-fleet="create-vehicle">Registrar vehículo</button></div>
+        <p id="fleetVehicleStatus" class="demo"></p>
+      </div>
+      <div>
+        <h4>Nuevo chofer</h4>
+        <div class="controls"><input id="fleetDriverName" placeholder="Nombre del chofer"><input id="fleetDriverPhone" placeholder="Teléfono"></div>
+        <div class="controls"><button type="button" data-fleet="create-driver">Registrar chofer</button></div>
+        <p id="fleetDriverStatus" class="demo"></p>
+        <div class="list" id="driverList">${renderDriverList()}</div>
+      </div>
+    </div>
+  </div>`;
+}
+function refreshFleetSelects() {
+  const createRouteVehicleSelect = $('#createRouteVehicle');
+  if (createRouteVehicleSelect) createRouteVehicleSelect.innerHTML = `<option value="">Sin vehículo asignado (asignar después)</option>${trucks.filter((truck) => !truck.routeId).map((truck) => `<option value="${truck.id}">${truck.unit}</option>`).join('')}`;
+  const vehicleList = $('#vehicleList');
+  if (vehicleList) vehicleList.innerHTML = renderVehicleList();
+  const driverList = $('#driverList');
+  if (driverList) driverList.innerHTML = renderDriverList();
+}
+function createVehicleFromForm() {
+  const unitInput = $('#fleetVehicleUnit'); const plateInput = $('#fleetVehiclePlate'); const maxStopsInput = $('#fleetVehicleMaxStops'); const status = $('#fleetVehicleStatus');
+  const unit = unitInput?.value.trim();
+  if (!unit) { if (status) status.textContent = 'Ingresa una unidad para el vehículo.'; return; }
+  const created = operationsAdapter.createVehicle({ unit, name: unit, plate: plateInput?.value.trim() ?? '', max_stops: Number(maxStopsInput?.value) || DEFAULT_MAX_STOPS });
+  trucks.push(created);
+  if (unitInput) unitInput.value = ''; if (plateInput) plateInput.value = ''; if (maxStopsInput) maxStopsInput.value = '20';
+  if (status) status.textContent = `Vehículo "${created.unit}" registrado.`;
+  refreshFleetSelects();
+}
+function createDriverFromForm() {
+  const nameInput = $('#fleetDriverName'); const phoneInput = $('#fleetDriverPhone'); const status = $('#fleetDriverStatus');
+  const name = nameInput?.value.trim();
+  if (!name) { if (status) status.textContent = 'Ingresa un nombre para el chofer.'; return; }
+  const created = operationsAdapter.createDriver({ name, phone: phoneInput?.value.trim() ?? '' });
+  drivers.push(created);
+  if (nameInput) nameInput.value = ''; if (phoneInput) phoneInput.value = '';
+  if (status) status.textContent = `Chofer "${created.name}" registrado (sin cuenta de acceso todavía).`;
+  refreshFleetSelects();
+}
 // SW-027: municipal_admin/supervisor/dispatcher only in real Supabase (RLS: tenant_insert_staff on
 // routes and, per 202607150009_sw027_route_paths.sql, on route_paths too — same 3 roles as
 // route_stops writes). This demo UI has no live Supabase session/role gating (frontend/app.js has
@@ -543,6 +603,9 @@ document.addEventListener('click', (event) => {
   const createRouteAction = event.target.closest('[data-create-route]')?.dataset.createRoute;
   if (createRouteAction === 'undo') undoLastRoutePoint();
   if (createRouteAction === 'finish') finishCreateRoute();
+  const fleetAction = event.target.closest('[data-fleet]')?.dataset.fleet;
+  if (fleetAction === 'create-vehicle') createVehicleFromForm();
+  if (fleetAction === 'create-driver') createDriverFromForm();
   const truckButton = event.target.closest('[data-truck]'); if (truckButton) { selectTruck(truckButton.dataset.truck); goToMapTab(); }
   const routeButton = event.target.closest('[data-route]'); if (routeButton?.dataset.route) { selectRoute(routeButton.dataset.route); goToMapTab(); }
   const incidentButton = event.target.closest('[data-incident]'); if (incidentButton) { selectIncident(incidentButton.dataset.incident); goToMapTab(); }

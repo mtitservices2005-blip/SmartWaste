@@ -22,6 +22,30 @@ export function createDemoOperationsAdapter(seed = { trucks, routes, drivers, in
     listVehicles: () => clone(state.trucks),
     listDrivers: () => clone(state.drivers ?? drivers),
     getVehicle: (id) => clone(state.trucks.find((v) => v.id === id) ?? null),
+    // SW-031: same shape frontend/app.js already expects from shared/demo-data.js's trucks array
+    // (unit/state/driverId/routeId/etc.) — a freshly registered vehicle has no route yet, so it
+    // starts 'offline' like the demo's own unassigned truck-05, not 'active'.
+    createVehicle: (vehicle) => {
+      const created = {
+        id: vehicle.id ?? `demo-vehicle-${state.trucks.length + 1}-${Date.now().toString(36)}`,
+        unit: vehicle.unit ?? `SW-NEW-${state.trucks.length + 1}`, name: vehicle.name ?? vehicle.unit ?? 'Vehículo nuevo',
+        plate: vehicle.plate ?? '', state: vehicle.state ?? 'offline', driverId: null, routeId: null,
+        progress: 0, speedKmh: 0, updatedAt: 'Recién creado', sector: 'Sin asignar', nextStop: 'Sin asignar', loadLevel: 0, positionIndex: 0,
+        ...vehicle
+      };
+      state.trucks.push(created);
+      return clone(created);
+    },
+    updateVehicle: (id, patch) => { const vehicle = state.trucks.find((v) => v.id === id); if (!vehicle) throw new Error('Vehicle not found'); Object.assign(vehicle, patch); return clone(vehicle); },
+    // Registered without a login account (profile_id equivalent is left unset here) — provisioning
+    // real access is a separate, Supabase-only concern (see docs/TECHNICAL_DEBT_REGISTER.md / the
+    // SW-031/SW-032 plan split), not something the demo adapter can meaningfully model.
+    createDriver: (driver) => {
+      if (!state.drivers) state.drivers = clone(drivers);
+      const created = { id: driver.id ?? `demo-driver-${state.drivers.length + 1}-${Date.now().toString(36)}`, name: driver.name ?? 'Chofer nuevo', phone: driver.phone ?? '', status: driver.status ?? 'Disponible', ...driver };
+      state.drivers.push(created);
+      return clone(created);
+    },
     listRoutes: () => clone(state.routes),
     getRoute: (id) => clone(state.routes.find((r) => r.id === id) ?? null),
     createRoute: (route) => { const created = { id: route.id ?? `demo-route-${state.routes.length + 1}-${Date.now().toString(36)}`, status:'planned', progress:0, incidents:[], ...route }; state.routes.push(created); return clone(created); },

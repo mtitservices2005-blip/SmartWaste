@@ -24,4 +24,26 @@ assert.deepEqual(listed.map((s) => s.sequence), generatedPoints.map((p) => p.seq
 assert.ok(listed.every((s) => s.route_id === 'route-test'));
 assert.equal(adapter.listRouteStops('route-that-does-not-exist').length, 0);
 
+// SW-031: createVehicle/updateVehicle/createDriver — previously only existed on the Supabase
+// adapter, so the demo adapter (what frontend/app.js actually uses) had no way to register a new
+// vehicle or driver at all.
+const vehiclesBefore = adapter.listVehicles().length;
+const createdVehicle = adapter.createVehicle({ unit: 'SW-TEST-01', plate: 'DEMO-TEST-01', max_stops: 15 });
+assert.ok(createdVehicle.id, 'createVehicle must return a generated id');
+assert.equal(createdVehicle.unit, 'SW-TEST-01');
+assert.equal(createdVehicle.state, 'offline', 'a freshly registered vehicle has no route yet');
+assert.equal(adapter.listVehicles().length, vehiclesBefore + 1);
+assert.equal(adapter.getVehicle(createdVehicle.id).unit, 'SW-TEST-01');
+
+const updatedVehicle = adapter.updateVehicle(createdVehicle.id, { state: 'active' });
+assert.equal(updatedVehicle.state, 'active');
+assert.equal(adapter.getVehicle(createdVehicle.id).state, 'active');
+
+const driversBefore = adapter.listDrivers().length;
+const createdDriver = adapter.createDriver({ name: 'Chofer de prueba', phone: 'demo-9999' });
+assert.ok(createdDriver.id, 'createDriver must return a generated id');
+assert.equal(createdDriver.name, 'Chofer de prueba');
+assert.equal(createdDriver.status, 'Disponible', 'default status when none is given');
+assert.equal(adapter.listDrivers().length, driversBefore + 1);
+
 console.log('operations-adapter ok');
