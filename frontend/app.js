@@ -3,6 +3,7 @@ import { operationsAdapter } from '../shared/operations-adapter.js';
 import { DeviceSimulator, createDemoPositionHistory } from '../shared/telemetry-simulator.js';
 import { validateEvidenceFile } from '../shared/channel-contracts.js';
 import { createDemoFolio, findSectorService, findIncidentStatus } from '../shared/citizen-portal.js';
+import { generateRouteStopPoints, deriveStopStatus } from '../shared/route-engine.js';
 import { IMPACT_DEMO_NOTICE, IMPACT_SCENARIO_NOTICE, defaultImpactAssumptions, metricReadiness, calculateImpactMetrics } from '../shared/impact-center.js';
 import { initAuthGate } from './auth-gate.js';
 
@@ -50,7 +51,18 @@ let driverPlannedLayer = null;
 let driverTrailLayer = null;
 let driverCurrentMarker = null;
 let driverPollTimer = null;
+let driverStopsLayer = null;
 const DRIVER_POLL_INTERVAL_MS = 7000; // dentro del rango pedido de 5-10s
+
+// SW-026: generate + persist synthetic collection points (shared/route-engine.js) for every demo
+// route with a routePath geometry, through the same in-memory operationsAdapter other writes here
+// already go through — mirrors how a real deployment would call this once per route at creation
+// time (building that creation UI is explicitly out of scope). Guarded so re-running this module
+// doesn't duplicate points against the same route_id.
+routes.filter((route) => routePaths[route.id]).forEach((route) => {
+  if (operationsAdapter.listRouteStops(route.id).length > 0) return;
+  operationsAdapter.saveRouteStops(route.id, generateRouteStopPoints(route.id));
+});
 
 Object.values(driverSimulators).forEach((simulator) => positionHistory.record(simulator.start()));
 function tickDriverTelemetry() {
@@ -134,6 +146,7 @@ function renderDriverMobile() {
   return `<div class="mobile" id="driverMobile">
     <select id="driverVehicleSelect" aria-label="Vehículo del conductor">${trucksWithRoute.map((t) => `<option value="${t.id}" ${t.id === driverVehicleId ? 'selected' : ''}>${t.unit}</option>`).join('')}</select>
     <p id="driverRouteInfo">${pill(truck.state)} ${routeName(truck.routeId)} · ${truck.progress}% completado</p>
+    <p id="driverStopsProgress"></p>
     <div id="driverMap" class="real-map driver-map" role="application" aria-label="Posición y trazo del vehículo (demo)"></div>
     <p class="demo">${simulationNotice} · trazo histórico vía polling cada ${DRIVER_POLL_INTERVAL_MS / 1000}s (sin Realtime, ver docs/TECHNICAL_DEBT_REGISTER.md #14)</p>
   </div>`;
@@ -250,6 +263,24 @@ function drawDriverPositions() {
   const trail = history.map((point) => [point.latitude, point.longitude]);
   if (driverTrailLayer) driverTrailLayer.remove();
   driverTrailLayer = trail.length > 1 ? L.polyline(trail, { color: '#0f7b4f', weight: 5, opacity: .9 }).addTo(driverMap) : null;
+
+  // SW-026: route_stops seeded at load time (top of this file) rendered as markers colored by
+  // deriveStopStatus() against this same recorded trail (`history`, above) — no separate query or
+  // refresh mechanism, reuses the polling this function is already called from.
+  if (driverStopsLayer) driverStopsLayer.remove();
+  const stopsWithStatus = operationsAdapter.listRouteStops(truck.routeId).map((stop) => ({ ...stop, status: deriveStopStatus(stop, history) }));
+  driverStopsLayer = L.layerGroup(stopsWithStatus.map((stop) => L.circleMarker([stop.latitude, stop.longitude], {
+    radius: 5,
+    weight: 2,
+    color: stop.status === 'recolectado' ? '#0f7b4f' : '#f59e0b',
+    fillColor: stop.status === 'recolectado' ? '#0f7b4f' : '#f59e0b',
+    fillOpacity: .85
+  }).bindTooltip(`${stop.label} · ${stop.status}`))).addTo(driverMap);
+  const stopsProgress = $('#driverStopsProgress');
+  if (stopsProgress) {
+    const collected = stopsWithStatus.filter((stop) => stop.status === 'recolectado').length;
+    stopsProgress.textContent = stopsWithStatus.length ? `${collected}/${stopsWithStatus.length} recolectados` : '';
+  }
 
   if (driverCurrentMarker) driverCurrentMarker.remove();
   const last = history[history.length - 1];
