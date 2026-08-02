@@ -140,7 +140,7 @@ function renderMap() {
     <div class="map-card">
       <div class="map-header">
         <div><p class="eyebrow">${pilotMunicipality.branding.label}</p><h1>Mapa operativo real de ${pilotMunicipality.name}</h1><p class="demo">${demoNotice} · Las rutas son simuladas, no oficiales del ayuntamiento.</p></div>
-        <div class="sim-controls" aria-label="Controles de simulación"><span>${simulationNotice} · fuente desacoplada: ${operationsAdapter.mode}</span><select id="simVehicle">${trucks.map((t) => `<option value="${t.id}">${t.unit}</option>`).join('')}</select><button data-sim="start">Iniciar</button><button data-sim="pause">Pausar</button><button data-sim="reset">Reiniciar</button><button data-sim="speed">${simulationSpeed}×</button></div>
+        <div class="sim-controls" aria-label="Controles de simulación"><span>${simulationNotice} · fuente desacoplada: ${operationsAdapter.mode}</span><select id="simVehicle">${trucks.map((t) => `<option value="${t.id}">${t.unit}</option>`).join('')}</select><button data-sim="start">Iniciar</button><button data-sim="pause">Pausar</button><button data-sim="reset">Reiniciar</button><button data-sim="speed">${simulationSpeed}×</button><button data-sim="fullscreen">Pantalla completa</button></div>
       </div>
       <div class="kpis compact">${operationalKpis().map(([name, value]) => `<div class="kpi"><strong>${value}</strong><br>${name}</div>`).join('')}</div>
       <div id="realMap" class="real-map" role="application" aria-label="Mapa OpenStreetMap de Laguna Salada"><div class="map-fallback"><strong>Mapa externo no disponible.</strong><span>Fallback operativo demo: use listas, paneles y coordenadas simuladas.</span></div></div>
@@ -262,21 +262,46 @@ function initMap() {
     drawMapLayers(L);
   }).catch(() => $('#realMap').classList.add('fallback-active'));
 }
+// When a route is selected (selectRoute()), the map focuses on just that route — its own polyline/
+// stops, its assigned truck, and only the incidents tied to it — instead of the whole fleet.
+// Selecting a truck/incident or closing the detail drawer clears selectedRouteId (see
+// selectTruck()/selectIncident()/closeDetail() below) and returns to showing everything.
 function drawMapLayers(L = window.L) {
   if (!mapReady) return;
   [...routeLayers, ...truckMarkers, ...incidentMarkers].forEach((layer) => layer.remove()); routeLayers = []; truckMarkers = []; incidentMarkers = [];
-  routes.forEach((route) => {
+  const focusRoute = selectedRouteId ? routeById(selectedRouteId) : null;
+  const visibleRoutes = focusRoute ? [focusRoute] : routes;
+  const visibleTrucks = focusRoute ? trucks.filter((truck) => truck.routeId === focusRoute.id) : trucks;
+  const visibleIncidents = focusRoute ? incidents.filter((incident) => focusRoute.incidents.includes(incident.code)) : incidents;
+  visibleRoutes.forEach((route) => {
     const path = routePaths[route.id]; const cut = Math.max(1, Math.round((path.length - 1) * (route.progress / 100)));
     routeLayers.push(L.polyline(path.slice(0, cut + 1), { color: '#0f7b4f', weight: 7, opacity: .9 }).addTo(map));
     routeLayers.push(L.polyline(path.slice(cut), { color: '#155eef', weight: 6, opacity: .45, dashArray: '8 10' }).addTo(map).on('click', () => selectRoute(route.id)));
     routeLayers.push(...path.map((point, index) => L.circleMarker(point, { radius: index <= cut ? 5 : 4, color: index <= cut ? '#0f7b4f' : '#155eef', fillOpacity: .85 }).addTo(map)));
   });
-  trucks.forEach((truck) => {
+  visibleTrucks.forEach((truck) => {
     const marker = L.marker(routePosition({ ...truck, positionIndex: simState[truck.id]?.index ?? truck.positionIndex }), { icon: L.divIcon({ className: 'leaflet-truck', html: truckIcon(truck), iconSize: [44, 44], iconAnchor: [22, 22] }) }).addTo(map).on('click', () => selectTruck(truck.id));
     truckMarkers.push(marker);
   });
-  incidents.forEach((incident) => { incidentMarkers.push(L.marker(incident.position, { icon: L.divIcon({ className: 'leaflet-incident', html: `<span>⚠<small>${incident.type}</small></span>`, iconSize: [90, 34] }) }).addTo(map).on('click', () => selectIncident(incident.code))); });
+  visibleIncidents.forEach((incident) => { incidentMarkers.push(L.marker(incident.position, { icon: L.divIcon({ className: 'leaflet-incident', html: `<span>⚠<small>${incident.type}</small></span>`, iconSize: [90, 34] }) }).addTo(map).on('click', () => selectIncident(incident.code))); });
+  if (focusRoute) map.fitBounds(routePaths[focusRoute.id], { padding: [40, 40] });
 }
+
+// Fullscreens #realMap itself (not the whole map-card), so the header/KPIs/detail drawer step
+// aside and just the map fills the screen. Standard Fullscreen API — no library.
+function toggleMapFullscreen() {
+  const el = $('#realMap');
+  if (!el) return;
+  if (document.fullscreenElement) document.exitFullscreen?.();
+  else el.requestFullscreen?.();
+}
+// Entering/exiting fullscreen resizes #realMap's actual pixel dimensions, which Leaflet doesn't
+// pick up on its own — invalidateSize() makes it recalculate and re-tile correctly either way.
+document.addEventListener('fullscreenchange', () => {
+  if (mapReady) requestAnimationFrame(() => map.invalidateSize());
+  const button = document.querySelector('[data-sim="fullscreen"]');
+  if (button) button.textContent = document.fullscreenElement ? 'Salir de pantalla completa' : 'Pantalla completa';
+});
 
 function initDriverMap() {
   loadLeaflet().then((L) => {
@@ -380,6 +405,31 @@ function redrawCreateRouteTrace() {
   const status = $('#createRouteStatus');
   if (status) status.textContent = `${drawnRoutePoints.length} punto(s) trazado(s).`;
 }
+
+// SW-029: tab navigation — only one top-level section visible at a time, switched by the existing
+// #hash nav links (frontend/index.html), so a reload/shared link on a specific tab still lands on
+// it. Each renderXxx() call at the top of this file already produces one <section> as a direct
+// child of #app, in a fixed order (mapa, municipal, supervisor, ciudadania, impacto, master) — no
+// change needed there, this only toggles which one has the existing `.hidden` class.
+const SECTION_IDS = Array.from(app.children).map((section) => section.id);
+function sectionFromHash() {
+  const id = location.hash.slice(1);
+  return SECTION_IDS.includes(id) ? id : SECTION_IDS[0];
+}
+function showSection(id) {
+  Array.from(app.children).forEach((section) => section.classList.toggle('hidden', section.id !== id));
+  document.querySelectorAll('.topbar nav a').forEach((link) => link.classList.toggle('active', link.getAttribute('href') === `#${id}`));
+  // Leaflet sizes itself against its container's dimensions at creation time; a container that was
+  // display:none when its map was built reports zero size, leaving the map visibly cut off/blank
+  // until told to recalculate. invalidateSize() on every switch into a tab (not just the first)
+  // keeps it correct regardless of load order/timing.
+  if (id === 'mapa' && mapReady) requestAnimationFrame(() => map.invalidateSize());
+  if (id === 'municipal') {
+    if (driverMapReady) requestAnimationFrame(() => driverMap.invalidateSize());
+    if (createRouteMapReady) requestAnimationFrame(() => createRouteMap.invalidateSize());
+  }
+}
+window.addEventListener('hashchange', () => showSection(sectionFromHash()));
 function undoLastRoutePoint() { drawnRoutePoints.pop(); redrawCreateRouteTrace(); }
 // (a) createRoute() for the metadata, (b) persist the drawn geometry (route_paths), (c)
 // generateRouteStopPoints()/saveRouteStops() — the exact same SW-025/026 functions used for the
@@ -434,10 +484,10 @@ function finishCreateRoute() {
 
 function drawerContent(content) { return `<button class="drawer-close" data-close-detail aria-label="Cerrar detalle">✕ Cerrar</button><div class="drawer-scroll">${content}</div>`; }
 function openDetail(content) { const detail = $('#detail'); detail.innerHTML = drawerContent(content); detail.classList.remove('is-hidden'); detail.setAttribute('aria-hidden', 'false'); }
-function closeDetail() { const detail = $('#detail'); detail.classList.add('is-hidden'); detail.setAttribute('aria-hidden', 'true'); detail.innerHTML = ''; selectedTruckId = null; selectedRouteId = null; selectedIncidentId = null; }
-function selectTruck(id) { selectedTruckId = id; selectedRouteId = null; selectedIncidentId = null; const truck = trucks.find((item) => item.id === id); openDetail(renderTruckDetail(truck)); }
-function selectRoute(id) { selectedRouteId = id; selectedTruckId = null; selectedIncidentId = null; const route = routeById(id); openDetail(renderRouteDetail(route)); }
-function selectIncident(code) { selectedIncidentId = code; selectedTruckId = null; selectedRouteId = null; const incident = incidents.find((item) => item.code === code); openDetail(renderIncidentDetail(incident)); }
+function closeDetail() { const detail = $('#detail'); detail.classList.add('is-hidden'); detail.setAttribute('aria-hidden', 'true'); detail.innerHTML = ''; selectedTruckId = null; selectedRouteId = null; selectedIncidentId = null; drawMapLayers(); }
+function selectTruck(id) { selectedTruckId = id; selectedRouteId = null; selectedIncidentId = null; const truck = trucks.find((item) => item.id === id); openDetail(renderTruckDetail(truck)); drawMapLayers(); }
+function selectRoute(id) { selectedRouteId = id; selectedTruckId = null; selectedIncidentId = null; const route = routeById(id); openDetail(renderRouteDetail(route)); drawMapLayers(); }
+function selectIncident(code) { selectedIncidentId = code; selectedTruckId = null; selectedRouteId = null; const incident = incidents.find((item) => item.code === code); openDetail(renderIncidentDetail(incident)); drawMapLayers(); }
 function startSimulation() { if (simulationTimer) return; simulationTimer = setInterval(() => { trucks.filter((truck) => truck.routeId && truck.state !== 'offline' && truck.state !== 'completed').forEach((truck) => { const path = routePaths[truck.routeId]; simState[truck.id].index = (simState[truck.id].index + 1) % path.length; simState[truck.id].progress = Math.min(99, simState[truck.id].progress + 3); truck.progress = simState[truck.id].progress; truck.updatedAt = 'Ahora (simulación)'; truck.sector = routeById(truck.routeId)?.sector ?? truck.sector; }); drawMapLayers(); if (selectedTruckId) selectTruck(selectedTruckId); if (selectedRouteId) selectRoute(selectedRouteId); if (selectedIncidentId) selectIncident(selectedIncidentId); }, 1800 / simulationSpeed); }
 function pauseSimulation() { clearInterval(simulationTimer); simulationTimer = null; }
 function resetSimulation() { pauseSimulation(); trucks.forEach((truck) => { const original = initialTruckState[truck.id]; simState[truck.id] = { index: original.index, progress: original.progress }; truck.progress = original.progress; truck.updatedAt = original.updatedAt; truck.sector = original.sector; }); drawMapLayers(); if (selectedTruckId) selectTruck(selectedTruckId); if (selectedRouteId) selectRoute(selectedRouteId); if (selectedIncidentId) selectIncident(selectedIncidentId); }
@@ -458,7 +508,7 @@ document.addEventListener('click', (event) => {
   if (onboardButton) { const status = document.querySelector(`[data-onboarding-status="${onboardButton.dataset.onboarding}"]`); if (status) status.textContent = 'Onboarding demo iniciado — flujo completo en desarrollo.'; }
   if (event.target.id === 'useGeo') { requestGeolocation(); }
   if (event.target.id === 'checkFolio') { const found = findIncidentStatus($('#folioSearch').value); $('#folioStatus').textContent = found ? `${found.type}: ${found.status}` : 'Folio demo no encontrado'; }
-  const sim = event.target.dataset.sim; if (sim === 'start') startSimulation(); if (sim === 'pause') pauseSimulation(); if (sim === 'reset') resetSimulation(); if (sim === 'speed') { simulationSpeed = simulationSpeed === 1 ? 2 : simulationSpeed === 2 ? 4 : 1; event.target.textContent = `${simulationSpeed}×`; if (simulationTimer) { pauseSimulation(); startSimulation(); } }
+  const sim = event.target.dataset.sim; if (sim === 'start') startSimulation(); if (sim === 'pause') pauseSimulation(); if (sim === 'reset') resetSimulation(); if (sim === 'fullscreen') toggleMapFullscreen(); if (sim === 'speed') { simulationSpeed = simulationSpeed === 1 ? 2 : simulationSpeed === 2 ? 4 : 1; event.target.textContent = `${simulationSpeed}×`; if (simulationTimer) { pauseSimulation(); startSimulation(); } }
 });
 document.addEventListener('change', (event) => { if (event.target.closest('#impacto') && event.target.matches('select')) { $('#impacto').outerHTML = renderImpactCenter(currentImpactAssumptions(), currentImpactFilters()); } });
 $('#search').addEventListener('input', (event) => { const term = event.target.value.toLowerCase(); $('#routeList').innerHTML = renderRoutes(routes.filter((route) => JSON.stringify(route).toLowerCase().includes(term))); });
@@ -473,6 +523,7 @@ $('#driverVehicleSelect').addEventListener('change', (event) => {
   drawDriverPositions(); // also refreshes #driverRouteInfo for the newly selected vehicle
 });
 function requestGeolocation() { const target = $('#geoStatus'); if (!navigator.geolocation) { target.textContent = 'Ubicación no disponible en este navegador.'; return; } target.textContent = 'Solicitando permiso de ubicación...'; navigator.geolocation.getCurrentPosition((pos) => { target.textContent = `Ubicación recibida localmente: ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)} (no enviada)`; }, (err) => { target.textContent = `Permiso denegado, timeout o ubicación no disponible: ${err.message}`; }, { enableHighAccuracy:true, timeout:8000, maximumAge:60000 }); }
+showSection(sectionFromHash());
 initMap();
 initDriverMap();
 initDriverPolling();
