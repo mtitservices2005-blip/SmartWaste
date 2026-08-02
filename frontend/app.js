@@ -3,7 +3,7 @@ import { operationsAdapter } from '../shared/operations-adapter.js';
 import { DeviceSimulator, createDemoPositionHistory } from '../shared/telemetry-simulator.js';
 import { validateEvidenceFile } from '../shared/channel-contracts.js';
 import { createDemoFolio, findSectorService, findIncidentStatus } from '../shared/citizen-portal.js';
-import { generateRouteStopPoints, deriveStopStatus } from '../shared/route-engine.js';
+import { generateRouteStopPoints, deriveStopStatus, haversineMeters } from '../shared/route-engine.js';
 import { IMPACT_DEMO_NOTICE, IMPACT_SCENARIO_NOTICE, defaultImpactAssumptions, metricReadiness, calculateImpactMetrics } from '../shared/impact-center.js';
 import { initAuthGate } from './auth-gate.js';
 
@@ -54,13 +54,24 @@ let driverPollTimer = null;
 let driverStopsLayer = null;
 const DRIVER_POLL_INTERVAL_MS = 7000; // dentro del rango pedido de 5-10s
 
+// SW-027: "Crear ruta" — free-click drawing on its own Leaflet map (no street snapping/routing, no
+// new mapping library). drawnRoutePoints is [[lat,lng], ...] in click order, same shape routePaths
+// entries already have, so it can go straight into generateRouteStopPoints()/routePaths[id] once
+// finished.
+let drawnRoutePoints = [];
+let createRouteMap;
+let createRouteMapReady = false;
+let createRoutePolyline = null;
+let createRouteMarkers = [];
+
 // SW-026: generate + persist synthetic collection points (shared/route-engine.js) for every demo
 // route with a routePath geometry, through the same in-memory operationsAdapter other writes here
-// already go through — mirrors how a real deployment would call this once per route at creation
-// time (building that creation UI is explicitly out of scope). Guarded so re-running this module
-// doesn't duplicate points against the same route_id. count:route.stops keeps the generated total
-// consistent with the same number demo-data.js/the route list already display elsewhere (Codex
-// review on PR #26 — a fixed meter spacing produced a different total per route).
+// already go through. Guarded so re-running this module doesn't duplicate points against the same
+// route_id. count:route.stops keeps the generated total consistent with the same number demo-
+// data.js/the route list already display elsewhere (Codex review on PR #26 — a fixed meter spacing
+// produced a different total per route). SW-027's "Crear ruta" UI (renderCreateRoute()/
+// finishCreateRoute() below) calls the exact same generateRouteStopPoints()/saveRouteStops() for
+// routes drawn at runtime, not a separate implementation.
 routes.filter((route) => routePaths[route.id]).forEach((route) => {
   if (operationsAdapter.listRouteStops(route.id).length > 0) return;
   operationsAdapter.saveRouteStops(route.id, generateRouteStopPoints(route.id, { count: route.stops }));
@@ -157,7 +168,24 @@ function renderRouteDetail(route) {
 }
 function renderIncidentDetail(incident) { return `<div class="drawer-head"><p class="eyebrow">Incidencia operativa demo</p><h2>${incident.type}</h2>${pill('open')}</div><p><b>Folio:</b> ${incident.id}</p><p><b>Sector:</b> ${incident.sector}</p><p><b>Prioridad:</b> ${incident.priority}</p><p><b>Estado:</b> ${incident.status}</p><p>${incident.detail}</p><p class="demo">${demoNotice}</p>`; }
 
-function renderMunicipal() { return `<section id="municipal" class="section card"><h2>Panel municipal</h2><p class="demo">${demoNotice} · Municipio piloto configurable: ${pilotMunicipality.name}, ${pilotMunicipality.country}</p><div class="controls"><input id="search" placeholder="Buscar ruta, camión o sector"><select id="sectorFilter"><option value="">Todos los sectores</option>${sectors.map((s) => `<option>${s.name}</option>`).join('')}</select></div><div class="panel-grid"><div><h3>Rutas del día</h3><div class="list" id="routeList">${renderRoutes(routes)}</div></div><div><h3>Vehículos demo</h3>${trucks.map((truck) => `<button class="row selectable" data-truck="${truck.id}"><span>${truckIcon(truck)} ${truck.unit}<br>${driverName(truck.driverId)}</span>${pill(truck.state)}</button>`).join('')}</div><div><h3>Incidencias en mapa</h3>${incidents.map((incident) => `<button class="row selectable" data-incident="${incident.code}"><span>${incident.type}<br>${incident.sector}</span>${pill('open')}</button>`).join('')}</div></div><h3>Vista móvil conductor</h3>${renderDriverMobile()}</section>`; }
+function renderMunicipal() { return `<section id="municipal" class="section card"><h2>Panel municipal</h2><p class="demo">${demoNotice} · Municipio piloto configurable: ${pilotMunicipality.name}, ${pilotMunicipality.country}</p><div class="controls"><input id="search" placeholder="Buscar ruta, camión o sector"><select id="sectorFilter"><option value="">Todos los sectores</option>${sectors.map((s) => `<option>${s.name}</option>`).join('')}</select></div><div class="panel-grid"><div><h3>Rutas del día</h3><div class="list" id="routeList">${renderRoutes(routes)}</div></div><div><h3>Vehículos demo</h3>${trucks.map((truck) => `<button class="row selectable" data-truck="${truck.id}"><span>${truckIcon(truck)} ${truck.unit}<br>${driverName(truck.driverId)}</span>${pill(truck.state)}</button>`).join('')}</div><div><h3>Incidencias en mapa</h3>${incidents.map((incident) => `<button class="row selectable" data-incident="${incident.code}"><span>${incident.type}<br>${incident.sector}</span>${pill('open')}</button>`).join('')}</div></div>${renderCreateRoute()}<h3>Vista móvil conductor</h3>${renderDriverMobile()}</section>`; }
+// SW-027: municipal_admin/supervisor/dispatcher only in real Supabase (RLS: tenant_insert_staff on
+// routes and, per 202607150009_sw027_route_paths.sql, on route_paths too — same 3 roles as
+// route_stops writes). This demo UI has no live Supabase session/role gating (frontend/app.js has
+// always used the in-memory operationsAdapter, never createSupabaseOperationsAdapter — see
+// supabase/README.md), so there's nothing here to restrict by role client-side; the restriction is
+// real once this UI is pointed at Supabase.
+function renderCreateRoute() {
+  const availableTrucks = trucks.filter((truck) => !truck.routeId);
+  return `<div class="card" id="createRoute">
+    <h3>Crear ruta</h3>
+    <p class="demo">${demoNotice} · Clic en el mapa para agregar puntos al trazo, en orden. Sin snapping a calles reales ni ruteo por red vial.</p>
+    <div class="controls"><input id="createRouteName" placeholder="Nombre de la ruta"><select id="createRouteVehicle"><option value="">Sin vehículo asignado (asignar después)</option>${availableTrucks.map((t) => `<option value="${t.id}">${t.unit}</option>`).join('')}</select></div>
+    <div id="createRouteMap" class="real-map driver-map" role="application" aria-label="Dibujar trazo de ruta nueva"></div>
+    <div class="controls"><button type="button" data-create-route="undo">Deshacer último punto</button><button type="button" data-create-route="finish">Finalizar y guardar</button></div>
+    <p id="createRouteStatus" class="demo">${drawnRoutePoints.length} punto(s) trazado(s).</p>
+  </div>`;
+}
 function renderDriverMobile() {
   const truck = trucks.find((item) => item.id === driverVehicleId);
   return `<div class="mobile" id="driverMobile">
@@ -319,6 +347,91 @@ function initDriverPolling() {
   new IntersectionObserver((entries) => entries.forEach((entry) => (entry.isIntersecting ? startDriverPolling() : stopDriverPolling())), { threshold: .15 }).observe(target);
 }
 
+// SW-027: registers a truck the driver view didn't know about at page load (one just assigned to a
+// newly created route) — same DeviceSimulator/positionHistory machinery every other truck already
+// goes through, just triggered later instead of at module load.
+function registerDriverSimulator(truck) {
+  if (driverSimulators[truck.id]) return;
+  const simulator = new DeviceSimulator(truck.id);
+  simulator.index = truck.positionIndex ?? 0;
+  driverSimulators[truck.id] = simulator;
+  if (!trucksWithRoute.some((item) => item.id === truck.id)) trucksWithRoute.push(truck);
+  positionHistory.record(simulator.start());
+  const select = $('#driverVehicleSelect');
+  if (select) select.innerHTML = trucksWithRoute.map((item) => `<option value="${item.id}" ${item.id === driverVehicleId ? 'selected' : ''}>${item.unit}</option>`).join('');
+}
+
+function initCreateRouteMap() {
+  loadLeaflet().then((L) => {
+    createRouteMapReady = true;
+    createRouteMap = L.map('createRouteMap', { zoomControl: false, attributionControl: false }).setView(pilotMunicipality.center, pilotMunicipality.zoom);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(createRouteMap);
+    // Free clicks only — no snapping to real streets/routing network, by design (out of scope).
+    createRouteMap.on('click', (event) => { drawnRoutePoints.push([event.latlng.lat, event.latlng.lng]); redrawCreateRouteTrace(); });
+  }).catch(() => { const el = $('#createRouteMap'); if (el) { el.classList.add('fallback-active'); el.innerHTML = '<div class="map-fallback"><strong>Mapa externo no disponible.</strong></div>'; } });
+}
+function redrawCreateRouteTrace() {
+  if (!createRouteMapReady) return;
+  const L = window.L;
+  if (createRoutePolyline) createRoutePolyline.remove();
+  createRoutePolyline = drawnRoutePoints.length > 1 ? L.polyline(drawnRoutePoints, { color: '#155eef', weight: 4 }).addTo(createRouteMap) : null;
+  createRouteMarkers.forEach((marker) => marker.remove());
+  createRouteMarkers = drawnRoutePoints.map((point, index) => L.circleMarker(point, { radius: 5, color: '#155eef', fillColor: '#155eef', fillOpacity: .9 }).bindTooltip(`Punto ${index + 1}`).addTo(createRouteMap));
+  const status = $('#createRouteStatus');
+  if (status) status.textContent = `${drawnRoutePoints.length} punto(s) trazado(s).`;
+}
+function undoLastRoutePoint() { drawnRoutePoints.pop(); redrawCreateRouteTrace(); }
+// (a) createRoute() for the metadata, (b) persist the drawn geometry (route_paths), (c)
+// generateRouteStopPoints()/saveRouteStops() — the exact same SW-025/026 functions used for the
+// bundled demo routes, not reimplemented — over the freshly drawn path, so the new route gets
+// collection points automatically. routePaths[routeId] = path is what actually plugs the new route
+// into DeviceSimulator/routePosition/drawMapLayers/drawDriverPositions: they all read routePaths
+// directly and don't otherwise know or care whether a route is one of the 5 bundled demo ones.
+function finishCreateRoute() {
+  const status = $('#createRouteStatus');
+  const nameInput = $('#createRouteName');
+  const name = nameInput?.value.trim();
+  if (!name) { if (status) status.textContent = 'Ingresa un nombre para la ruta.'; return; }
+  if (drawnRoutePoints.length < 2) { if (status) status.textContent = 'Traza al menos 2 puntos en el mapa.'; return; }
+
+  const routeId = `route-custom-${Date.now().toString(36)}`;
+  const path = drawnRoutePoints.slice();
+  const stopPoints = generateRouteStopPoints(path);
+  const distanceMeters = path.slice(1).reduce((total, point, index) => total + haversineMeters(path[index], point), 0);
+
+  operationsAdapter.createRoute({ id: routeId, name, municipality_id: pilotMunicipality.id, sectors: ['Ruta personalizada'], sector: 'Ruta personalizada' });
+  routePaths[routeId] = path;
+  operationsAdapter.savePathPoints(routeId, path.map(([latitude, longitude], index) => ({ sequence: index + 1, latitude, longitude })));
+  operationsAdapter.saveRouteStops(routeId, stopPoints);
+
+  routes.push({
+    id: routeId, name, status: 'planned', sectors: ['Ruta personalizada'], sector: 'Ruta personalizada',
+    truckId: 'Sin asignar', driverId: null, progress: 0, scheduled: '—', started: 'Pendiente', eta: '—',
+    distanceKm: Math.round((distanceMeters / 1000) * 10) / 10, estimatedMinutes: '—',
+    stops: stopPoints.length, covered: 0, pending: stopPoints.length, incidents: []
+  });
+
+  const vehicleSelect = $('#createRouteVehicle');
+  const vehicleId = vehicleSelect?.value;
+  if (vehicleId) {
+    const truck = trucks.find((item) => item.id === vehicleId);
+    if (truck) {
+      operationsAdapter.assignVehicle(routeId, vehicleId);
+      truck.routeId = routeId; truck.state = 'active'; truck.positionIndex = 0; truck.progress = 0; truck.sector = 'Ruta personalizada'; truck.updatedAt = 'Recién asignado';
+      simState[truck.id] = { index: 0, progress: 0 };
+      registerDriverSimulator(truck);
+    }
+  }
+
+  drawnRoutePoints = [];
+  redrawCreateRouteTrace();
+  if (nameInput) nameInput.value = '';
+  if (vehicleSelect) vehicleSelect.innerHTML = `<option value="">Sin vehículo asignado (asignar después)</option>${trucks.filter((truck) => !truck.routeId).map((truck) => `<option value="${truck.id}">${truck.unit}</option>`).join('')}`;
+  $('#routeList').innerHTML = renderRoutes(routes);
+  if (mapReady) drawMapLayers();
+  if (status) status.textContent = `Ruta "${name}" creada con ${stopPoints.length} puntos de recolección.`;
+}
+
 function drawerContent(content) { return `<button class="drawer-close" data-close-detail aria-label="Cerrar detalle">✕ Cerrar</button><div class="drawer-scroll">${content}</div>`; }
 function openDetail(content) { const detail = $('#detail'); detail.innerHTML = drawerContent(content); detail.classList.remove('is-hidden'); detail.setAttribute('aria-hidden', 'false'); }
 function closeDetail() { const detail = $('#detail'); detail.classList.add('is-hidden'); detail.setAttribute('aria-hidden', 'true'); detail.innerHTML = ''; selectedTruckId = null; selectedRouteId = null; selectedIncidentId = null; }
@@ -331,6 +444,9 @@ function resetSimulation() { pauseSimulation(); trucks.forEach((truck) => { cons
 
 document.addEventListener('click', (event) => {
   if (event.target.matches('[data-close-detail]')) { closeDetail(); return; }
+  const createRouteAction = event.target.closest('[data-create-route]')?.dataset.createRoute;
+  if (createRouteAction === 'undo') undoLastRoutePoint();
+  if (createRouteAction === 'finish') finishCreateRoute();
   const truckButton = event.target.closest('[data-truck]'); if (truckButton) selectTruck(truckButton.dataset.truck);
   const routeButton = event.target.closest('[data-route]'); if (routeButton?.dataset.route) selectRoute(routeButton.dataset.route);
   const incidentButton = event.target.closest('[data-incident]'); if (incidentButton) selectIncident(incidentButton.dataset.incident);
@@ -360,6 +476,7 @@ function requestGeolocation() { const target = $('#geoStatus'); if (!navigator.g
 initMap();
 initDriverMap();
 initDriverPolling();
+initCreateRouteMap();
 // No-ops entirely (leaves every section visible, same as before this line existed) unless the
 // page sets window.SMARTWASTE_SUPABASE_CONFIG — see frontend/auth-gate.js and CLAUDE.md rule 5.
 initAuthGate();

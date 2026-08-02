@@ -13,9 +13,10 @@ const fail = (code, message, meta = {}) => ({ ok: false, error: { code, message 
 const table = (client, name) => client.from(name);
 
 const clone = (value) => structuredClone(value);
-export function createDemoOperationsAdapter(seed = { trucks, routes, drivers, incidents, routeStops: [] }) {
+export function createDemoOperationsAdapter(seed = { trucks, routes, drivers, incidents, routeStops: [], routePaths: [] }) {
   const state = clone(seed);
   if (!state.routeStops) state.routeStops = [];
+  if (!state.routePaths) state.routePaths = [];
   return {
     mode: 'DEMO_ONLY',
     listVehicles: () => clone(state.trucks),
@@ -23,7 +24,7 @@ export function createDemoOperationsAdapter(seed = { trucks, routes, drivers, in
     getVehicle: (id) => clone(state.trucks.find((v) => v.id === id) ?? null),
     listRoutes: () => clone(state.routes),
     getRoute: (id) => clone(state.routes.find((r) => r.id === id) ?? null),
-    createRoute: (route) => { const created = { status:'planned', progress:0, incidents:[], ...route }; state.routes.push(created); return clone(created); },
+    createRoute: (route) => { const created = { id: route.id ?? `demo-route-${state.routes.length + 1}-${Date.now().toString(36)}`, status:'planned', progress:0, incidents:[], ...route }; state.routes.push(created); return clone(created); },
     // Points already carry `sequence` (see shared/route-engine.js's generateRouteStopPoints()) —
     // this just stamps them with route_id and an id, same shape a real route_stops row would have.
     saveRouteStops: (routeId, points) => {
@@ -32,6 +33,15 @@ export function createDemoOperationsAdapter(seed = { trucks, routes, drivers, in
       return clone(saved);
     },
     listRouteStops: (routeId) => clone(state.routeStops.filter((stop) => stop.route_id === routeId).sort((a, b) => a.sequence - b.sequence)),
+    // SW-027: persists a route's drawn geometry (route_paths) — same shape/pattern as
+    // saveRouteStops/listRouteStops above, just for the raw drawn line instead of derived
+    // collection points.
+    savePathPoints: (routeId, points) => {
+      const saved = points.map((point, index) => ({ id: `demo-path-${routeId}-${state.routePaths.length + index + 1}`, route_id: routeId, ...point }));
+      state.routePaths.push(...saved);
+      return clone(saved);
+    },
+    listPathPoints: (routeId) => clone(state.routePaths.filter((point) => point.route_id === routeId).sort((a, b) => a.sequence - b.sequence)),
     assignVehicle: (routeId, vehicleId) => updateRoute(state, routeId, { truckId: vehicleId, status:'assigned' }),
     assignDriver: (routeId, driverId) => updateRoute(state, routeId, { driverId, status:'assigned' }),
     startRoute: (routeId) => transitionRoute(state, routeId, 'started'),
@@ -138,7 +148,26 @@ export function createSupabaseOperationsAdapter(client, { fallback = createDemoO
         ? positionsResult.data.filter((position) => position.vehicle_id === vehicleId).sort((a, b) => Date.parse(a.captured_at) - Date.parse(b.captured_at))
         : [];
       return ok(stopsResult.data.map((stop) => ({ ...stop, status: deriveStopStatus(stop, vehiclePositions) })), opts);
-    }
+    },
+    // SW-027: persists a route's drawn geometry (route_paths) — same pattern as
+    // saveRouteStops/listRouteStops above, just for the raw drawn line instead of derived
+    // collection points.
+    savePathPoints: (routeId, points, opts = {}) => run(
+      () => table(client, 'route_paths').insert(points.map((point) => ({
+        route_id: routeId,
+        municipality_id: municipality_id,
+        sequence: point.sequence,
+        latitude: point.latitude,
+        longitude: point.longitude
+      }))).select('*'),
+      () => fallback.savePathPoints(routeId, points),
+      opts.correlation_id
+    ),
+    listPathPoints: (routeId, opts = {}) => run(
+      () => scoped(table(client, 'route_paths').select('*')).eq('route_id', routeId).order('sequence'),
+      () => fallback.listPathPoints(routeId),
+      opts.correlation_id
+    )
   };
 }
 
