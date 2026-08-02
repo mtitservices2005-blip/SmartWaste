@@ -198,8 +198,23 @@ function renderTruckDetail(truck) {
 
 function renderRouteDetail(route) {
   const relatedIncidents = incidents.filter((incident) => route.incidents.includes(incident.code));
+  // Closing the crear->asignar->seguimiento->cerrar loop needed two actions that had no UI
+  // anywhere: assigning a vehicle AFTER a route was created without one (only possible at creation
+  // time before this, via "Crear ruta"'s own select), and marking a route completed (the simulation
+  // tick caps progress at 99 — see startSimulation() — so nothing ever pushed a route into
+  // Supervisor's "pendientes de verificación" queue without this).
+  const availableTrucks = trucks.filter((truck) => !truck.routeId);
+  const assignAction = (!route.truckId || route.truckId === 'Sin asignar')
+    ? (availableTrucks.length
+      ? `<div class="controls"><select id="assignVehicleSelect">${availableTrucks.map((truck) => `<option value="${truck.id}">${truck.unit}</option>`).join('')}</select><button type="button" data-assign-vehicle="${route.id}">Asignar vehículo</button></div>`
+      : '<p class="demo">No hay vehículos disponibles para asignar — registra uno en Municipal · Flota y personal.</p>')
+    : '';
+  const completeAction = (route.truckId && route.truckId !== 'Sin asignar' && route.status !== 'completed' && route.status !== 'verified')
+    ? `<div class="controls"><button type="button" data-complete-route="${route.id}">Marcar como completada</button></div>`
+    : '';
   return `<div class="drawer-head"><p class="eyebrow">Detalle de ruta</p><h2>${route.name}</h2>${pill(routeStatus(route))}</div>
     <div class="detail-grid"><p><b>Unidad asignada</b><span>${route.truckId}</span></p><p><b>Conductor</b><span>${driverName(route.driverId)}</span></p><p><b>Sectores</b><span>${route.sectors.join(', ')}</span></p><p><b>Inicio</b><span>${route.started}</span></p><p><b>Programada</b><span>${route.scheduled}</span></p><p><b>Tiempo estimado</b><span>${route.estimatedMinutes} min</span></p><p><b>Distancia demo</b><span>${route.distanceKm} km</span></p><p><b>Paradas</b><span>${route.covered} completadas · ${route.pending} pendientes</span></p></div>
+    ${assignAction}${completeAction}
     ${progress(route.progress)}<p><strong>${route.progress}%</strong> completado</p><h3>Incidencias</h3>${relatedIncidents.map((incident) => `<button class="incident-row" data-incident="${incident.code}">${incident.type} · ${incident.status}</button>`).join('') || '<p>Sin incidencias demo.</p>'}
     <h3>Timeline operativo</h3><div class="timeline">${routeFlow.map((step) => `<p>${step === route.status ? '●' : '○'} ${label(step)}</p>`).join('')}</div>`;
 }
@@ -543,6 +558,55 @@ function registerDriverSimulator(truck) {
   const select = $('#driverVehicleSelect');
   if (select) select.innerHTML = trucksWithRoute.map((item) => `<option value="${item.id}" ${item.id === driverVehicleId ? 'selected' : ''}>${item.unit}</option>`).join('');
 }
+// Single place that assigns a vehicle to a route — used both by finishCreateRoute() (assignment at
+// creation time) and assignVehicleToExistingRoute() (below, for a route created without one). Fixes
+// a real bug found while adding the latter: route.truckId was never actually set on assignment
+// (only truck.routeId was), so the detail panel always showed "Sin asignar" even for routes
+// assigned at creation.
+async function assignTruckToRoute(route, truck) {
+  operationsAdapter.assignVehicle(route.id, truck.id);
+  route.truckId = truck.unit;
+  if (route.status === 'planned') route.status = 'assigned';
+  truck.routeId = route.id; truck.state = 'active'; truck.positionIndex = 0; truck.progress = 0; truck.sector = route.sector ?? truck.sector; truck.updatedAt = 'Recién asignado';
+  simState[truck.id] = { index: 0, progress: 0 };
+  registerDriverSimulator(truck);
+  if (truck.real_id) {
+    const realRouteId = route.real_id ?? route.id;
+    await mirrorToRealAdapter(realAdapter?.assignVehicle(realRouteId, truck.real_id));
+  }
+}
+// Triggered from renderRouteDetail()'s "Asignar vehículo" action (route created without one).
+async function assignVehicleToExistingRoute(routeId, vehicleId) {
+  const route = routeById(routeId);
+  const truck = trucks.find((item) => item.id === vehicleId);
+  if (!route || !truck) return;
+  await assignTruckToRoute(route, truck);
+  selectRoute(routeId); // re-render the detail panel so it reflects the new assignment immediately
+  $('#routeList').innerHTML = renderRoutes(routes);
+  refreshFleetSelects();
+}
+// Triggered from renderRouteDetail()'s "Marcar como completada" action — startSimulation()'s tick
+// caps progress at 99 (Math.min(99, ...)), so nothing else ever transitions a route to 'completed';
+// without this, a route could run in the demo forever and never reach Supervisor's verification
+// queue (renderSupervisor()'s pendingVerification list, gated on status === 'completed').
+async function completeRouteManually(routeId) {
+  const route = routeById(routeId);
+  if (!route) return;
+  route.status = 'completed'; route.progress = 100;
+  operationsAdapter.completeRoute(routeId);
+  const truck = trucks.find((item) => item.routeId === routeId);
+  if (truck) { truck.state = 'completed'; truck.progress = 100; }
+  selectRoute(routeId);
+  $('#routeList').innerHTML = renderRoutes(routes);
+  // Supervisor's "pendientes de verificación" queue is only re-rendered on demand (same as the
+  // existing verify/resolve-incident handlers do) — without this it stays stale showing whatever
+  // was true when #supervisor was last rendered, even though route.status just changed above.
+  $('#supervisor').outerHTML = renderSupervisor();
+  if (realAdapter) {
+    const realRouteId = route.real_id ?? routeId;
+    await mirrorToRealAdapter(realAdapter.completeRoute(realRouteId));
+  }
+}
 
 function initCreateRouteMap() {
   loadLeaflet().then((L) => {
@@ -655,33 +719,29 @@ async function finishCreateRoute() {
   operationsAdapter.savePathPoints(routeId, path.map(([latitude, longitude], index) => ({ sequence: index + 1, latitude, longitude })));
   operationsAdapter.saveRouteStops(routeId, stopPoints);
 
-  routes.push({
+  const newRoute = {
     id: routeId, name, status: 'planned', sectors: ['Ruta personalizada'], sector: 'Ruta personalizada',
     truckId: 'Sin asignar', driverId: null, progress: 0, scheduled: '—', started: 'Pendiente', eta: '—',
     distanceKm: Math.round((distanceMeters / 1000) * 10) / 10, estimatedMinutes: '—',
     stops: stopPoints.length, covered: 0, pending: stopPoints.length, incidents: []
-  });
+  };
+  routes.push(newRoute);
   // Codex review on PR #32: initialRouteProgress was captured once at module load from the original
   // demo routes, so resetSimulation() silently skipped any route created afterward through here —
   // its truck reset to 0% but the route itself kept whatever progress the simulation had reached.
   initialRouteProgress[routeId] = 0;
 
-  if (truck) {
-    operationsAdapter.assignVehicle(routeId, vehicleId);
-    truck.routeId = routeId; truck.state = 'active'; truck.positionIndex = 0; truck.progress = 0; truck.sector = 'Ruta personalizada'; truck.updatedAt = 'Recién asignado';
-    simState[truck.id] = { index: 0, progress: 0 };
-    registerDriverSimulator(truck);
-  }
-
-  // Real route/vehicle ids never match their demo counterparts (see createVehicleFromForm/
-  // createDriverFromForm above) — createRoute must resolve first so the real route id is known
-  // before mirroring the geometry/stops/assignment that reference it.
+  // Real route ids never match their demo counterparts (see createVehicleFromForm/
+  // createDriverFromForm above) — resolve this first so real_id is already on newRoute by the time
+  // assignTruckToRoute() (below) needs it to mirror the assignment too.
   const realRoute = await mirrorToRealAdapter(realAdapter?.createRoute({ name }), status);
   if (realRoute) {
+    newRoute.real_id = realRoute.id;
     await mirrorToRealAdapter(realAdapter.savePathPoints(realRoute.id, path.map(([latitude, longitude], index) => ({ sequence: index + 1, latitude, longitude }))), status);
     await mirrorToRealAdapter(realAdapter.saveRouteStops(realRoute.id, stopPoints), status);
-    if (truck?.real_id) await mirrorToRealAdapter(realAdapter.assignVehicle(realRoute.id, truck.real_id), status);
   }
+
+  if (truck) await assignTruckToRoute(newRoute, truck);
 
   drawnRoutePoints = [];
   redrawCreateRouteTrace();
@@ -726,6 +786,10 @@ document.addEventListener('click', (event) => {
   const incidentButton = event.target.closest('[data-incident]'); if (incidentButton) { selectIncident(incidentButton.dataset.incident); goToMapTab(); }
   const verifyButton = event.target.closest('[data-verify-route]');
   if (verifyButton) { const route = routeById(verifyButton.dataset.verifyRoute); if (route) { route.status = 'verified'; $('#supervisor').outerHTML = renderSupervisor(); } }
+  const assignVehicleButton = event.target.closest('[data-assign-vehicle]');
+  if (assignVehicleButton) { const vehicleId = $('#assignVehicleSelect')?.value; if (vehicleId) assignVehicleToExistingRoute(assignVehicleButton.dataset.assignVehicle, vehicleId); }
+  const completeRouteButton = event.target.closest('[data-complete-route]');
+  if (completeRouteButton) completeRouteManually(completeRouteButton.dataset.completeRoute);
   const resolveButton = event.target.closest('[data-resolve-incident]');
   if (resolveButton) { const incident = incidents.find((item) => item.code === resolveButton.dataset.resolveIncident); if (incident) { incident.status = 'Cerrada'; $('#supervisor').outerHTML = renderSupervisor(); } }
   const onboardButton = event.target.closest('[data-onboarding]');
