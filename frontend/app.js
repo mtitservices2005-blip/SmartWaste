@@ -474,6 +474,10 @@ function finishCreateRoute() {
     distanceKm: Math.round((distanceMeters / 1000) * 10) / 10, estimatedMinutes: '—',
     stops: stopPoints.length, covered: 0, pending: stopPoints.length, incidents: []
   });
+  // Codex review on PR #32: initialRouteProgress was captured once at module load from the original
+  // demo routes, so resetSimulation() silently skipped any route created afterward through here —
+  // its truck reset to 0% but the route itself kept whatever progress the simulation had reached.
+  initialRouteProgress[routeId] = 0;
 
   const vehicleSelect = $('#createRouteVehicle');
   const vehicleId = vehicleSelect?.value;
