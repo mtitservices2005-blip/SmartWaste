@@ -6,6 +6,11 @@
 -- persist.
 alter table route_runs add column if not exists progress integer not null default 0;
 
+-- Any route_run that already reached completed/verified before this column existed must not read
+-- back as 0% done — that contradicts the adapter's own completion semantics (completeRoute sets
+-- progress to 100, see shared/operations-adapter.js) and would corrupt historical reporting.
+update route_runs set progress = 100 where status in ('completed', 'verified') and progress <> 100;
+
 do $$
 begin
   if not exists (select 1 from pg_constraint where conname = 'route_runs_progress_range') then
