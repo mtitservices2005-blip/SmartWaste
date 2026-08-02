@@ -41,6 +41,14 @@ export function readSupabaseConfig(win = typeof window !== 'undefined' ? window 
   return { url: config.url, anonKey: config.anonKey };
 }
 
+// SW-032: the client initAuthGate() creates below is what carries the signed-in session (JWT) —
+// features added later that need to call an Edge Function as the logged-in user (e.g. the "Crear
+// cuenta de acceso" button) reuse this exact client instead of standing up a second one, so there
+// is only ever one source of truth for "am I signed in right now". null until initAuthGate() has
+// actually run and resolved a config (mirrors this file's opt-in-only behavior).
+let authClient = null;
+export function getAuthClient() { return authClient; }
+
 function applySectionVisibility(visibleIds, sections = SECTION_ROLES) {
   Object.keys(sections).forEach((id) => {
     const section = document.getElementById(id);
@@ -79,6 +87,7 @@ export async function initAuthGate() {
 
   const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2.45.0');
   const client = createClient(config.url, config.anonKey);
+  authClient = client;
   const identity = createIdentityProvider(client);
 
   async function tryResolve() {
