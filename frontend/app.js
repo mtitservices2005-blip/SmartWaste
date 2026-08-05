@@ -816,6 +816,41 @@ initMap();
 initDriverMap();
 initDriverPolling();
 initCreateRouteMap();
+// SW-035 fase A: pulls vehicles/drivers that already existed in Supabase before this page loaded
+// and appends them to trucks/drivers — additive, never replaces/clears those arrays, so
+// simState/driverSimulators/trucksWithRoute (all derived once from trucks/routes at module load,
+// see the comment on `let realAdapter` near the top of this file) stay exactly as valid as they
+// were before. A hydrated vehicle/driver has no route yet (routeId: null), so none of that
+// derived simulation state needs to know about it at all — it only needs to render in lists and
+// selects, same shape createVehicleFromForm()/createDriverFromForm() already build for a
+// freshly-created one, with `real_id` set to the row's actual Supabase id (idempotency key, and
+// what assignVehicleToExistingRoute()/createDriverAccount() already use to reach the real row).
+// Route hydration (with real vehicle/driver assignment and progress from route_runs) is a separate,
+// larger follow-up (fase B, docs/TECHNICAL_DEBT_REGISTER.md item 17) — not attempted here.
+async function hydrateVehiclesAndDrivers() {
+  if (!realAdapter) return;
+  const vehiclesResult = await realAdapter.listVehicles();
+  if (vehiclesResult.ok) {
+    vehiclesResult.data.forEach((row) => {
+      if (trucks.some((truck) => truck.real_id === row.id)) return;
+      trucks.push({
+        id: row.id, real_id: row.id, unit: row.code, name: row.code, plate: row.plate ?? '',
+        state: row.state ?? 'offline', driverId: null, routeId: null, progress: 0, speedKmh: 0,
+        updatedAt: 'Sincronizado desde Supabase', sector: 'Sin asignar', nextStop: 'Sin asignar',
+        loadLevel: 0, positionIndex: 0, max_stops: row.max_stops
+      });
+    });
+  }
+  const driversResult = await realAdapter.listDrivers();
+  if (driversResult.ok) {
+    const DRIVER_STATUS_LABELS = { available: 'Disponible', assigned: 'Asignado', off_duty: 'Fuera de turno', suspended: 'Suspendido' };
+    driversResult.data.forEach((row) => {
+      if (drivers.some((driver) => driver.real_id === row.id)) return;
+      drivers.push({ id: row.id, real_id: row.id, name: row.display_name, phone: '', status: DRIVER_STATUS_LABELS[row.status] ?? row.status, profile_id: row.profile_id ?? null });
+    });
+  }
+  refreshFleetSelects();
+}
 // SW-034: once a real session resolves (municipality_id known), builds the real adapter that
 // createVehicleFromForm/createDriverFromForm/finishCreateRoute mirror their writes to. Patches only
 // the "fuente desacoplada" label directly (not a full section re-render) so the already-initialized
@@ -827,6 +862,7 @@ async function bootstrapRealBackend(ctx) {
   backendMode = realAdapter.mode;
   const sourceLabel = document.querySelector('.sim-controls span');
   if (sourceLabel) sourceLabel.textContent = `${simulationNotice} · fuente desacoplada: ${backendMode}`;
+  await hydrateVehiclesAndDrivers();
 }
 // No-ops entirely (leaves every section visible, same as before this line existed) unless the
 // page sets window.SMARTWASTE_SUPABASE_CONFIG — see frontend/auth-gate.js and CLAUDE.md rule 5.
