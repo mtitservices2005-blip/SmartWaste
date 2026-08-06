@@ -29,10 +29,24 @@ export function suggestReoptimizedOrder(currentPosition, pendingStops, { fixedSt
   const currentDistanceMeters = pairwiseDistance(waypoints);
   const optimizedWaypoints = optimizeWaypointOrder(waypoints, { fixedStart });
   const optimizedDistanceMeters = pairwiseDistance(optimizedWaypoints);
+  // The nearest-neighbor + 2-opt heuristic in optimizeWaypointOrder() only ever improves on its
+  // own nearest-neighbor seed — it never compares against the original input order, so it can
+  // still land on a result that's worse than what the dispatcher already has (Codex review on
+  // PR #46). Never suggest a longer route than the current one: fall back to the existing order.
+  if (optimizedDistanceMeters >= currentDistanceMeters) {
+    return { order: pendingStops.slice(), currentDistanceMeters, optimizedDistanceMeters: currentDistanceMeters, savedMeters: 0 };
+  }
   // optimizeWaypointOrder() returns coordinates, not the original stop objects — match each
-  // optimized coordinate back to its stop by lat/lng (unique per stop in practice; a route never
-  // has two collection points at the exact same coordinate).
-  const byCoordinate = new Map(pendingStops.map((stop) => [`${stop.latitude},${stop.longitude}`, stop]));
-  const order = optimizedWaypoints.slice(1).map((point) => byCoordinate.get(`${point[0]},${point[1]}`));
+  // optimized coordinate back to its stop by lat/lng. A route can legitimately visit the same
+  // coordinate more than once (e.g. returning to the depot) — a plain coordinate->stop Map would
+  // collapse those into one stop and silently drop another (Codex review on PR #46), so queue
+  // same-coordinate stops and consume them in order instead.
+  const byCoordinate = new Map();
+  pendingStops.forEach((stop) => {
+    const key = `${stop.latitude},${stop.longitude}`;
+    if (!byCoordinate.has(key)) byCoordinate.set(key, []);
+    byCoordinate.get(key).push(stop);
+  });
+  const order = optimizedWaypoints.slice(1).map((point) => byCoordinate.get(`${point[0]},${point[1]}`).shift());
   return { order, currentDistanceMeters, optimizedDistanceMeters, savedMeters: currentDistanceMeters - optimizedDistanceMeters };
 }

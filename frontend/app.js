@@ -681,9 +681,16 @@ function previewRouteReoptimization(routeId) {
   const route = routeById(routeId);
   const truck = trucks.find((item) => item.routeId === routeId);
   if (!route || !truck) return;
-  const stops = operationsAdapter.listRouteStops(routeId);
-  const doneCount = Math.floor(stops.length * (route.progress ?? 0) / 100);
-  const pendingStops = stops.slice(doneCount);
+  // Codex review on PR #46: this used to approximate "pending" as the tail of the sequence-ordered
+  // stop list beyond route.progress% — route.progress can disagree with which stops were actually
+  // collected, so that slice could exclude uncollected stops or include already-collected ones.
+  // Use the same real per-stop status the driver view already derives (drawDriverPositions(),
+  // above) from positionHistory/deriveStopStatus() instead — populated for every truck with a
+  // route (registerDriverSimulator(), called both at module init and for hydrated real routes),
+  // not just the one currently shown in the driver view.
+  const trail = positionHistory.listPositions(truck.id);
+  const stops = operationsAdapter.listRouteStops(routeId).map((stop) => ({ ...stop, status: deriveStopStatus(stop, trail) }));
+  const pendingStops = stops.filter((stop) => stop.status !== 'recolectado');
   // Same pattern drawMapLayers() (above) uses for a truck's live marker position — truck.positionIndex
   // itself is never updated by the simulation tick, only simState[truck.id].index is.
   const currentPosition = routePosition({ ...truck, positionIndex: simState[truck.id]?.index ?? truck.positionIndex });
