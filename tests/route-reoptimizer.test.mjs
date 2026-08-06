@@ -40,4 +40,38 @@ const stopsBefore = zigzagStops.map((s) => ({ ...s }));
 suggestReoptimizedOrder(truckPosition, zigzagStops);
 assert.deepEqual(zigzagStops, stopsBefore, 'input stops must not be mutated');
 
+// 5. Codex review on PR #46, finding 1: a route can legitimately visit the same coordinate more
+// than once (e.g. a closed loop returning to the depot). A naive coordinate->stop Map collapses
+// duplicate-coordinate stops into one, silently dropping another and duplicating the first in the
+// suggested order. All distinct stop objects must survive, by id, none lost or duplicated.
+const depotCoordinate = [19.605, -71.00];
+const closedLoopStops = [
+  makeStop('mid', 19.61, -71.00),
+  makeStop('far', 19.65, -71.00),
+  makeStop('return', depotCoordinate[0], depotCoordinate[1])
+];
+// A second stop that happens to share the "return" stop's exact coordinate — the scenario Codex
+// flagged (a real route can have two distinct collection points, or a return-to-depot leg, at the
+// same lat/lng as another stop).
+closedLoopStops.push(makeStop('return-2', depotCoordinate[0], depotCoordinate[1]));
+const closedLoopResult = suggestReoptimizedOrder(truckPosition, closedLoopStops);
+assert.equal(closedLoopResult.order.length, closedLoopStops.length, 'no stop lost or duplicated when coordinates collide');
+assert.deepEqual(closedLoopResult.order.map((s) => s.id).sort(), closedLoopStops.map((s) => s.id).sort(), 'every distinct stop id must appear exactly once, even with duplicate coordinates');
+
+// 6. Codex review on PR #46, finding 3: the heuristic only ever improves on its own
+// nearest-neighbor seed and never compares against the original order, so it can converge on a
+// result longer than what the dispatcher already has. Across a spread of synthetic layouts
+// (including ones prone to bad local optima — clustered points, near-duplicate coordinates),
+// savedMeters must never be negative: a suggestion must never be a step backward.
+const stressLayouts = [
+  [makeStop(1, 19.61, -71.00), makeStop(2, 19.611, -71.001), makeStop(3, 19.612, -71.002), makeStop(4, 19.60, -70.99)],
+  [makeStop(1, 19.60, -71.00), makeStop(2, 19.60, -71.00), makeStop(3, 19.65, -71.05), makeStop(4, 19.60001, -71.00001)],
+  [makeStop(1, 19.70, -71.20), makeStop(2, 19.30, -70.80), makeStop(3, 19.55, -71.10), makeStop(4, 19.45, -70.95), makeStop(5, 19.62, -71.02)]
+];
+for (const stops of stressLayouts) {
+  const result = suggestReoptimizedOrder(truckPosition, stops);
+  assert.ok(result.savedMeters >= -1e-6, 'a suggestion must never be longer than the current order');
+  assert.deepEqual(result.order.map((s) => s.id).sort(), stops.map((s) => s.id).sort(), 'the fallback-to-original path must still return every stop exactly once');
+}
+
 console.log('route-reoptimizer ok');
