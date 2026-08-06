@@ -62,7 +62,10 @@ const simState = Object.fromEntries(trucks.map((truck) => [truck.id, { index: tr
 const trucksWithRoute = trucks.filter((truck) => truck.routeId);
 const positionHistory = createDemoPositionHistory();
 const driverSimulators = Object.fromEntries(trucksWithRoute.map((truck) => {
-  const simulator = new DeviceSimulator(truck.id);
+  // getPath is called lazily (only once emit()/start() actually runs, well after the route_paths
+  // seeding block below completes) — see shared/telemetry-simulator.js's DeviceSimulator for why
+  // this replaces the old routePaths[routeId] runtime-mutation coupling (item 16).
+  const simulator = new DeviceSimulator(truck.id, { getPath: () => routeGeometry(truck.routeId) });
   simulator.index = truck.positionIndex ?? 0; // start the trail aligned with the truck's current demo progress
   return [truck.id, simulator];
 }));
@@ -560,7 +563,7 @@ function initDriverPolling() {
 // goes through, just triggered later instead of at module load.
 function registerDriverSimulator(truck) {
   if (driverSimulators[truck.id]) return;
-  const simulator = new DeviceSimulator(truck.id);
+  const simulator = new DeviceSimulator(truck.id, { getPath: () => routeGeometry(truck.routeId) });
   simulator.index = truck.positionIndex ?? 0;
   driverSimulators[truck.id] = simulator;
   if (!trucksWithRoute.some((item) => item.id === truck.id)) trucksWithRoute.push(truck);
@@ -716,16 +719,11 @@ async function finishCreateRoute() {
   const truck = vehicleId ? trucks.find((item) => item.id === vehicleId) : null;
 
   operationsAdapter.createRoute({ id: routeId, name, municipality_id: pilotMunicipality.id, sectors: ['Ruta personalizada'], sector: 'Ruta personalizada' });
-  // SW-033: every consumer IN THIS FILE now reads geometry via routeGeometry()/
-  // operationsAdapter.listPathPoints() (module init, above), not this dictionary — savePathPoints()
-  // below is what actually makes those work for a drawn route. This mutation stays only because
-  // shared/telemetry-simulator.js's DeviceSimulator.emit() independently reads routePaths[routeId]
-  // directly (by design — that module is adapter-agnostic and doesn't know operationsAdapter
-  // exists); dropping this line would leave a driver assigned to a freshly drawn route emitting
-  // telemetry stuck at a single fallback point instead of animating along the trace. Fixing that
-  // properly means teaching DeviceSimulator to accept its path explicitly instead of reaching into
-  // this global — out of scope here, tracked as a follow-up in docs/TECHNICAL_DEBT_REGISTER.md.
-  routePaths[routeId] = path;
+  // SW-033/item 16 (resolved): every consumer in this file reads geometry via routeGeometry()/
+  // operationsAdapter.listPathPoints() — savePathPoints() below is what makes that work for a drawn
+  // route. DeviceSimulator no longer needs a routePaths[routeId] runtime mutation either — it now
+  // takes its path lazily via the getPath option (see registerDriverSimulator()/module-init above),
+  // so this dictionary is never touched for hand-drawn routes at all anymore.
   operationsAdapter.savePathPoints(routeId, path.map(([latitude, longitude], index) => ({ sequence: index + 1, latitude, longitude })));
   operationsAdapter.saveRouteStops(routeId, stopPoints);
 
@@ -777,7 +775,7 @@ function closeDetail() { const detail = $('#detail'); detail.classList.add('is-h
 function selectTruck(id) { selectedTruckId = id; selectedRouteId = null; selectedIncidentId = null; const truck = trucks.find((item) => item.id === id); openDetail(renderTruckDetail(truck)); drawMapLayers(); markSelection(); }
 function selectRoute(id) { selectedRouteId = id; selectedTruckId = null; selectedIncidentId = null; const route = routeById(id); openDetail(renderRouteDetail(route)); drawMapLayers(); markSelection(); }
 function selectIncident(code) { selectedIncidentId = code; selectedTruckId = null; selectedRouteId = null; const incident = incidents.find((item) => item.code === code); openDetail(renderIncidentDetail(incident)); drawMapLayers(); markSelection(); }
-function startSimulation() { if (simulationTimer) return; simulationTimer = setInterval(() => { trucks.filter((truck) => truck.routeId && truck.state !== 'offline' && truck.state !== 'completed').forEach((truck) => { const path = routePaths[truck.routeId]; simState[truck.id].index = (simState[truck.id].index + 1) % path.length; simState[truck.id].progress = Math.min(99, simState[truck.id].progress + 3); truck.progress = simState[truck.id].progress; truck.updatedAt = 'Ahora (simulación)'; truck.sector = routeById(truck.routeId)?.sector ?? truck.sector; const route = routeById(truck.routeId); if (route) route.progress = truck.progress; }); drawMapLayers(); if (selectedTruckId) selectTruck(selectedTruckId); if (selectedRouteId) selectRoute(selectedRouteId); if (selectedIncidentId) selectIncident(selectedIncidentId); }, 1800 / simulationSpeed); }
+function startSimulation() { if (simulationTimer) return; simulationTimer = setInterval(() => { trucks.filter((truck) => truck.routeId && truck.state !== 'offline' && truck.state !== 'completed').forEach((truck) => { const path = routeGeometry(truck.routeId); simState[truck.id].index = (simState[truck.id].index + 1) % path.length; simState[truck.id].progress = Math.min(99, simState[truck.id].progress + 3); truck.progress = simState[truck.id].progress; truck.updatedAt = 'Ahora (simulación)'; truck.sector = routeById(truck.routeId)?.sector ?? truck.sector; const route = routeById(truck.routeId); if (route) route.progress = truck.progress; }); drawMapLayers(); if (selectedTruckId) selectTruck(selectedTruckId); if (selectedRouteId) selectRoute(selectedRouteId); if (selectedIncidentId) selectIncident(selectedIncidentId); }, 1800 / simulationSpeed); }
 function pauseSimulation() { clearInterval(simulationTimer); simulationTimer = null; }
 function resetSimulation() { pauseSimulation(); trucks.forEach((truck) => { const original = initialTruckState[truck.id]; simState[truck.id] = { index: original.index, progress: original.progress }; truck.progress = original.progress; truck.updatedAt = original.updatedAt; truck.sector = original.sector; }); routes.forEach((route) => { if (initialRouteProgress[route.id] !== undefined) route.progress = initialRouteProgress[route.id]; }); drawMapLayers(); if (selectedTruckId) selectTruck(selectedTruckId); if (selectedRouteId) selectRoute(selectedRouteId); if (selectedIncidentId) selectIncident(selectedIncidentId); }
 

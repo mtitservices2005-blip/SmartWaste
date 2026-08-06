@@ -24,4 +24,20 @@ assert.equal(sorted[0], older, 'oldest point must come first, regardless of reco
 assert.equal(sorted[1], newer);
 assert.deepEqual(history.listPositions('truck-02'), [], 'positions must not leak across vehicles');
 
+// docs/TECHNICAL_DEBT_REGISTER.md item 16: getPath, when given, must win over the routePaths/trucks
+// fallback lookup, and must be called lazily on every emit() (not read once at construction) so a
+// caller can supply geometry that isn't known yet when the simulator is built.
+let callCount = 0;
+const customPath = [[1, 1], [2, 2], [3, 3]];
+const customSimulator = new DeviceSimulator('truck-01', { getPath: () => { callCount += 1; return customPath; } });
+const firstPoint = customSimulator.start();
+assert.deepEqual([firstPoint.latitude, firstPoint.longitude], customPath[0], 'must use getPath()\'s geometry, not routePaths');
+customSimulator.emit();
+assert.equal(callCount, 2, 'getPath() must be called again on each emit(), not cached from construction');
+
+// Omitting getPath must behave exactly as before (routePaths/trucks fallback) — every existing
+// caller that doesn't pass it must be unaffected.
+const fallbackSimulator = new DeviceSimulator('truck-01');
+assert.ok(fallbackSimulator.start().latitude, 'fallback lookup must still work without getPath');
+
 console.log('telemetry-simulator ok');
