@@ -732,6 +732,11 @@ async function assignVehicleToExistingRoute(routeId, vehicleId) {
   selectRoute(routeId); // re-render the detail panel so it reflects the new assignment immediately
   $('#routeList').innerHTML = renderRoutes(routes);
   refreshFleetSelects();
+  // Codex review on PR #49: #resumen's counts (rutas activas, vehículos fuera de servicio) are a
+  // snapshot taken at page load — without this they'd stay stale after every mutation that changes
+  // them, same reason completeRouteManually()/the verify/resolve-incident handlers below already
+  // re-render #supervisor on demand.
+  $('#resumen').outerHTML = renderSummary();
 }
 // Triggered from renderRouteDetail()'s "Reoptimizar ruta" action (roadmap item 4, "reoptimización
 // dinámica" — suggestion only, docs/TECHNICAL_DEBT_REGISTER.md #21). Computes and displays a
@@ -795,6 +800,7 @@ async function completeRouteManually(routeId) {
   // existing verify/resolve-incident handlers do) — without this it stays stale showing whatever
   // was true when #supervisor was last rendered, even though route.status just changed above.
   $('#supervisor').outerHTML = renderSupervisor();
+  $('#resumen').outerHTML = renderSummary();
   if (realAdapter) {
     const realRouteId = route.real_id ?? routeId;
     await mirrorToRealAdapter(realAdapter.completeRoute(realRouteId));
@@ -835,6 +841,19 @@ function redrawCreateRouteTrace() {
 // (#operaciones/mapa, #operaciones/rutas, ...), so section matching only looks at the part before
 // the first "/".
 const SECTION_IDS = Array.from(app.children).map((section) => section.id);
+// Codex review on PR #49: 'mapa' and 'municipal' used to be their own top-level sections — any
+// bookmarked/shared URL ending in one of those hashes must keep landing on the equivalent content
+// instead of silently falling back to 'resumen'. 'municipal' held Rutas/Flota/Incidencias together;
+// 'rutas' (its first, most prominent list) is the closest single sub-vista to redirect to.
+const LEGACY_HASH_REDIRECTS = { mapa: 'operaciones/mapa', municipal: 'operaciones/rutas' };
+// Rewrites a legacy hash to its new home; returns true if it did (caller should stop, since setting
+// location.hash fires its own hashchange that will re-enter this whole flow with the new hash).
+function redirectLegacyHash() {
+  const id = location.hash.slice(1).split('/')[0];
+  if (!LEGACY_HASH_REDIRECTS[id]) return false;
+  location.hash = LEGACY_HASH_REDIRECTS[id];
+  return true;
+}
 function sectionFromHash() {
   const id = location.hash.slice(1).split('/')[0];
   return SECTION_IDS.includes(id) ? id : SECTION_IDS[0];
@@ -858,7 +877,7 @@ function showSection(id) {
   if (id === 'operaciones') showOpsView(currentOpsView());
   if (id === 'conductor' && driverMapReady) requestAnimationFrame(() => driverMap.invalidateSize());
 }
-window.addEventListener('hashchange', () => showSection(sectionFromHash()));
+window.addEventListener('hashchange', () => { if (!redirectLegacyHash()) showSection(sectionFromHash()); });
 // Selecting a truck/route/incident updates #detail and the map, but both live inside the "mapa"
 // sub-vista of #operaciones — invisible while the click came from another tab/sub-vista (e.g. the
 // route list in "rutas"). Jumping to "operaciones/mapa" on selection is what actually shows the
@@ -962,6 +981,7 @@ async function finishCreateRoute() {
   if (nameInput) nameInput.value = '';
   if (vehicleSelect) vehicleSelect.innerHTML = `<option value="">Sin vehículo asignado (asignar después)</option>${trucks.filter((item) => !item.routeId).map((item) => `<option value="${item.id}">${item.unit}</option>`).join('')}`;
   $('#routeList').innerHTML = renderRoutes(routes);
+  $('#resumen').outerHTML = renderSummary();
   if (mapReady) drawMapLayers();
   const roadPart = usedRoadRouting
     ? 'trazado ajustado a calles reales (OSRM)'
@@ -1011,7 +1031,7 @@ document.addEventListener('click', (event) => {
   const routeButton = event.target.closest('[data-route]'); if (routeButton?.dataset.route) { selectRoute(routeButton.dataset.route); goToMapTab(); }
   const incidentButton = event.target.closest('[data-incident]'); if (incidentButton) { selectIncident(incidentButton.dataset.incident); goToMapTab(); }
   const verifyButton = event.target.closest('[data-verify-route]');
-  if (verifyButton) { const route = routeById(verifyButton.dataset.verifyRoute); if (route) { route.status = 'verified'; $('#supervisor').outerHTML = renderSupervisor(); } }
+  if (verifyButton) { const route = routeById(verifyButton.dataset.verifyRoute); if (route) { route.status = 'verified'; $('#supervisor').outerHTML = renderSupervisor(); $('#resumen').outerHTML = renderSummary(); } }
   const assignVehicleButton = event.target.closest('[data-assign-vehicle]');
   if (assignVehicleButton) { const vehicleId = $('#assignVehicleSelect')?.value; if (vehicleId) assignVehicleToExistingRoute(assignVehicleButton.dataset.assignVehicle, vehicleId); }
   const completeRouteButton = event.target.closest('[data-complete-route]');
@@ -1019,7 +1039,7 @@ document.addEventListener('click', (event) => {
   const reoptimizeButton = event.target.closest('[data-reoptimize-route]');
   if (reoptimizeButton) previewRouteReoptimization(reoptimizeButton.dataset.reoptimizeRoute);
   const resolveButton = event.target.closest('[data-resolve-incident]');
-  if (resolveButton) { const incident = incidents.find((item) => item.code === resolveButton.dataset.resolveIncident); if (incident) { incident.status = 'Cerrada'; $('#supervisor').outerHTML = renderSupervisor(); } }
+  if (resolveButton) { const incident = incidents.find((item) => item.code === resolveButton.dataset.resolveIncident); if (incident) { incident.status = 'Cerrada'; $('#supervisor').outerHTML = renderSupervisor(); $('#resumen').outerHTML = renderSummary(); } }
   const onboardButton = event.target.closest('[data-onboarding]');
   if (onboardButton) { const status = document.querySelector(`[data-onboarding-status="${onboardButton.dataset.onboarding}"]`); if (status) status.textContent = 'Onboarding demo iniciado — flujo completo en desarrollo.'; }
   if (event.target.id === 'useGeo') { requestGeolocation(); }
@@ -1042,7 +1062,7 @@ $('#driverVehicleSelect').addEventListener('change', (event) => {
   drawDriverPositions(); // also refreshes #driverRouteInfo for the newly selected vehicle
 });
 function requestGeolocation() { const target = $('#geoStatus'); if (!navigator.geolocation) { target.textContent = 'Ubicación no disponible en este navegador.'; return; } target.textContent = 'Solicitando permiso de ubicación...'; navigator.geolocation.getCurrentPosition((pos) => { target.textContent = `Ubicación recibida localmente: ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)} (no enviada)`; }, (err) => { target.textContent = `Permiso denegado, timeout o ubicación no disponible: ${err.message}`; }, { enableHighAccuracy:true, timeout:8000, maximumAge:60000 }); }
-showSection(sectionFromHash());
+if (!redirectLegacyHash()) showSection(sectionFromHash());
 initMap();
 initDriverMap();
 initDriverPolling();
@@ -1164,6 +1184,10 @@ async function bootstrapRealBackend(ctx) {
   if (sourceLabel) sourceLabel.textContent = `${simulationNotice} · fuente desacoplada: ${backendMode}`;
   await hydrateVehiclesAndDrivers();
   await hydrateRoutes();
+  // Codex review on PR #49: #resumen is built synchronously at page load, before either hydrate
+  // call above resolves — without this refresh, every route/vehicle pulled from Supabase stays
+  // invisible to the landing KPIs and "Necesita tu atención" list even after hydration succeeds.
+  $('#resumen').outerHTML = renderSummary();
   // renderDriverMobile() already renders the GPS control conditionally, but that render happened
   // synchronously at page load, before this async function resolved backendMode — the driver view
   // is already in the DOM by then. Insert the control now instead of re-rendering #driverMobile

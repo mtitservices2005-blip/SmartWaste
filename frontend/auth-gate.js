@@ -73,8 +73,14 @@ function applySectionVisibility(visibleIds, sections = SECTION_ROLES) {
   Object.keys(sections).forEach((id) => {
     const section = document.getElementById(id);
     if (section) section.style.display = visibleIds.includes(id) ? '' : 'none';
-    const navLink = document.querySelector(`nav a[href="#${id}"]`);
-    if (navLink) navLink.style.display = visibleIds.includes(id) ? '' : 'none';
+    // Codex review on PR #49: "Resumen del día" (frontend/app.js's renderSummary()) links straight
+    // to sections/sub-vistas by hash too, same as the topbar nav — a role that can't see the
+    // destination must not get a dead-end card for it either. Matches on both the exact hash and a
+    // "#id/..." sub-vista prefix (e.g. an operaciones/<vista> link also counts as pointing at
+    // 'operaciones'), and isn't scoped to `nav` since these cards live in the page body.
+    document.querySelectorAll(`a[href="#${id}"], a[href^="#${id}/"]`).forEach((link) => {
+      link.style.display = visibleIds.includes(id) ? '' : 'none';
+    });
   });
 }
 
@@ -87,6 +93,11 @@ function applyOpsViewVisibility(visibleViews, views = OPS_SUBVIEW_ROLES) {
     if (tab) tab.style.display = visibleViews.includes(view) ? '' : 'none';
     const panel = document.querySelector(`[data-ops-view="${view}"]`);
     if (panel) panel.style.display = visibleViews.includes(view) ? '' : 'none';
+    // Same "Resumen del día" concern as applySectionVisibility() above, for cards that link
+    // straight to a specific sub-vista (e.g. "Vehículos fuera de servicio" -> #operaciones/flota).
+    document.querySelectorAll(`a[href="#operaciones/${view}"]`).forEach((link) => {
+      link.style.display = visibleViews.includes(view) ? '' : 'none';
+    });
   });
 }
 
