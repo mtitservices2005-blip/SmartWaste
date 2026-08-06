@@ -67,4 +67,46 @@ assert.equal(routeRunsResult.ok, true);
 assert.equal(routeRunsResult.data.length, 2);
 assert.equal(routeRunsResult.data[1].progress, 40, 'must be ordered oldest-first so the latest run per route can be picked by overwriting while iterating');
 
+// Roadmap item 3 ("GPS real"): findOwnVehicleAssignment() resolves the real vehicle_id assigned to
+// a signed-in driver's profile_id, via a 2-step drivers -> vehicle_assignments lookup. Fake client
+// builds a minimal chainable query per table (select().eq()...eq().maybeSingle()), routed by table
+// name and canned response, mirroring the shape createSupabaseOperationsAdapter actually calls.
+function makeChainableQuery(result) {
+  const query = { select: () => query, eq: () => query, maybeSingle: async () => result };
+  return query;
+}
+function makeFakeAssignmentClient({ driverRow, assignmentRow }) {
+  return {
+    from: (table) => {
+      if (table === 'drivers') return makeChainableQuery({ data: driverRow, error: null });
+      if (table === 'vehicle_assignments') return makeChainableQuery({ data: assignmentRow, error: null });
+      throw new Error(`unexpected table ${table}`);
+    }
+  };
+}
+
+// Happy path: driver row found, assignment found.
+const happyAdapter = createSupabaseOperationsAdapter(makeFakeAssignmentClient({ driverRow: { id: 'drv-1' }, assignmentRow: { vehicle_id: 'veh-1' } }));
+const happyResult = await happyAdapter.findOwnVehicleAssignment('profile-1');
+assert.equal(happyResult.ok, true);
+assert.equal(happyResult.data.vehicle_id, 'veh-1');
+
+// No driver row linked to this profile.
+const noDriverAdapter = createSupabaseOperationsAdapter(makeFakeAssignmentClient({ driverRow: null, assignmentRow: null }));
+const noDriverResult = await noDriverAdapter.findOwnVehicleAssignment('profile-unknown');
+assert.equal(noDriverResult.ok, false);
+assert.equal(noDriverResult.error.code, 'DRIVER_NOT_FOUND');
+
+// Driver exists but has no vehicle currently assigned.
+const noAssignmentAdapter = createSupabaseOperationsAdapter(makeFakeAssignmentClient({ driverRow: { id: 'drv-2' }, assignmentRow: null }));
+const noAssignmentResult = await noAssignmentAdapter.findOwnVehicleAssignment('profile-2');
+assert.equal(noAssignmentResult.ok, false);
+assert.equal(noAssignmentResult.error.code, 'NO_VEHICLE_ASSIGNED');
+
+// Demo adapter always reports NOT_SUPPORTED_IN_DEMO — the GPS button only renders with a real
+// backend configured, so this path exists just to keep both adapters' interfaces consistent.
+const demoAssignmentResult = adapter.findOwnVehicleAssignment('profile-1');
+assert.equal(demoAssignmentResult.ok, false);
+assert.equal(demoAssignmentResult.error.code, 'NOT_SUPPORTED_IN_DEMO');
+
 console.log('operations-adapter ok');

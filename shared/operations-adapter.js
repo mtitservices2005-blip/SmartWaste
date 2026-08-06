@@ -74,7 +74,13 @@ export function createDemoOperationsAdapter(seed = { trucks, routes, drivers, in
     completeRoute: (routeId) => updateRoute(state, routeId, { progress:100, status:'completed' }),
     verifyRoute: (routeId) => transitionRoute(state, routeId, 'verified'),
     registerIncident: (incident) => { const created = { code:`INC-${state.incidents.length + 1}`, status:'Abierta', priority:'Media', ...incident }; state.incidents.push(created); return clone(created); },
-    listPositions: () => state.trucks.map((truck) => ({ vehicle_id: truck.id, municipality_id:'laguna-salada-rd', position: truck.position ?? routePaths[truck.routeId]?.[truck.positionIndex ?? 0] ?? null, source:'demo' }))
+    listPositions: () => state.trucks.map((truck) => ({ vehicle_id: truck.id, municipality_id:'laguna-salada-rd', position: truck.position ?? routePaths[truck.routeId]?.[truck.positionIndex ?? 0] ?? null, source:'demo' })),
+    // Roadmap item 3 ("GPS real"): resolving "which real vehicle is assigned to this signed-in
+    // driver" only makes sense once a real Supabase profile/vehicle_assignments row exists — the
+    // demo adapter has no such concept to model, so this always fails. The GPS button in
+    // frontend/app.js only renders once a real backend is configured anyway, so this path is never
+    // exercised in demo-only mode; it exists purely so both adapters expose the same interface.
+    findOwnVehicleAssignment: () => ({ ok:false, source:'DEMO_ONLY', error:{ code:'NOT_SUPPORTED_IN_DEMO', message:'Vehicle assignment lookup requires a real backend.' } })
   };
 }
 function updateRoute(state, routeId, patch) { const route = state.routes.find((r) => r.id === routeId); if (!route) throw new Error('Route not found'); Object.assign(route, patch); return clone(route); }
@@ -200,8 +206,25 @@ export function createSupabaseOperationsAdapter(client, { fallback = createDemoO
       () => scoped(table(client, 'route_paths').select('*')).eq('route_id', routeId).order('sequence'),
       () => fallback.listPathPoints(routeId),
       opts.correlation_id
-    )
+    ),
+    // Roadmap item 3 ("GPS real"): resolves the real vehicle_id currently assigned to the signed-in
+    // driver (by their auth profile_id), so frontend/app.js's GPS button knows which vehicle_id to
+    // tag positions with before calling createTelemetryIngestionAdapter().ingest(). Two-step lookup
+    // (drivers -> vehicle_assignments), so it doesn't fit the single-query run() wrapper above.
+    findOwnVehicleAssignment: (profileId, opts = {}) => findOwnVehicleAssignment(client, municipality_id, profileId, opts)
   };
+}
+
+async function findOwnVehicleAssignment(client, municipality_id, profileId, opts = {}) {
+  if (!client?.from) return fail('SUPABASE_CLIENT_MISSING', 'No real client available.', { source:'DEMO_FALLBACK', correlation_id: opts.correlation_id });
+  const scoped = (query) => municipality_id ? query.eq('municipality_id', municipality_id) : query;
+  const driverRow = await scoped(client.from('drivers').select('id')).eq('profile_id', profileId).maybeSingle();
+  if (driverRow.error) return fail(driverRow.error.code ?? 'SUPABASE_ERROR', driverRow.error.message, { correlation_id: opts.correlation_id });
+  if (!driverRow.data) return fail('DRIVER_NOT_FOUND', 'No driver row is linked to this account.', { correlation_id: opts.correlation_id });
+  const assignment = await scoped(client.from('vehicle_assignments').select('vehicle_id')).eq('driver_id', driverRow.data.id).eq('status', 'assigned').maybeSingle();
+  if (assignment.error) return fail(assignment.error.code ?? 'SUPABASE_ERROR', assignment.error.message, { correlation_id: opts.correlation_id });
+  if (!assignment.data) return fail('NO_VEHICLE_ASSIGNED', 'This driver has no vehicle currently assigned.', { correlation_id: opts.correlation_id });
+  return ok(assignment.data, { correlation_id: opts.correlation_id });
 }
 
 // Finds the most recent non-terminal route_run for a route, or creates one, scoped to municipality_id.

@@ -1,11 +1,12 @@
 import { demoNotice, simulationNotice, pilotMunicipality, trucks, routes, sectors, drivers, incidents, notifications, municipalities, routeFlow, routePaths, stateLabels } from '../shared/demo-data.js';
 import { operationsAdapter, resolveOperationsAdapter } from '../shared/operations-adapter.js';
-import { DeviceSimulator, createDemoPositionHistory } from '../shared/telemetry-simulator.js';
+import { DeviceSimulator, createDemoPositionHistory, createTelemetryIngestionAdapter } from '../shared/telemetry-simulator.js';
 import { validateEvidenceFile } from '../shared/channel-contracts.js';
 import { createDemoFolio, findSectorService, findIncidentStatus } from '../shared/citizen-portal.js';
 import { generateRouteStopPoints, deriveStopStatus, haversineMeters, splitIntoTrips } from '../shared/route-engine.js';
 import { fetchRoadRoute } from '../shared/osrm-routing.js';
 import { optimizeWaypointOrder } from '../shared/route-optimizer.js';
+import { positionFromGeolocationEvent, shouldSendPosition } from '../shared/browser-geolocation.js';
 import { IMPACT_DEMO_NOTICE, IMPACT_SCENARIO_NOTICE, defaultImpactAssumptions, metricReadiness, calculateImpactMetrics } from '../shared/impact-center.js';
 import { initAuthGate, readSupabaseConfig, getAuthClient } from './auth-gate.js';
 
@@ -37,6 +38,12 @@ let selectedIncidentId = null;
 // larger refactor — tracked as a follow-up (SW-035), not force-fit into this change.
 let realAdapter = null;
 let backendMode = 'DEMO_ONLY';
+// Roadmap item 3 ("GPS real"): the signed-in session's context (user_id/municipality_id, from
+// initAuthGate()/bootstrapRealBackend() below), kept around so the driver GPS button can resolve
+// "my own real vehicle" on demand. driverGpsWatchId is the navigator.geolocation.watchPosition()
+// handle while GPS sharing is active, null otherwise.
+let driverAuthContext = null;
+let driverGpsWatchId = null;
 let map;
 let mapReady = false;
 let routeLayers = [];
@@ -376,7 +383,49 @@ function renderDriverMobile() {
     <p id="driverStopsProgress"></p>
     <div id="driverMap" class="real-map driver-map" role="application" aria-label="Posición y trazo del vehículo (demo)"></div>
     <p class="demo">${simulationNotice} · trazo histórico vía polling cada ${DRIVER_POLL_INTERVAL_MS / 1000}s (sin Realtime, ver docs/TECHNICAL_DEBT_REGISTER.md #14)</p>
+    ${backendMode !== 'DEMO_ONLY' ? renderDriverGpsControl() : ''}
   </div>`;
+}
+function renderDriverGpsControl() {
+  return `<div class="controls"><button type="button" data-driver-gps="${driverGpsWatchId ? 'stop' : 'start'}">${driverGpsWatchId ? 'Detener GPS real' : 'Compartir mi ubicación real'}</button></div><p id="driverGpsStatus" class="demo"></p>`;
+}
+// Roadmap item 3 ("GPS real"): opt-in — only reachable via the button above, which only renders
+// once a real backend is configured (backendMode !== 'DEMO_ONLY'). Persists the driver's own
+// browser/phone location to Supabase (source: browser_geolocation); does not touch the simulation
+// engine or any map rendering (drawDriverPositions/drawMapLayers stay demo-driven, by design —
+// showing real GPS on a live map is a separate, later milestone).
+async function startDriverGps() {
+  const status = $('#driverGpsStatus');
+  if (!navigator.geolocation) { if (status) status.textContent = 'Este navegador no soporta geolocalización.'; return; }
+  if (!realAdapter || !driverAuthContext) { if (status) status.textContent = 'GPS real requiere una sesión conectada a Supabase.'; return; }
+  if (status) status.textContent = 'Buscando tu vehículo asignado…';
+  const assignment = await realAdapter.findOwnVehicleAssignment(driverAuthContext.user_id);
+  if (!assignment.ok) { if (status) status.textContent = `No se pudo activar el GPS real: ${assignment.error.message}`; return; }
+  const vehicleId = assignment.data.vehicle_id;
+  const client = getAuthClient();
+  const telemetry = createTelemetryIngestionAdapter(client, { municipality_id: driverAuthContext.municipality_id });
+  let lastSentAt = 0;
+  driverGpsWatchId = navigator.geolocation.watchPosition(async (geoPosition) => {
+    const now = Date.now();
+    if (!shouldSendPosition(lastSentAt, now)) return;
+    lastSentAt = now;
+    const position = positionFromGeolocationEvent(geoPosition, { vehicle_id: vehicleId, municipality_id: driverAuthContext.municipality_id });
+    const result = await telemetry.ingest(position, { correlation_id: `gps-${now.toString(36)}` });
+    const currentStatus = $('#driverGpsStatus');
+    if (currentStatus) currentStatus.textContent = result.ok ? `Última posición real enviada: ${new Date().toLocaleTimeString()}` : `No se pudo enviar la posición real: ${result.error?.message ?? 'error desconocido'}`;
+  }, (error) => {
+    const currentStatus = $('#driverGpsStatus');
+    if (currentStatus) currentStatus.textContent = `No se pudo obtener tu ubicación: ${error.message}`;
+    stopDriverGps();
+  }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 });
+  const button = document.querySelector('[data-driver-gps]');
+  if (button) { button.dataset.driverGps = 'stop'; button.textContent = 'Detener GPS real'; }
+}
+function stopDriverGps() {
+  if (driverGpsWatchId != null) navigator.geolocation.clearWatch(driverGpsWatchId);
+  driverGpsWatchId = null;
+  const button = document.querySelector('[data-driver-gps]');
+  if (button) { button.dataset.driverGps = 'start'; button.textContent = 'Compartir mi ubicación real'; }
 }
 // Ítem #12 de docs/TECHNICAL_DEBT_REGISTER.md: la vista móvil del conductor vivía embebida como un
 // <div class="mobile"> de unas pocas líneas dentro de renderMunicipal() — sin sección propia ni
@@ -825,6 +874,9 @@ document.addEventListener('click', (event) => {
   const onboardButton = event.target.closest('[data-onboarding]');
   if (onboardButton) { const status = document.querySelector(`[data-onboarding-status="${onboardButton.dataset.onboarding}"]`); if (status) status.textContent = 'Onboarding demo iniciado — flujo completo en desarrollo.'; }
   if (event.target.id === 'useGeo') { requestGeolocation(); }
+  const driverGpsAction = event.target.closest('[data-driver-gps]')?.dataset.driverGps;
+  if (driverGpsAction === 'start') startDriverGps();
+  if (driverGpsAction === 'stop') stopDriverGps();
   if (event.target.id === 'checkFolio') { const found = findIncidentStatus($('#folioSearch').value); $('#folioStatus').textContent = found ? `${found.type}: ${found.status}` : 'Folio demo no encontrado'; }
   const sim = event.target.dataset.sim; if (sim === 'start') startSimulation(); if (sim === 'pause') pauseSimulation(); if (sim === 'reset') resetSimulation(); if (sim === 'fullscreen') toggleMapFullscreen(); if (sim === 'speed') { simulationSpeed = simulationSpeed === 1 ? 2 : simulationSpeed === 2 ? 4 : 1; event.target.textContent = `${simulationSpeed}×`; if (simulationTimer) { pauseSimulation(); startSimulation(); } }
 });
@@ -952,10 +1004,20 @@ async function bootstrapRealBackend(ctx) {
   if (!client || !ctx?.municipality_id) return;
   realAdapter = resolveOperationsAdapter({ client, municipality_id: ctx.municipality_id });
   backendMode = realAdapter.mode;
+  driverAuthContext = ctx;
   const sourceLabel = document.querySelector('.sim-controls span');
   if (sourceLabel) sourceLabel.textContent = `${simulationNotice} · fuente desacoplada: ${backendMode}`;
   await hydrateVehiclesAndDrivers();
   await hydrateRoutes();
+  // renderDriverMobile() already renders the GPS control conditionally, but that render happened
+  // synchronously at page load, before this async function resolved backendMode — the driver view
+  // is already in the DOM by then. Insert the control now instead of re-rendering #driverMobile
+  // wholesale, which would tear down and lose the live #driverMap Leaflet instance and the
+  // #driverVehicleSelect change listener wired once at module init.
+  const driverMobile = document.getElementById('driverMobile');
+  if (driverMobile && backendMode !== 'DEMO_ONLY' && !driverMobile.querySelector('[data-driver-gps]')) {
+    driverMobile.insertAdjacentHTML('beforeend', renderDriverGpsControl());
+  }
 }
 // No-ops entirely (leaves every section visible, same as before this line existed) unless the
 // page sets window.SMARTWASTE_SUPABASE_CONFIG — see frontend/auth-gate.js and CLAUDE.md rule 5.
