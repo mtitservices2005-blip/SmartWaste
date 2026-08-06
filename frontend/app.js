@@ -689,11 +689,30 @@ function previewRouteReoptimization(routeId) {
   // route (registerDriverSimulator(), called both at module init and for hydrated real routes),
   // not just the one currently shown in the driver view.
   const trail = positionHistory.listPositions(truck.id);
-  const stops = operationsAdapter.listRouteStops(routeId).map((stop) => ({ ...stop, status: deriveStopStatus(stop, trail) }));
+  // Codex review on PR #47: for a Supabase-hydrated route, hydrateRoutes() (above) already knows
+  // the real per-stop status at hydration time (via listRouteStopsWithStatus()) but the trail it
+  // seeds afterward is only a synthetic single point — deriving purely from that trail would forget
+  // every collection recorded before this page loaded. hydrateRoutes() now also persists that
+  // status onto the seeded stop (see its saveRouteStops() call), so treat 'recolectado' from either
+  // source as authoritative — a stop already known collected must never be un-collected here.
+  const stops = operationsAdapter.listRouteStops(routeId).map((stop) => {
+    const derivedStatus = deriveStopStatus(stop, trail);
+    const status = stop.status === 'recolectado' || derivedStatus === 'recolectado' ? 'recolectado' : 'pendiente';
+    return { ...stop, status };
+  });
   const pendingStops = stops.filter((stop) => stop.status !== 'recolectado');
+  // Codex review on PR #47: this used to derive the truck's current position from simState (only
+  // advanced while the map simulation is running), while pending stops above are derived from
+  // positionHistory (advanced independently every 4s by tickDriverTelemetry()) — the two could
+  // disagree about how far along the truck actually is. Anchor the optimization's starting point to
+  // the same trail used for stop status, falling back to the simState-based position only when no
+  // trail exists yet (e.g. a route just assigned, nothing emitted).
+  const lastTrailPoint = trail[trail.length - 1];
   // Same pattern drawMapLayers() (above) uses for a truck's live marker position — truck.positionIndex
   // itself is never updated by the simulation tick, only simState[truck.id].index is.
-  const currentPosition = routePosition({ ...truck, positionIndex: simState[truck.id]?.index ?? truck.positionIndex });
+  const currentPosition = lastTrailPoint
+    ? [lastTrailPoint.latitude, lastTrailPoint.longitude]
+    : routePosition({ ...truck, positionIndex: simState[truck.id]?.index ?? truck.positionIndex });
   routeReoptimizationPreview = { routeId, ...suggestReoptimizedOrder(currentPosition, pendingStops) };
   selectRoute(routeId);
 }
@@ -1028,7 +1047,13 @@ async function hydrateRoutes() {
       operationsAdapter.savePathPoints(row.id, pathResult.data.map((point) => ({ sequence: point.sequence, latitude: point.latitude, longitude: point.longitude })));
     }
     if (stopPoints.length && operationsAdapter.listRouteStops(row.id).length === 0) {
-      operationsAdapter.saveRouteStops(row.id, stopPoints.map((stop) => ({ sequence: stop.sequence, label: stop.label, latitude: stop.latitude, longitude: stop.longitude })));
+      // Codex review on PR #47: stopPoints.status here is the real per-stop status
+      // listRouteStopsWithStatus() just resolved from actual recorded vehicle_positions — carry it
+      // onto the seeded stop (the demo adapter's saveRouteStops() spreads extra fields through) so
+      // previewRouteReoptimization() (below) has a real "already collected" floor for this route,
+      // instead of only what the synthetic single-point trail registerDriverSimulator() seeds next
+      // would derive on its own.
+      operationsAdapter.saveRouteStops(row.id, stopPoints.map((stop) => ({ sequence: stop.sequence, label: stop.label, latitude: stop.latitude, longitude: stop.longitude, status: stop.status })));
     }
 
     if (truck && !truck.routeId) {
