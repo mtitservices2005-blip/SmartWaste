@@ -5,6 +5,7 @@ import { validateEvidenceFile } from '../shared/channel-contracts.js';
 import { createDemoFolio, findSectorService, findIncidentStatus } from '../shared/citizen-portal.js';
 import { generateRouteStopPoints, deriveStopStatus, haversineMeters, splitIntoTrips } from '../shared/route-engine.js';
 import { fetchRoadRoute } from '../shared/osrm-routing.js';
+import { optimizeWaypointOrder } from '../shared/route-optimizer.js';
 import { IMPACT_DEMO_NOTICE, IMPACT_SCENARIO_NOTICE, defaultImpactAssumptions, metricReadiness, calculateImpactMetrics } from '../shared/impact-center.js';
 import { initAuthGate, readSupabaseConfig, getAuthClient } from './auth-gate.js';
 
@@ -358,8 +359,9 @@ function renderCreateRoute() {
   const availableTrucks = trucks.filter((truck) => !truck.routeId);
   return `<div class="card" id="createRoute">
     <h3>Crear ruta</h3>
-    <p class="demo">${demoNotice} · Clic en el mapa para agregar puntos al trazo, en orden. Al finalizar se intenta ajustar el trazo a calles reales (OSRM); si no es posible, se usa línea recta entre los puntos.</p>
+    <p class="demo">${demoNotice} · Clic en el mapa para agregar puntos al trazo, en orden. Al finalizar se intenta ajustar el trazo a calles reales (OSRM); si no es posible, se usa línea recta entre los puntos. Opcionalmente, puedes optimizar el orden de las paradas (excepto la primera) para minimizar la distancia recorrida antes de ajustar a calles.</p>
     <div class="controls"><input id="createRouteName" placeholder="Nombre de la ruta"><select id="createRouteVehicle"><option value="">Sin vehículo asignado (asignar después)</option>${availableTrucks.map((t) => `<option value="${t.id}">${t.unit}</option>`).join('')}</select></div>
+    <div class="controls"><label><input type="checkbox" id="createRouteOptimize"> Optimizar orden de paradas (mantiene el primer punto como inicio)</label></div>
     <div id="createRouteMap" class="real-map driver-map" role="application" aria-label="Dibujar trazo de ruta nueva"></div>
     <div class="controls"><button type="button" data-create-route="undo">Deshacer último punto</button><button type="button" data-create-route="finish">Finalizar y guardar</button></div>
     <p id="createRouteStatus" class="demo">${drawnRoutePoints.length} punto(s) trazado(s).</p>
@@ -711,13 +713,20 @@ async function finishCreateRoute() {
   if (drawnRoutePoints.length < 2) { if (status) status.textContent = 'Traza al menos 2 puntos en el mapa.'; return; }
 
   const routeId = `route-custom-${Date.now().toString(36)}`;
-  // "Trazado inteligente" (roadmap item 1): try to snap the hand-drawn waypoints to real street
-  // geometry via OSRM. Any failure (network, timeout, malformed response) falls back to the
-  // original straight-line path in click order — this must never block route creation (rule 5).
-  const straightPath = drawnRoutePoints.slice();
+  // Roadmap item 2 ("optimización de orden de paradas"): opt-in via #createRouteOptimize,
+  // unchecked by default so the default flow is byte-identical to before this feature. When
+  // checked, reorders the clicked waypoints (keeping the first click fixed as the depot/start)
+  // before they're sent to OSRM — the order must be decided first, since OSRM only snaps whatever
+  // order it's given to real streets, it doesn't re-decide visiting order.
+  const optimizeOrder = $('#createRouteOptimize')?.checked ?? false;
+  const clickOrderPath = drawnRoutePoints.slice();
+  // "Trazado inteligente" (roadmap item 1): try to snap the (possibly reordered) waypoints to real
+  // street geometry via OSRM. Any failure (network, timeout, malformed response) falls back to the
+  // straight-line path in that same order — this must never block route creation (rule 5).
+  const straightPath = optimizeOrder ? optimizeWaypointOrder(clickOrderPath) : clickOrderPath;
   let path = straightPath;
   let usedRoadRouting = false;
-  if (status) status.textContent = 'Calculando trazo sobre calles reales…';
+  if (status) status.textContent = optimizeOrder ? 'Optimizando orden de paradas y calculando trazo sobre calles reales…' : 'Calculando trazo sobre calles reales…';
   const roadRoute = await fetchRoadRoute(straightPath);
   if (roadRoute.ok) { path = roadRoute.path; usedRoadRouting = true; }
   const stopPoints = generateRouteStopPoints(path);
@@ -766,9 +775,11 @@ async function finishCreateRoute() {
   if (vehicleSelect) vehicleSelect.innerHTML = `<option value="">Sin vehículo asignado (asignar después)</option>${trucks.filter((item) => !item.routeId).map((item) => `<option value="${item.id}">${item.unit}</option>`).join('')}`;
   $('#routeList').innerHTML = renderRoutes(routes);
   if (mapReady) drawMapLayers();
-  if (status) status.textContent = usedRoadRouting
-    ? `Ruta "${name}" creada con ${stopPoints.length} puntos de recolección, trazado ajustado a calles reales (OSRM).`
-    : `Ruta "${name}" creada con ${stopPoints.length} puntos de recolección (trazo en línea recta — no se pudo calcular el ruteo por calles).`;
+  const roadPart = usedRoadRouting
+    ? 'trazado ajustado a calles reales (OSRM)'
+    : 'trazo en línea recta — no se pudo calcular el ruteo por calles';
+  const optimizePart = optimizeOrder ? ', orden de paradas optimizado' : '';
+  if (status) status.textContent = `Ruta "${name}" creada con ${stopPoints.length} puntos de recolección, ${roadPart}${optimizePart}.`;
   if (tripPreview) tripPreview.textContent = truck ? formatTripPreview(splitIntoTrips(stopPoints, truck.max_stops ?? DEFAULT_MAX_STOPS)) : '';
 }
 
