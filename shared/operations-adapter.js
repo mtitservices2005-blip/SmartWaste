@@ -129,6 +129,15 @@ export function createSupabaseOperationsAdapter(client, { fallback = createDemoO
     markDelayed: (routeId, opts = {}) => transitionRouteRun(client, fallback, municipality_id, routeId, 'delayed', opts),
     completeRoute: (routeId, opts = {}) => transitionRouteRun(client, fallback, municipality_id, routeId, 'completed', opts, { progress: 100 }),
     verifyRoute: (routeId, opts = {}) => transitionRouteRun(client, fallback, municipality_id, routeId, 'verified', opts),
+    // SW-035 fase B: every other route_runs write above (assignVehicle/assignDriver/startRoute/
+    // updateProgress/...) only ever transitions a single route_run by id — nothing previously
+    // needed to read them back in bulk. Hydrating routes with their real assignment/progress on
+    // page load does, since vehicle_id/driver_id/progress/status live on route_runs, not on routes
+    // itself (see the comment on assignVehicle above). Ordered oldest-first so a caller building a
+    // route_id -> latest route_run map by iterating and overwriting ends up with the most recent
+    // one per route, same "most recent" intent transitionRouteRun()/assignToRouteRun() already
+    // apply per-route via their own separate queries.
+    listRouteRuns: (opts = {}) => run(() => scoped(table(client, 'route_runs').select('*').order('created_at')), () => fallback.listRouteRuns?.() ?? [], opts.correlation_id),
     registerIncident: (incident, opts = {}) => run(() => table(client, 'incidents').insert({ ...incident, municipality_id: incident.municipality_id ?? municipality_id, correlation_id: opts.correlation_id ?? incident.correlation_id }).select('*').single(), () => fallback.registerIncident(incident), opts.correlation_id),
     listPositions: (opts = {}) => run(() => scoped(table(client, 'vehicle_positions').select('*').order('captured_at', { ascending:false })), () => fallback.listPositions(), opts.correlation_id),
     // Points come from shared/route-engine.js's generateRouteStopPoints()/splitIntoTrips() —

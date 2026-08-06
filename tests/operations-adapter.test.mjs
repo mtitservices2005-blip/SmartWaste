@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createDemoOperationsAdapter, resolveOperationsAdapter } from '../shared/operations-adapter.js';
+import { createDemoOperationsAdapter, createSupabaseOperationsAdapter, resolveOperationsAdapter } from '../shared/operations-adapter.js';
 import { generateRouteStopPoints } from '../shared/route-engine.js';
 const adapter = createDemoOperationsAdapter();
 
@@ -52,5 +52,19 @@ assert.ok(createdDriver.id, 'createDriver must return a generated id');
 assert.equal(createdDriver.name, 'Chofer de prueba');
 assert.equal(createdDriver.status, 'Disponible', 'default status when none is given');
 assert.equal(adapter.listDrivers().length, driversBefore + 1);
+
+// SW-035 fase B: listRouteRuns() is new — nothing previously needed to read route_runs in bulk
+// (every other write only transitions a single one by id). Minimal fake client just for the
+// `.select().order()` chain this method actually calls.
+const fakeRouteRuns = [
+  { id: 'run-1', route_id: 'route-a', vehicle_id: 'veh-1', driver_id: 'drv-1', status: 'assigned', progress: 0, created_at: '2026-01-01T00:00:00Z' },
+  { id: 'run-2', route_id: 'route-a', vehicle_id: 'veh-1', driver_id: 'drv-1', status: 'in_progress', progress: 40, created_at: '2026-01-02T00:00:00Z' }
+];
+const fakeClient = { from: (table) => { assert.equal(table, 'route_runs'); return { select: () => ({ order: () => Promise.resolve({ data: fakeRouteRuns, error: null }) }) }; } };
+const supabaseAdapter = createSupabaseOperationsAdapter(fakeClient);
+const routeRunsResult = await supabaseAdapter.listRouteRuns();
+assert.equal(routeRunsResult.ok, true);
+assert.equal(routeRunsResult.data.length, 2);
+assert.equal(routeRunsResult.data[1].progress, 40, 'must be ordered oldest-first so the latest run per route can be picked by overwriting while iterating');
 
 console.log('operations-adapter ok');

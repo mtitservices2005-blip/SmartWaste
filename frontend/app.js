@@ -854,6 +854,68 @@ async function hydrateVehiclesAndDrivers() {
   }
   refreshFleetSelects();
 }
+// SW-035 fase B: hydrates routes with their real assignment/progress. Must run AFTER
+// hydrateVehiclesAndDrivers() (above) — matches a route's vehicle_id/driver_id (from route_runs,
+// the only place that assignment actually lives — routes itself has no vehicle_id/driver_id/
+// progress column, see the comment on assignVehicle() in shared/operations-adapter.js) against the
+// already-hydrated trucks/drivers by real_id. Reuses the exact geometry/stops seeding pattern the
+// module-init block above already uses for the 5 bundled demo routes (operationsAdapter.
+// savePathPoints/saveRouteStops, guarded so it never duplicates) so routeGeometry()/drawMapLayers()/
+// the driver view work for a hydrated route exactly like they do for a demo one. A hydrated route
+// with an assigned vehicle also gets a driverSimulators entry (registerDriverSimulator(), same as
+// finishCreateRoute() already does) and a simState entry, so it can participate in
+// startSimulation()'s tick like every other route — additive, doesn't touch demo trucks/routes.
+async function hydrateRoutes() {
+  if (!realAdapter) return;
+  const routesResult = await realAdapter.listRoutes();
+  if (!routesResult.ok) return;
+  const routeRunsResult = await realAdapter.listRouteRuns();
+  const latestRunByRouteId = {};
+  // Ordered oldest-first by the adapter — overwriting as we iterate leaves the most recent
+  // route_run per route_id, same "most recent" intent transitionRouteRun() applies per-route.
+  if (routeRunsResult.ok) routeRunsResult.data.forEach((run) => { latestRunByRouteId[run.route_id] = run; });
+
+  for (const row of routesResult.data) {
+    if (routes.some((route) => route.real_id === row.id)) continue;
+    const run = latestRunByRouteId[row.id] ?? null;
+    const truck = run?.vehicle_id ? trucks.find((item) => item.real_id === run.vehicle_id) : null;
+    const driver = run?.driver_id ? drivers.find((item) => item.real_id === run.driver_id) : null;
+
+    const stopsResult = truck ? await realAdapter.listRouteStopsWithStatus(row.id, truck.real_id) : await realAdapter.listRouteStops(row.id);
+    const stopPoints = stopsResult.ok ? stopsResult.data : [];
+    const covered = stopPoints.filter((stop) => stop.status === 'recolectado').length;
+
+    const newRoute = {
+      id: row.id, real_id: row.id, name: row.name, status: row.status ?? 'planned',
+      sectors: ['Sincronizado desde Supabase'], sector: 'Sincronizado desde Supabase',
+      truckId: truck ? truck.unit : 'Sin asignar', driverId: driver ? driver.id : null,
+      progress: run?.progress ?? 0, scheduled: '—', started: run ? 'Sincronizado' : 'Pendiente', eta: '—',
+      distanceKm: 0, estimatedMinutes: '—', stops: stopPoints.length, covered, pending: stopPoints.length - covered, incidents: []
+    };
+    routes.push(newRoute);
+    initialRouteProgress[row.id] = newRoute.progress;
+
+    const pathResult = await realAdapter.listPathPoints(row.id);
+    if (pathResult.ok && pathResult.data.length && operationsAdapter.listPathPoints(row.id).length === 0) {
+      operationsAdapter.savePathPoints(row.id, pathResult.data.map((point) => ({ sequence: point.sequence, latitude: point.latitude, longitude: point.longitude })));
+    }
+    if (stopPoints.length && operationsAdapter.listRouteStops(row.id).length === 0) {
+      operationsAdapter.saveRouteStops(row.id, stopPoints.map((stop) => ({ sequence: stop.sequence, label: stop.label, latitude: stop.latitude, longitude: stop.longitude })));
+    }
+
+    if (truck && !truck.routeId) {
+      truck.routeId = row.id;
+      truck.state = newRoute.status === 'completed' ? 'completed' : newRoute.status === 'delayed' ? 'delayed' : 'active';
+      truck.progress = newRoute.progress;
+      truck.positionIndex = 0;
+      simState[truck.id] = { index: 0, progress: newRoute.progress };
+      registerDriverSimulator(truck);
+    }
+  }
+  $('#routeList').innerHTML = renderRoutes(routes);
+  refreshFleetSelects();
+  if (mapReady) drawMapLayers();
+}
 // SW-034: once a real session resolves (municipality_id known), builds the real adapter that
 // createVehicleFromForm/createDriverFromForm/finishCreateRoute mirror their writes to. Patches only
 // the "fuente desacoplada" label directly (not a full section re-render) so the already-initialized
@@ -866,6 +928,7 @@ async function bootstrapRealBackend(ctx) {
   const sourceLabel = document.querySelector('.sim-controls span');
   if (sourceLabel) sourceLabel.textContent = `${simulationNotice} · fuente desacoplada: ${backendMode}`;
   await hydrateVehiclesAndDrivers();
+  await hydrateRoutes();
 }
 // No-ops entirely (leaves every section visible, same as before this line existed) unless the
 // page sets window.SMARTWASTE_SUPABASE_CONFIG — see frontend/auth-gate.js and CLAUDE.md rule 5.
