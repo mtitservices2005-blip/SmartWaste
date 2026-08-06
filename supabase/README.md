@@ -10,9 +10,11 @@ Las 7 migraciones en `migrations/` (`sw007_foundation` → `sw008_rls_draft` →
 
 **SW-034** conecta las escrituras de `frontend/app.js` al backend real con el mismo interruptor: una vez que la sesión resuelve `municipality_id`, `bootstrapRealBackend()` construye `createSupabaseOperationsAdapter` vía `resolveOperationsAdapter()` (`shared/operations-adapter.js`), y crear un vehículo/chofer/ruta desde la UI ("Flota y personal" / "Crear ruta") se refleja de verdad en Supabase, además de en el estado demo local (que sigue siendo la fuente de la UI en ejecución — ver limitación abajo). El indicador "fuente desacoplada" en el mapa operativo pasa de `DEMO_ONLY` a `REAL` cuando esto ocurre.
 
-**SW-035 (fase A)** agrega la hidratación de vehículos y choferes preexistentes: `hydrateVehiclesAndDrivers()`, llamada desde `bootstrapRealBackend()`, trae `listVehicles()`/`listDrivers()` reales y los suma (nunca reemplaza) a las listas que ya se ven en Municipal — así que un vehículo/chofer que ya existía en Supabase de una sesión anterior también aparece, no solo lo creado en la sesión actual.
+**SW-035** agrega la hidratación de datos preexistentes, en dos fases:
+- **Fase A** — `hydrateVehiclesAndDrivers()` trae `listVehicles()`/`listDrivers()` reales y los suma (nunca reemplaza) a las listas de Municipal.
+- **Fase B** — `hydrateRoutes()` trae `listRoutes()` + el nuevo `listRouteRuns()` (`shared/operations-adapter.js` — antes no existía ningún método que leyera `route_runs` en bloque, solo se podían transicionar uno por uno), resuelve el vehículo/chofer/progreso real de cada ruta cruzando por `route_id` con su `route_run` más reciente, y siembra su geometría/paradas en el adaptador demo (mismo patrón que ya siembra las 5 rutas demo) para que el mapa y la vista del conductor funcionen igual que con una ruta demo.
 
-**Limitación conocida (`docs/TECHNICAL_DEBT_REGISTER.md` ítem #17):** las **rutas** con su asignación real (vehículo/chofer/progreso vía `route_runs`) todavía no se hidratan — requiere un método de adaptador nuevo que hoy no existe (solo se pueden transicionar `route_runs`, no listarlos) y extender el estado de simulación (`simState`/`driverSimulators`) por cada ruta hidratada. Queda como seguimiento (SW-035 fase B).
+Con ambas fases, una ruta/vehículo/chofer que ya existía en Supabase de una sesión anterior aparece al cargar la página, no solo lo creado en la sesión actual (`docs/TECHNICAL_DEBT_REGISTER.md` ítem #17, resuelto).
 
 ## Edge Functions
 
