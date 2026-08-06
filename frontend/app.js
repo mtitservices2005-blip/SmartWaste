@@ -7,6 +7,7 @@ import { generateRouteStopPoints, deriveStopStatus, haversineMeters, splitIntoTr
 import { fetchRoadRoute } from '../shared/osrm-routing.js';
 import { optimizeWaypointOrder } from '../shared/route-optimizer.js';
 import { positionFromGeolocationEvent, shouldSendPosition } from '../shared/browser-geolocation.js';
+import { suggestReoptimizedOrder } from '../shared/route-reoptimizer.js';
 import { IMPACT_DEMO_NOTICE, IMPACT_SCENARIO_NOTICE, defaultImpactAssumptions, metricReadiness, calculateImpactMetrics } from '../shared/impact-center.js';
 import { initAuthGate, readSupabaseConfig, getAuthClient } from './auth-gate.js';
 
@@ -19,6 +20,11 @@ const label = (state) => stateLabels[state] ?? state;
 const routePosition = (truck) => truck.position ?? routeGeometry(truck.routeId)[truck.positionIndex ?? 0] ?? pilotMunicipality.center;
 let selectedTruckId = null;
 let selectedRouteId = null;
+// Roadmap item 4 ("reoptimización dinámica" — suggestion only, docs/TECHNICAL_DEBT_REGISTER.md
+// #21): holds the last computed reoptimization suggestion for one route at a time. Cleared when a
+// different route is selected (see selectRoute()) so a stale suggestion never bleeds into another
+// route's detail panel. Never written back to route_stops/route_paths — display only.
+let routeReoptimizationPreview = null;
 let selectedIncidentId = null;
 // SW-034: `operationsAdapter` (imported above) stays bound to the in-memory demo instance for
 // every existing synchronous read (routeGeometry(), drawMapLayers(), drawDriverPositions(), the
@@ -227,11 +233,26 @@ function renderRouteDetail(route) {
   const completeAction = (route.truckId && route.truckId !== 'Sin asignar' && route.status !== 'completed' && route.status !== 'verified')
     ? `<div class="controls"><button type="button" data-complete-route="${route.id}">Marcar como completada</button></div>`
     : '';
+  // Roadmap item 4 ("reoptimización dinámica" — suggestion only): only offered for a route that's
+  // actually underway with a truck assigned — reoptimizing a planned/completed/verified route's
+  // stop order makes no sense (nothing is "in progress" to reroute around).
+  const reoptimizeAction = ((route.status === 'in_progress' || route.status === 'delayed') && route.truckId && route.truckId !== 'Sin asignar')
+    ? `<div class="controls"><button type="button" data-reoptimize-route="${route.id}">Reoptimizar ruta</button></div>`
+    : '';
+  const reoptimizationPreview = (routeReoptimizationPreview?.routeId === route.id)
+    ? `<h3>Sugerencia de reoptimización</h3>
+       ${routeReoptimizationPreview.order.length
+         ? `<p>Ahorro estimado: ${Math.round(routeReoptimizationPreview.savedMeters)} m (${routeReoptimizationPreview.currentDistanceMeters > 0 ? Math.round(100 * routeReoptimizationPreview.savedMeters / routeReoptimizationPreview.currentDistanceMeters) : 0}%)</p>
+           <ol>${routeReoptimizationPreview.order.map((stop) => `<li>${stop.label}</li>`).join('')}</ol>
+           <p class="demo">Sugerencia de vista previa — no aplicada. Este orden no se guarda en la ruta.</p>`
+         : '<p class="demo">No hay suficientes paradas pendientes para reoptimizar.</p>'}`
+    : '';
   return `<div class="drawer-head"><p class="eyebrow">Detalle de ruta</p><h2>${route.name}</h2>${pill(routeStatus(route))}</div>
     <div class="detail-grid"><p><b>Unidad asignada</b><span>${route.truckId}</span></p><p><b>Conductor</b><span>${driverName(route.driverId)}</span></p><p><b>Sectores</b><span>${route.sectors.join(', ')}</span></p><p><b>Inicio</b><span>${route.started}</span></p><p><b>Programada</b><span>${route.scheduled}</span></p><p><b>Tiempo estimado</b><span>${route.estimatedMinutes} min</span></p><p><b>Distancia demo</b><span>${route.distanceKm} km</span></p><p><b>Paradas</b><span>${route.covered} completadas · ${route.pending} pendientes</span></p></div>
-    ${assignAction}${completeAction}
+    ${assignAction}${completeAction}${reoptimizeAction}
     ${progress(route.progress)}<p><strong>${route.progress}%</strong> completado</p><h3>Incidencias</h3>${relatedIncidents.map((incident) => `<button class="incident-row" data-incident="${incident.code}">${incident.type} · ${incident.status}</button>`).join('') || '<p>Sin incidencias demo.</p>'}
-    <h3>Timeline operativo</h3><div class="timeline">${routeFlow.map((step) => `<p>${step === route.status ? '●' : '○'} ${label(step)}</p>`).join('')}</div>`;
+    <h3>Timeline operativo</h3><div class="timeline">${routeFlow.map((step) => `<p>${step === route.status ? '●' : '○'} ${label(step)}</p>`).join('')}</div>
+    ${reoptimizationPreview}`;
 }
 function renderIncidentDetail(incident) { return `<div class="drawer-head"><p class="eyebrow">Incidencia operativa demo</p><h2>${incident.type}</h2>${pill('open')}</div><p><b>Folio:</b> ${incident.id}</p><p><b>Sector:</b> ${incident.sector}</p><p><b>Prioridad:</b> ${incident.priority}</p><p><b>Estado:</b> ${incident.status}</p><p>${incident.detail}</p><p class="demo">${demoNotice}</p>`; }
 
@@ -650,6 +671,25 @@ async function assignVehicleToExistingRoute(routeId, vehicleId) {
   $('#routeList').innerHTML = renderRoutes(routes);
   refreshFleetSelects();
 }
+// Triggered from renderRouteDetail()'s "Reoptimizar ruta" action (roadmap item 4, "reoptimización
+// dinámica" — suggestion only, docs/TECHNICAL_DEBT_REGISTER.md #21). Computes and displays a
+// suggested new order for the route's still-pending stops from the truck's current position; never
+// writes to route_stops/route_paths. "Pending" is approximated as the tail of the sequence-ordered
+// stop list beyond route.progress% — route.covered/route.pending are static counts never updated
+// by the simulation tick, so they can't be used to know which stops are actually done.
+function previewRouteReoptimization(routeId) {
+  const route = routeById(routeId);
+  const truck = trucks.find((item) => item.routeId === routeId);
+  if (!route || !truck) return;
+  const stops = operationsAdapter.listRouteStops(routeId);
+  const doneCount = Math.floor(stops.length * (route.progress ?? 0) / 100);
+  const pendingStops = stops.slice(doneCount);
+  // Same pattern drawMapLayers() (above) uses for a truck's live marker position — truck.positionIndex
+  // itself is never updated by the simulation tick, only simState[truck.id].index is.
+  const currentPosition = routePosition({ ...truck, positionIndex: simState[truck.id]?.index ?? truck.positionIndex });
+  routeReoptimizationPreview = { routeId, ...suggestReoptimizedOrder(currentPosition, pendingStops) };
+  selectRoute(routeId);
+}
 // Triggered from renderRouteDetail()'s "Marcar como completada" action — startSimulation()'s tick
 // caps progress at 99 (Math.min(99, ...)), so nothing else ever transitions a route to 'completed';
 // without this, a route could run in the demo forever and never reach Supervisor's verification
@@ -844,7 +884,7 @@ function markSelection() {
 }
 function closeDetail() { const detail = $('#detail'); detail.classList.add('is-hidden'); detail.setAttribute('aria-hidden', 'true'); detail.innerHTML = ''; selectedTruckId = null; selectedRouteId = null; selectedIncidentId = null; drawMapLayers(); markSelection(); }
 function selectTruck(id) { selectedTruckId = id; selectedRouteId = null; selectedIncidentId = null; const truck = trucks.find((item) => item.id === id); openDetail(renderTruckDetail(truck)); drawMapLayers(); markSelection(); }
-function selectRoute(id) { selectedRouteId = id; selectedTruckId = null; selectedIncidentId = null; const route = routeById(id); openDetail(renderRouteDetail(route)); drawMapLayers(); markSelection(); }
+function selectRoute(id) { if (routeReoptimizationPreview?.routeId !== id) routeReoptimizationPreview = null; selectedRouteId = id; selectedTruckId = null; selectedIncidentId = null; const route = routeById(id); openDetail(renderRouteDetail(route)); drawMapLayers(); markSelection(); }
 function selectIncident(code) { selectedIncidentId = code; selectedTruckId = null; selectedRouteId = null; const incident = incidents.find((item) => item.code === code); openDetail(renderIncidentDetail(incident)); drawMapLayers(); markSelection(); }
 function startSimulation() { if (simulationTimer) return; simulationTimer = setInterval(() => { trucks.filter((truck) => truck.routeId && truck.state !== 'offline' && truck.state !== 'completed').forEach((truck) => { const path = routeGeometry(truck.routeId); simState[truck.id].index = (simState[truck.id].index + 1) % path.length; simState[truck.id].progress = Math.min(99, simState[truck.id].progress + 3); truck.progress = simState[truck.id].progress; truck.updatedAt = 'Ahora (simulación)'; truck.sector = routeById(truck.routeId)?.sector ?? truck.sector; const route = routeById(truck.routeId); if (route) route.progress = truck.progress; }); drawMapLayers(); if (selectedTruckId) selectTruck(selectedTruckId); if (selectedRouteId) selectRoute(selectedRouteId); if (selectedIncidentId) selectIncident(selectedIncidentId); }, 1800 / simulationSpeed); }
 function pauseSimulation() { clearInterval(simulationTimer); simulationTimer = null; }
@@ -869,6 +909,8 @@ document.addEventListener('click', (event) => {
   if (assignVehicleButton) { const vehicleId = $('#assignVehicleSelect')?.value; if (vehicleId) assignVehicleToExistingRoute(assignVehicleButton.dataset.assignVehicle, vehicleId); }
   const completeRouteButton = event.target.closest('[data-complete-route]');
   if (completeRouteButton) completeRouteManually(completeRouteButton.dataset.completeRoute);
+  const reoptimizeButton = event.target.closest('[data-reoptimize-route]');
+  if (reoptimizeButton) previewRouteReoptimization(reoptimizeButton.dataset.reoptimizeRoute);
   const resolveButton = event.target.closest('[data-resolve-incident]');
   if (resolveButton) { const incident = incidents.find((item) => item.code === resolveButton.dataset.resolveIncident); if (incident) { incident.status = 'Cerrada'; $('#supervisor').outerHTML = renderSupervisor(); } }
   const onboardButton = event.target.closest('[data-onboarding]');
