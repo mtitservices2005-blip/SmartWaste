@@ -4,7 +4,15 @@ export function makeTelemetry({ vehicle_id, municipality_id='laguna-salada-rd', 
   return { vehicle_id, municipality_id, latitude, longitude, accuracy, speed, heading, captured_at:new Date().toISOString(), received_at:new Date().toISOString(), source, device_id, correlation_id };
 }
 export class DeviceSimulator {
-  constructor(vehicleId = trucks[0].id) { this.vehicleId = vehicleId; this.intervalMs = 1000; this.speed = 18; this.index = 0; this.running = false; this.signalLost = false; this.events = []; }
+  // docs/TECHNICAL_DEBT_REGISTER.md item 16: emit() used to always look up its path via the global
+  // routePaths dictionary, coupling this otherwise adapter-agnostic class to a specific in-memory
+  // demo structure — the reason frontend/app.js's finishCreateRoute() had to mutate that dictionary
+  // at runtime for hand-drawn routes. `getPath`, if given, is called lazily on every emit() instead
+  // (not read once at construction) so callers can supply geometry from wherever it actually lives
+  // (e.g. frontend/app.js's routeGeometry(), which reads through operationsAdapter) without this
+  // class needing to know or care. Omit it and behavior is unchanged — falls back to the same
+  // routePaths/trucks lookup as before, which is what every existing test still relies on.
+  constructor(vehicleId = trucks[0].id, { getPath = null } = {}) { this.vehicleId = vehicleId; this.getPath = getPath; this.intervalMs = 1000; this.speed = 18; this.index = 0; this.running = false; this.signalLost = false; this.events = []; }
   selectVehicle(vehicleId) { this.vehicleId = vehicleId; this.reset(); }
   start() { this.running = true; return this.emit(); }
   pause() { this.running = false; return { paused:true }; }
@@ -14,7 +22,7 @@ export class DeviceSimulator {
   simulateStopped() { this.speed = 0; return this.emit('stopped'); }
   simulateDelayed() { return this.emit('delayed'); }
   simulateIncident(type='simulated_incident') { const event = { type, vehicle_id:this.vehicleId, notice: simulationNotice }; this.events.push(event); return event; }
-  emit(status='in_progress') { if (this.signalLost) return null; const truck = trucks.find((t) => t.id === this.vehicleId) ?? trucks[0]; const path = routePaths[truck.routeId] ?? [truck.position ?? [19.6489, -71.0956]]; const [latitude, longitude] = path[this.index % path.length]; this.index += 1; return { status, ...makeTelemetry({ vehicle_id:this.vehicleId, latitude, longitude, speed:this.speed }) }; }
+  emit(status='in_progress') { if (this.signalLost) return null; const truck = trucks.find((t) => t.id === this.vehicleId) ?? trucks[0]; const path = this.getPath ? this.getPath() : (routePaths[truck.routeId] ?? [truck.position ?? [19.6489, -71.0956]]); const [latitude, longitude] = path[this.index % path.length]; this.index += 1; return { status, ...makeTelemetry({ vehicle_id:this.vehicleId, latitude, longitude, speed:this.speed }) }; }
 }
 
 // Client-side stand-in for querying vehicle_positions by vehicle_id ordered by captured_at (the
