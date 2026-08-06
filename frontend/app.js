@@ -205,11 +205,11 @@ function renderSummary() {
   const openIncidents = incidents.filter((incident) => incident.status !== 'Cerrada');
   const outOfServiceTrucks = trucks.filter((truck) => truck.state === 'maintenance' || truck.state === 'offline');
   const summaryCards = [
-    { label: 'Rutas activas', value: activeRoutes.length, href: '#mapa' },
-    { label: 'Rutas retrasadas', value: delayedRoutes.length, href: '#mapa', tone: delayedRoutes.length ? 'alert' : '' },
+    { label: 'Rutas activas', value: activeRoutes.length, href: '#operaciones/mapa' },
+    { label: 'Rutas retrasadas', value: delayedRoutes.length, href: '#operaciones/mapa', tone: delayedRoutes.length ? 'alert' : '' },
     { label: 'Incidencias abiertas', value: openIncidents.length, href: '#supervisor', tone: openIncidents.length ? 'alert' : '' },
     { label: 'Rutas por verificar', value: pendingVerification.length, href: '#supervisor', tone: pendingVerification.length ? 'attention' : '' },
-    { label: 'Vehículos fuera de servicio', value: outOfServiceTrucks.length, href: '#municipal', scrollTo: 'fleetManagement', tone: outOfServiceTrucks.length ? 'attention' : '' }
+    { label: 'Vehículos fuera de servicio', value: outOfServiceTrucks.length, href: '#operaciones/flota', scrollTo: 'fleetManagement', tone: outOfServiceTrucks.length ? 'attention' : '' }
   ];
   const attentionItems = [
     ...delayedRoutes.map((route) => `<button class="row selectable" data-route="${route.id}"><span>🚨 Ruta retrasada: ${route.name}<br>${route.sectors.join(' · ')}</span>${pill('delayed')}</button>`),
@@ -226,9 +226,8 @@ function renderSummary() {
   </section>`;
 }
 
-function renderMap() {
-  return `<section id="mapa" class="operations-shell">
-    <div class="map-card">
+function renderMapPanel() {
+  return `<div class="map-card">
       <div class="map-header">
         <div><p class="eyebrow">${pilotMunicipality.branding.label}</p><h1>Mapa operativo real de ${pilotMunicipality.name}</h1><p class="demo">${demoNotice} · Las rutas son simuladas, no oficiales del ayuntamiento.</p></div>
         <div class="sim-controls" aria-label="Controles de simulación"><span>${simulationNotice} · fuente desacoplada: ${backendMode}</span><select id="simVehicle">${trucks.map((t) => `<option value="${t.id}">${t.unit}</option>`).join('')}</select><button class="btn-primary" data-sim="start">Iniciar</button><button data-sim="pause">Pausar</button><button data-sim="reset">Reiniciar</button><button class="btn-ghost" data-sim="speed">${simulationSpeed}×</button><button class="btn-ghost" data-sim="fullscreen">Pantalla completa</button></div>
@@ -236,8 +235,7 @@ function renderMap() {
       <div class="kpis compact">${operationalKpis().map(([name, value]) => `<div class="kpi"><strong>${value}</strong><br>${name}</div>`).join('')}</div>
       <div id="realMap" class="real-map" role="application" aria-label="Mapa OpenStreetMap de Laguna Salada"><div class="map-fallback"><strong>Mapa externo no disponible.</strong><span>Fallback operativo demo: use listas, paneles y coordenadas simuladas.</span></div></div>
     </div>
-    <aside class="detail-drawer is-hidden" id="detail" aria-hidden="true"></aside>
-  </section>`;
+    <aside class="detail-drawer is-hidden" id="detail" aria-hidden="true"></aside>`;
 }
 
 function renderTruckDetail(truck) {
@@ -261,7 +259,7 @@ function renderRouteDetail(route) {
   const assignAction = (!route.truckId || route.truckId === 'Sin asignar')
     ? (availableTrucks.length
       ? `<div class="controls"><select id="assignVehicleSelect">${availableTrucks.map((truck) => `<option value="${truck.id}">${truck.unit}</option>`).join('')}</select><button type="button" class="btn-primary" data-assign-vehicle="${route.id}">Asignar vehículo</button></div>`
-      : '<p class="demo">No hay vehículos disponibles para asignar — <a href="#municipal" data-scroll-to="fleetManagement">registra uno en Municipal · Flota y personal</a>.</p>')
+      : '<p class="demo">No hay vehículos disponibles para asignar — <a href="#operaciones/flota" data-scroll-to="fleetManagement">registra uno en Operaciones · Flota</a>.</p>')
     : '';
   const completeAction = (route.truckId && route.truckId !== 'Sin asignar' && route.status !== 'completed' && route.status !== 'verified')
     ? `<div class="controls"><button type="button" class="btn-primary" data-complete-route="${route.id}">Marcar como completada</button></div>`
@@ -289,7 +287,38 @@ function renderRouteDetail(route) {
 }
 function renderIncidentDetail(incident) { return `<div class="drawer-head"><p class="eyebrow">Incidencia operativa demo</p><h2>${incident.type}</h2>${pill('open')}</div><p><b>Folio:</b> ${incident.id}</p><p><b>Sector:</b> ${incident.sector}</p><p><b>Prioridad:</b> ${incident.priority}</p><p><b>Estado:</b> ${incident.status}</p><p>${incident.detail}</p><p class="demo">${demoNotice}</p>`; }
 
-function renderMunicipal() { return `<section id="municipal" class="section card"><h2>Panel municipal</h2><p class="demo">${demoNotice} · Municipio piloto configurable: ${pilotMunicipality.name}, ${pilotMunicipality.country}</p><div class="controls"><input id="search" placeholder="Buscar ruta, camión o sector"><select id="sectorFilter"><option value="">Todos los sectores</option>${sectors.map((s) => `<option>${s.name}</option>`).join('')}</select></div><div class="panel-grid"><div><h3>Rutas del día</h3><div class="list" id="routeList">${renderRoutes(routes)}</div></div><div><h3>Vehículos demo</h3><div id="vehicleList">${renderVehicleList()}</div></div><div><h3>Incidencias en mapa</h3>${incidents.map((incident) => `<button class="row selectable${incident.code === selectedIncidentId ? ' selected' : ''}" data-incident="${incident.code}"><span>${incident.type}<br>${incident.sector}</span>${pill('open')}</button>`).join('')}</div></div>${renderFleetManagement()}${renderCreateRoute()}</section>`; }
+function renderRutasPanel() {
+  return `<h2>Rutas</h2><p class="demo">${demoNotice} · Municipio piloto configurable: ${pilotMunicipality.name}, ${pilotMunicipality.country}</p>
+    <div class="controls"><input id="search" placeholder="Buscar ruta, camión o sector"><select id="sectorFilter"><option value="">Todos los sectores</option>${sectors.map((s) => `<option>${s.name}</option>`).join('')}</select></div>
+    <h3>Rutas del día</h3><div class="list" id="routeList">${renderRoutes(routes)}</div>
+    ${renderCreateRoute()}`;
+}
+function renderFlotaPanel() {
+  return `<h2>Flota</h2><p class="demo">${demoNotice}</p>
+    <h3>Vehículos demo</h3><div id="vehicleList">${renderVehicleList()}</div>
+    ${renderFleetManagement()}`;
+}
+function renderIncidenciasPanel() {
+  return `<h2>Incidencias</h2><p class="demo">${demoNotice}</p>
+    <div class="list">${incidents.map((incident) => `<button class="row selectable${incident.code === selectedIncidentId ? ' selected' : ''}" data-incident="${incident.code}"><span>${incident.type}<br>${incident.sector}</span>${pill('open')}</button>`).join('')}</div>`;
+}
+// Fase 3 UX (auditoría SW-020): "Municipal" hacía 5 cosas a la vez en un solo scroll (buscar rutas/
+// vehículos/incidencias, gestionar flota, crear rutas), y el mapa vivía en su propia pestaña de
+// nivel superior aparte. Agrupa Mapa/Rutas/Flota/Incidencias bajo un único espacio "Operaciones"
+// con sub-vistas locales (hash propio #operaciones/<vista>, no rompe deep-links existentes) —
+// mismas funciones/estado que antes (renderRoutes(), renderVehicleList(), renderFleetManagement(),
+// renderCreateRoute() sin cambios), solo reorganizado en paneles separados.
+const OPS_VIEWS = ['mapa', 'rutas', 'flota', 'incidencias'];
+const OPS_VIEW_LABELS = { mapa: 'Mapa', rutas: 'Rutas', flota: 'Flota', incidencias: 'Incidencias' };
+function renderOperations() {
+  return `<section id="operaciones" class="section">
+    <div class="ops-nav" role="tablist" aria-label="Vistas de Operaciones">${OPS_VIEWS.map((view) => `<button type="button" class="ops-tab" data-ops-nav="${view}" role="tab">${OPS_VIEW_LABELS[view]}</button>`).join('')}</div>
+    <div class="ops-panel operations-shell" data-ops-view="mapa">${renderMapPanel()}</div>
+    <div class="ops-panel card" data-ops-view="rutas">${renderRutasPanel()}</div>
+    <div class="ops-panel card" data-ops-view="flota">${renderFlotaPanel()}</div>
+    <div class="ops-panel card" data-ops-view="incidencias">${renderIncidenciasPanel()}</div>
+  </section>`;
+}
 function renderVehicleList() { return trucks.map((truck) => `<button class="row selectable${truck.id === selectedTruckId ? ' selected' : ''}" data-truck="${truck.id}"><span>${truckIcon(truck)} ${truck.unit}<br>${driverName(truck.driverId)}</span>${pill(truck.state)}</button>`).join(''); }
 // SW-032: the "Crear cuenta de acceso" button only makes sense once Supabase is configured (it
 // calls a real Edge Function, see supabase/functions/create-driver-account) and only for a driver
@@ -529,7 +558,7 @@ function renderBeforeAfter(m){return `<div class="comparison-table">${m.beforeAf
 
 function renderMaster() { return `<section id="master" class="section card"><h2>Master Admin MT IT Services</h2><p class="demo">${demoNotice}</p><div class="panel-grid">${municipalities.map((m) => `<article class="card"><h3>${m.name}</h3><p>Plan: ${m.plan}</p><p>Camiones: ${m.trucks} · Rutas: ${m.routes} · Usuarios: ${m.users}</p>${pill(m.status.toLowerCase().includes('operativo') ? 'active' : 'assigned')}<button class="btn-primary" data-onboarding="${m.id}">Onboarding demo</button><p class="demo" data-onboarding-status="${m.id}"></p></article>`).join('')}</div><h3>Arquitectura futura</h3><p>${pilotMunicipality.integrationsReady.join(' · ')}</p></section>`; }
 
-app.innerHTML = `${renderSummary()}${renderMap()}${renderMunicipal()}${renderSupervisor()}${renderDriverSection()}${renderCitizen()}${renderImpactCenter()}${renderMaster()}`;
+app.innerHTML = `${renderSummary()}${renderOperations()}${renderSupervisor()}${renderDriverSection()}${renderCitizen()}${renderImpactCenter()}${renderMaster()}`;
 
 // initMap() and initDriverMap() both call this at page load, before window.L exists yet — without
 // caching the in-flight promise, the second call would inject a second <script> tag, and whichever
@@ -800,36 +829,47 @@ function redrawCreateRouteTrace() {
 // SW-029: tab navigation — only one top-level section visible at a time, switched by the existing
 // #hash nav links (frontend/index.html), so a reload/shared link on a specific tab still lands on
 // it. Each renderXxx() call at the top of this file already produces one <section> as a direct
-// child of #app, in a fixed order (mapa, municipal, supervisor, ciudadania, impacto, master) — no
-// change needed there, this only toggles which one has the existing `.hidden` class.
+// child of #app, in a fixed order (resumen, operaciones, supervisor, conductor, ciudadania, impacto,
+// master) — no change needed there, this only toggles which one has the existing `.hidden` class.
+// Fase 3 UX extends this one level deeper for #operaciones: its hash can carry a sub-vista
+// (#operaciones/mapa, #operaciones/rutas, ...), so section matching only looks at the part before
+// the first "/".
 const SECTION_IDS = Array.from(app.children).map((section) => section.id);
 function sectionFromHash() {
-  const id = location.hash.slice(1);
+  const id = location.hash.slice(1).split('/')[0];
   return SECTION_IDS.includes(id) ? id : SECTION_IDS[0];
+}
+function currentOpsView() {
+  const [id, view] = location.hash.slice(1).split('/');
+  return id === 'operaciones' && OPS_VIEWS.includes(view) ? view : OPS_VIEWS[0];
+}
+function showOpsView(view) {
+  document.querySelectorAll('#operaciones [data-ops-view]').forEach((panel) => panel.classList.toggle('hidden', panel.dataset.opsView !== view));
+  document.querySelectorAll('#operaciones [data-ops-nav]').forEach((tab) => tab.classList.toggle('active', tab.dataset.opsNav === view));
+  // Same invalidateSize() rationale as showSection() below — a Leaflet map built while its
+  // container was display:none (i.e. its ops-panel wasn't the active sub-vista yet) reports zero
+  // size until told to recalculate.
+  if (view === 'mapa' && mapReady) requestAnimationFrame(() => map.invalidateSize());
+  if (view === 'rutas' && createRouteMapReady) requestAnimationFrame(() => createRouteMap.invalidateSize());
 }
 function showSection(id) {
   Array.from(app.children).forEach((section) => section.classList.toggle('hidden', section.id !== id));
   document.querySelectorAll('.topbar nav a').forEach((link) => link.classList.toggle('active', link.getAttribute('href') === `#${id}`));
-  // Leaflet sizes itself against its container's dimensions at creation time; a container that was
-  // display:none when its map was built reports zero size, leaving the map visibly cut off/blank
-  // until told to recalculate. invalidateSize() on every switch into a tab (not just the first)
-  // keeps it correct regardless of load order/timing.
-  if (id === 'mapa' && mapReady) requestAnimationFrame(() => map.invalidateSize());
-  // driverMap moved out of #municipal into its own #conductor section (item #12) — createRouteMap
-  // stayed put, so this split into two separate checks.
-  if (id === 'municipal' && createRouteMapReady) requestAnimationFrame(() => createRouteMap.invalidateSize());
+  if (id === 'operaciones') showOpsView(currentOpsView());
   if (id === 'conductor' && driverMapReady) requestAnimationFrame(() => driverMap.invalidateSize());
 }
 window.addEventListener('hashchange', () => showSection(sectionFromHash()));
 // Selecting a truck/route/incident updates #detail and the map, but both live inside the "mapa"
-// section — invisible while the click came from another tab (e.g. the route list in "municipal").
-// Jumping to "mapa" on selection is what actually shows the user the result of their click. Only
-// called from the real click handler below, never from selectTruck()/selectRoute()/selectIncident()
-// themselves, since the simulation loop re-calls those every tick just to refresh the open detail
-// panel — doing it there would yank the user back to "mapa" every ~2s even after they navigate away.
+// sub-vista of #operaciones — invisible while the click came from another tab/sub-vista (e.g. the
+// route list in "rutas"). Jumping to "operaciones/mapa" on selection is what actually shows the
+// user the result of their click. Only called from the real click handler below, never from
+// selectTruck()/selectRoute()/selectIncident() themselves, since the simulation loop re-calls those
+// every tick just to refresh the open detail panel — doing it there would yank the user back to the
+// map every ~2s even after they navigate away.
 function goToMapTab() {
-  if (location.hash.slice(1) === 'mapa') showSection('mapa');
-  else location.hash = 'mapa';
+  const target = 'operaciones/mapa';
+  if (location.hash.slice(1) === target) showSection('operaciones');
+  else location.hash = target;
 }
 function undoLastRoutePoint() { drawnRoutePoints.pop(); redrawCreateRouteTrace(); }
 // (a) createRoute() for the metadata, (b) persist the drawn geometry (route_paths), (c)
@@ -951,6 +991,8 @@ function resetSimulation() { pauseSimulation(); trucks.forEach((truck) => { cons
 
 document.addEventListener('click', (event) => {
   if (event.target.matches('[data-close-detail]')) { closeDetail(); return; }
+  const opsNavButton = event.target.closest('[data-ops-nav]');
+  if (opsNavButton) location.hash = `operaciones/${opsNavButton.dataset.opsNav}`;
   // Empty-state pointers like "registra uno en Municipal · Flota y personal" used to be plain
   // text — this makes them real links: switch tab via the normal hash nav, then scroll the
   // referenced panel into view once its section is visible (a hashchange handles the tab switch

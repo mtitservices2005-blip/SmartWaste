@@ -18,8 +18,7 @@ import { createIdentityProvider } from '../shared/core-ports.js';
 // anon_insert_citizen_report policy).
 export const SECTION_ROLES = {
   resumen: ['municipal_admin', 'supervisor', 'dispatcher', 'driver'],
-  mapa: ['municipal_admin', 'supervisor', 'dispatcher', 'driver'],
-  municipal: ['municipal_admin', 'dispatcher', 'driver'],
+  operaciones: ['municipal_admin', 'supervisor', 'dispatcher', 'driver'],
   supervisor: ['supervisor'],
   conductor: ['municipal_admin', 'dispatcher', 'driver'],
   impacto: ['municipal_admin', 'supervisor'],
@@ -27,10 +26,29 @@ export const SECTION_ROLES = {
   ciudadania: null
 };
 
+// Fase 3 UX (auditoría SW-020): "mapa" y "municipal" se fusionaron en un único top-level section
+// #operaciones con sub-vistas locales (frontend/app.js — OPS_VIEWS/renderOperations()), pero el
+// límite de acceso original entre ellas se preserva: 'mapa' seguía siendo visible para supervisor,
+// 'municipal' (ahora repartida en rutas/flota/incidencias) nunca lo fue. Este mapa gatea las
+// sub-vistas dentro de #operaciones exactamente como antes gateaba las dos secciones separadas.
+export const OPS_SUBVIEW_ROLES = {
+  mapa: ['municipal_admin', 'supervisor', 'dispatcher', 'driver'],
+  rutas: ['municipal_admin', 'dispatcher', 'driver'],
+  flota: ['municipal_admin', 'dispatcher', 'driver'],
+  incidencias: ['municipal_admin', 'dispatcher', 'driver']
+};
+
 // Pure, DOM-free — unit-tested directly in tests/auth-gate.test.mjs. Given a role (or null for no
 // session / anonymous), returns the section ids that should be visible.
 export function pickVisibleSections(role, sections = SECTION_ROLES) {
   return Object.entries(sections)
+    .filter(([, allowedRoles]) => allowedRoles === null || (role && allowedRoles.includes(role)))
+    .map(([id]) => id);
+}
+
+// Same shape as pickVisibleSections(), for the sub-vistas inside #operaciones.
+export function pickVisibleOpsViews(role, views = OPS_SUBVIEW_ROLES) {
+  return Object.entries(views)
     .filter(([, allowedRoles]) => allowedRoles === null || (role && allowedRoles.includes(role)))
     .map(([id]) => id);
 }
@@ -57,6 +75,18 @@ function applySectionVisibility(visibleIds, sections = SECTION_ROLES) {
     if (section) section.style.display = visibleIds.includes(id) ? '' : 'none';
     const navLink = document.querySelector(`nav a[href="#${id}"]`);
     if (navLink) navLink.style.display = visibleIds.includes(id) ? '' : 'none';
+  });
+}
+
+// Gates the sub-vista tabs/panels inside #operaciones the same way applySectionVisibility() gates
+// top-level sections — inline style, so it wins over app.js's own class-based tab-switching
+// ('hidden' toggled by showOpsView()) regardless of which sub-vista is currently active.
+function applyOpsViewVisibility(visibleViews, views = OPS_SUBVIEW_ROLES) {
+  Object.keys(views).forEach((view) => {
+    const tab = document.querySelector(`[data-ops-nav="${view}"]`);
+    if (tab) tab.style.display = visibleViews.includes(view) ? '' : 'none';
+    const panel = document.querySelector(`[data-ops-view="${view}"]`);
+    if (panel) panel.style.display = visibleViews.includes(view) ? '' : 'none';
   });
 }
 
@@ -96,6 +126,7 @@ export async function initAuthGate() {
     try {
       const ctx = await identity.resolveContext();
       applySectionVisibility(pickVisibleSections(ctx.role));
+      applyOpsViewVisibility(pickVisibleOpsViews(ctx.role));
       return ctx;
     } catch {
       return null;
@@ -112,6 +143,7 @@ export async function initAuthGate() {
       event.preventDefault();
       overlay.remove();
       applySectionVisibility(pickVisibleSections(null));
+      applyOpsViewVisibility(pickVisibleOpsViews(null));
       resolve(null);
     });
     overlay.querySelector('#authForm').addEventListener('submit', async (event) => {
