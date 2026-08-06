@@ -11,20 +11,20 @@ assert.deepEqual(pickVisibleSections(null).sort(), ['ciudadania']);
 // Driver: operational sections, not the impact center (no reports.read in PERMISSIONS.driver) or
 // master admin. Includes 'conductor' (item #12 of docs/TECHNICAL_DEBT_REGISTER.md — the driver
 // mobile view is now its own top-level section, not embedded inside 'municipal').
-assert.deepEqual(pickVisibleSections('driver').sort(), ['ciudadania', 'conductor', 'mapa', 'municipal']);
+assert.deepEqual(pickVisibleSections('driver').sort(), ['ciudadania', 'conductor', 'mapa', 'municipal', 'resumen']);
 
 // Dispatcher: same as driver — dispatcher also lacks reports.read (shared/auth-context.js
 // PERMISSIONS.dispatcher).
-assert.deepEqual(pickVisibleSections('dispatcher').sort(), ['ciudadania', 'conductor', 'mapa', 'municipal']);
+assert.deepEqual(pickVisibleSections('dispatcher').sort(), ['ciudadania', 'conductor', 'mapa', 'municipal', 'resumen']);
 
 // Supervisor gets its own dedicated view (route verification + incident management, matching
 // PERMISSIONS.supervisor's routes.verify/incidents.manage) instead of the generic municipal panel —
 // and no 'conductor' either, matching what it could see before this section existed on its own.
-assert.deepEqual(pickVisibleSections('supervisor').sort(), ['ciudadania', 'impacto', 'mapa', 'supervisor']);
+assert.deepEqual(pickVisibleSections('supervisor').sort(), ['ciudadania', 'impacto', 'mapa', 'resumen', 'supervisor']);
 
 // municipal_admin: generic municipal panel + impact center + the driver view, not the master
 // admin panel.
-assert.deepEqual(pickVisibleSections('municipal_admin').sort(), ['ciudadania', 'conductor', 'impacto', 'mapa', 'municipal']);
+assert.deepEqual(pickVisibleSections('municipal_admin').sort(), ['ciudadania', 'conductor', 'impacto', 'mapa', 'municipal', 'resumen']);
 
 // Platform superadmin: only the master admin panel (platform-scoped, not a single municipality's
 // operations) plus the always-public citizen portal.

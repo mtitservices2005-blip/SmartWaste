@@ -193,6 +193,39 @@ function operationalKpis() {
   ];
 }
 
+// Fase 2 UX (auditoría SW-020): la app no tenía pantalla de aterrizaje — se llegaba directo a
+// "Mapa" sin ningún resumen de qué necesita atención. Esta sección agrega esa vista, reutilizando
+// los mismos filtros que ya usan renderMap()/renderSupervisor() (no se inventa ningún estado
+// nuevo), y cada tarjeta es un link real a la sección correspondiente en vez de solo mostrar el
+// número — mismo patrón del link "Municipal · Flota y personal" de la Fase 1.
+function renderSummary() {
+  const activeRoutes = routes.filter((route) => route.status === 'in_progress' || route.status === 'delayed');
+  const delayedRoutes = routes.filter((route) => route.status === 'delayed');
+  const pendingVerification = routes.filter((route) => route.status === 'completed');
+  const openIncidents = incidents.filter((incident) => incident.status !== 'Cerrada');
+  const outOfServiceTrucks = trucks.filter((truck) => truck.state === 'maintenance' || truck.state === 'offline');
+  const summaryCards = [
+    { label: 'Rutas activas', value: activeRoutes.length, href: '#mapa' },
+    { label: 'Rutas retrasadas', value: delayedRoutes.length, href: '#mapa', tone: delayedRoutes.length ? 'alert' : '' },
+    { label: 'Incidencias abiertas', value: openIncidents.length, href: '#supervisor', tone: openIncidents.length ? 'alert' : '' },
+    { label: 'Rutas por verificar', value: pendingVerification.length, href: '#supervisor', tone: pendingVerification.length ? 'attention' : '' },
+    { label: 'Vehículos fuera de servicio', value: outOfServiceTrucks.length, href: '#municipal', scrollTo: 'fleetManagement', tone: outOfServiceTrucks.length ? 'attention' : '' }
+  ];
+  const attentionItems = [
+    ...delayedRoutes.map((route) => `<button class="row selectable" data-route="${route.id}"><span>🚨 Ruta retrasada: ${route.name}<br>${route.sectors.join(' · ')}</span>${pill('delayed')}</button>`),
+    ...openIncidents.map((incident) => `<button class="row selectable" data-incident="${incident.code}"><span>⚠️ ${incident.type}<br>${incident.sector} · ${incident.priority}</span>${pill('open')}</button>`)
+  ];
+  return `<section id="resumen" class="section card">
+    <p class="eyebrow">${pilotMunicipality.branding.label}</p>
+    <h1>Resumen del día</h1>
+    <p class="demo">${demoNotice} · Municipio piloto: ${pilotMunicipality.name}, ${pilotMunicipality.country}</p>
+    <div class="kpis summary-grid">${summaryCards.map((card) => `<a class="kpi${card.tone ? ` ${card.tone}` : ''}" href="${card.href}"${card.scrollTo ? ` data-scroll-to="${card.scrollTo}"` : ''}><strong>${card.value}</strong><br>${card.label}</a>`).join('')}</div>
+    ${attentionItems.length
+      ? `<div><h3>Necesita tu atención</h3><div class="list">${attentionItems.join('')}</div></div>`
+      : '<p class="demo">Sin rutas retrasadas ni incidencias abiertas — todo en orden.</p>'}
+  </section>`;
+}
+
 function renderMap() {
   return `<section id="mapa" class="operations-shell">
     <div class="map-card">
@@ -496,7 +529,7 @@ function renderBeforeAfter(m){return `<div class="comparison-table">${m.beforeAf
 
 function renderMaster() { return `<section id="master" class="section card"><h2>Master Admin MT IT Services</h2><p class="demo">${demoNotice}</p><div class="panel-grid">${municipalities.map((m) => `<article class="card"><h3>${m.name}</h3><p>Plan: ${m.plan}</p><p>Camiones: ${m.trucks} · Rutas: ${m.routes} · Usuarios: ${m.users}</p>${pill(m.status.toLowerCase().includes('operativo') ? 'active' : 'assigned')}<button class="btn-primary" data-onboarding="${m.id}">Onboarding demo</button><p class="demo" data-onboarding-status="${m.id}"></p></article>`).join('')}</div><h3>Arquitectura futura</h3><p>${pilotMunicipality.integrationsReady.join(' · ')}</p></section>`; }
 
-app.innerHTML = `${renderMap()}${renderMunicipal()}${renderSupervisor()}${renderDriverSection()}${renderCitizen()}${renderImpactCenter()}${renderMaster()}`;
+app.innerHTML = `${renderSummary()}${renderMap()}${renderMunicipal()}${renderSupervisor()}${renderDriverSection()}${renderCitizen()}${renderImpactCenter()}${renderMaster()}`;
 
 // initMap() and initDriverMap() both call this at page load, before window.L exists yet — without
 // caching the in-flight promise, the second call would inject a second <script> tag, and whichever

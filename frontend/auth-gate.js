@@ -17,6 +17,7 @@ import { createIdentityProvider } from '../shared/core-ports.js';
 // designed for anonymous access — see supabase/migrations/202607150006_sw020_rls_fixes.sql's
 // anon_insert_citizen_report policy).
 export const SECTION_ROLES = {
+  resumen: ['municipal_admin', 'supervisor', 'dispatcher', 'driver'],
   mapa: ['municipal_admin', 'supervisor', 'dispatcher', 'driver'],
   municipal: ['municipal_admin', 'dispatcher', 'driver'],
   supervisor: ['supervisor'],
