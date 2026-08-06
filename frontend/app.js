@@ -223,7 +223,7 @@ function renderRouteDetail(route) {
 }
 function renderIncidentDetail(incident) { return `<div class="drawer-head"><p class="eyebrow">Incidencia operativa demo</p><h2>${incident.type}</h2>${pill('open')}</div><p><b>Folio:</b> ${incident.id}</p><p><b>Sector:</b> ${incident.sector}</p><p><b>Prioridad:</b> ${incident.priority}</p><p><b>Estado:</b> ${incident.status}</p><p>${incident.detail}</p><p class="demo">${demoNotice}</p>`; }
 
-function renderMunicipal() { return `<section id="municipal" class="section card"><h2>Panel municipal</h2><p class="demo">${demoNotice} · Municipio piloto configurable: ${pilotMunicipality.name}, ${pilotMunicipality.country}</p><div class="controls"><input id="search" placeholder="Buscar ruta, camión o sector"><select id="sectorFilter"><option value="">Todos los sectores</option>${sectors.map((s) => `<option>${s.name}</option>`).join('')}</select></div><div class="panel-grid"><div><h3>Rutas del día</h3><div class="list" id="routeList">${renderRoutes(routes)}</div></div><div><h3>Vehículos demo</h3><div id="vehicleList">${renderVehicleList()}</div></div><div><h3>Incidencias en mapa</h3>${incidents.map((incident) => `<button class="row selectable${incident.code === selectedIncidentId ? ' selected' : ''}" data-incident="${incident.code}"><span>${incident.type}<br>${incident.sector}</span>${pill('open')}</button>`).join('')}</div></div>${renderFleetManagement()}${renderCreateRoute()}<h3>Vista móvil conductor</h3>${renderDriverMobile()}</section>`; }
+function renderMunicipal() { return `<section id="municipal" class="section card"><h2>Panel municipal</h2><p class="demo">${demoNotice} · Municipio piloto configurable: ${pilotMunicipality.name}, ${pilotMunicipality.country}</p><div class="controls"><input id="search" placeholder="Buscar ruta, camión o sector"><select id="sectorFilter"><option value="">Todos los sectores</option>${sectors.map((s) => `<option>${s.name}</option>`).join('')}</select></div><div class="panel-grid"><div><h3>Rutas del día</h3><div class="list" id="routeList">${renderRoutes(routes)}</div></div><div><h3>Vehículos demo</h3><div id="vehicleList">${renderVehicleList()}</div></div><div><h3>Incidencias en mapa</h3>${incidents.map((incident) => `<button class="row selectable${incident.code === selectedIncidentId ? ' selected' : ''}" data-incident="${incident.code}"><span>${incident.type}<br>${incident.sector}</span>${pill('open')}</button>`).join('')}</div></div>${renderFleetManagement()}${renderCreateRoute()}</section>`; }
 function renderVehicleList() { return trucks.map((truck) => `<button class="row selectable${truck.id === selectedTruckId ? ' selected' : ''}" data-truck="${truck.id}"><span>${truckIcon(truck)} ${truck.unit}<br>${driverName(truck.driverId)}</span>${pill(truck.state)}</button>`).join(''); }
 // SW-032: the "Crear cuenta de acceso" button only makes sense once Supabase is configured (it
 // calls a real Edge Function, see supabase/functions/create-driver-account) and only for a driver
@@ -372,6 +372,13 @@ function renderDriverMobile() {
     <p class="demo">${simulationNotice} · trazo histórico vía polling cada ${DRIVER_POLL_INTERVAL_MS / 1000}s (sin Realtime, ver docs/TECHNICAL_DEBT_REGISTER.md #14)</p>
   </div>`;
 }
+// Ítem #12 de docs/TECHNICAL_DEBT_REGISTER.md: la vista móvil del conductor vivía embebida como un
+// <div class="mobile"> de unas pocas líneas dentro de renderMunicipal() — sin sección propia ni
+// enlace de navegación propio, a pesar de que el README la promete como una vista dedicada. Ahora
+// es su propia <section id="conductor">, con el mismo contenido (renderDriverMobile() sin cambios)
+// solo movido a un lugar de primer nivel, gateado a los mismos roles que ya veían Municipal
+// (municipal_admin/dispatcher/driver — frontend/auth-gate.js's SECTION_ROLES).
+function renderDriverSection() { return `<section id="conductor" class="section card"><h2>Vista móvil conductor</h2><p class="demo">${demoNotice} · Posición y trazo del vehículo asignado.</p>${renderDriverMobile()}</section>`; }
 function renderRoutes(items) { return items.map((route) => `<article class="row selectable${route.id === selectedRouteId ? ' selected' : ''}" data-route="${route.id}"><div><strong>${route.name}</strong><br>${route.sectors.join(' · ')} · ETA ${route.eta}<br>${progress(route.progress)}</div><div>${pill(routeStatus(route))}<br>${route.covered}/${route.stops} paradas</div></article>`).join(''); }
 function renderSupervisor() {
   const pendingVerification = routes.filter((route) => route.status === 'completed');
@@ -413,7 +420,7 @@ function renderBeforeAfter(m){return `<div class="comparison-table">${m.beforeAf
 
 function renderMaster() { return `<section id="master" class="section card"><h2>Master Admin MT IT Services</h2><p class="demo">${demoNotice}</p><div class="panel-grid">${municipalities.map((m) => `<article class="card"><h3>${m.name}</h3><p>Plan: ${m.plan}</p><p>Camiones: ${m.trucks} · Rutas: ${m.routes} · Usuarios: ${m.users}</p>${pill(m.status.toLowerCase().includes('operativo') ? 'active' : 'assigned')}<button data-onboarding="${m.id}">Onboarding demo</button><p class="demo" data-onboarding-status="${m.id}"></p></article>`).join('')}</div><h3>Arquitectura futura</h3><p>${pilotMunicipality.integrationsReady.join(' · ')}</p></section>`; }
 
-app.innerHTML = `${renderMap()}${renderMunicipal()}${renderSupervisor()}${renderCitizen()}${renderImpactCenter()}${renderMaster()}`;
+app.innerHTML = `${renderMap()}${renderMunicipal()}${renderSupervisor()}${renderDriverSection()}${renderCitizen()}${renderImpactCenter()}${renderMaster()}`;
 
 // initMap() and initDriverMap() both call this at page load, before window.L exists yet — without
 // caching the in-flight promise, the second call would inject a second <script> tag, and whichever
@@ -654,10 +661,10 @@ function showSection(id) {
   // until told to recalculate. invalidateSize() on every switch into a tab (not just the first)
   // keeps it correct regardless of load order/timing.
   if (id === 'mapa' && mapReady) requestAnimationFrame(() => map.invalidateSize());
-  if (id === 'municipal') {
-    if (driverMapReady) requestAnimationFrame(() => driverMap.invalidateSize());
-    if (createRouteMapReady) requestAnimationFrame(() => createRouteMap.invalidateSize());
-  }
+  // driverMap moved out of #municipal into its own #conductor section (item #12) — createRouteMap
+  // stayed put, so this split into two separate checks.
+  if (id === 'municipal' && createRouteMapReady) requestAnimationFrame(() => createRouteMap.invalidateSize());
+  if (id === 'conductor' && driverMapReady) requestAnimationFrame(() => driverMap.invalidateSize());
 }
 window.addEventListener('hashchange', () => showSection(sectionFromHash()));
 // Selecting a truck/route/incident updates #detail and the map, but both live inside the "mapa"

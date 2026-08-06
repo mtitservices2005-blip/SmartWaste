@@ -20,6 +20,7 @@ export const SECTION_ROLES = {
   mapa: ['municipal_admin', 'supervisor', 'dispatcher', 'driver'],
   municipal: ['municipal_admin', 'dispatcher', 'driver'],
   supervisor: ['supervisor'],
+  conductor: ['municipal_admin', 'dispatcher', 'driver'],
   impacto: ['municipal_admin', 'supervisor'],
   master: ['mt_superadmin'],
   ciudadania: null
