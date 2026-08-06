@@ -28,10 +28,10 @@ Definido en `frontend/auth-gate.js` (`SECTION_ROLES`), validado sin necesidad de
 | Rol | Secciones visibles |
 |---|---|
 | (sin sesión / ciudadano) | Portal ciudadano únicamente |
-| `driver` | Mapa, panel municipal, portal ciudadano |
-| `dispatcher` | Mapa, panel municipal, portal ciudadano |
-| `supervisor` | Mapa, panel de supervisor (propio, verificación de rutas + incidencias), impacto y ahorros, portal ciudadano — no ve el panel municipal genérico |
-| `municipal_admin` | Mapa, panel municipal, impacto y ahorros, portal ciudadano |
+| `driver` | Mapa, panel municipal, vista conductor, portal ciudadano |
+| `dispatcher` | Mapa, panel municipal, vista conductor, portal ciudadano |
+| `supervisor` | Mapa, panel de supervisor (propio, verificación de rutas + incidencias), impacto y ahorros, portal ciudadano — no ve el panel municipal genérico ni la vista conductor |
+| `municipal_admin` | Mapa, panel municipal, vista conductor, impacto y ahorros, portal ciudadano |
 | `mt_superadmin` | Master Admin, portal ciudadano |
 
 El portal ciudadano (`#ciudadania`) es siempre público — coincide con la política `anon_insert_citizen_report` de `supabase/migrations/202607150006_sw020_rls_fixes.sql`, pensada para reportes anónimos.
