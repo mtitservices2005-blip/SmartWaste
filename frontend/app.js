@@ -5,6 +5,7 @@ import { validateEvidenceFile } from '../shared/channel-contracts.js';
 import { createDemoFolio, findSectorService, findIncidentStatus } from '../shared/citizen-portal.js';
 import { generateRouteStopPoints, deriveStopStatus, haversineMeters, splitIntoTrips } from '../shared/route-engine.js';
 import { fetchRoadRoute } from '../shared/osrm-routing.js';
+import { fetchBuildingCount, estimateCollectionMinutes } from '../shared/overpass-buildings.js';
 import { optimizeWaypointOrder } from '../shared/route-optimizer.js';
 import { positionFromGeolocationEvent, shouldSendPosition } from '../shared/browser-geolocation.js';
 import { suggestReoptimizedOrder } from '../shared/route-reoptimizer.js';
@@ -247,8 +248,14 @@ function renderRouteDetail(route) {
            <p class="demo">Sugerencia de vista previa — no aplicada. Este orden no se guarda en la ruta.</p>`
          : '<p class="demo">No hay suficientes paradas pendientes para reoptimizar.</p>'}`
     : '';
+  // Roadmap item 5 ("estimación de viviendas"): only rendered when the field exists — the 5
+  // pre-built demo routes (shared/demo-data.js) don't have it, and a route created while the
+  // Overpass estimate failed leaves it undefined too (rule 5, never break rendering).
+  const householdEstimateRow = route.estimatedHouseholds !== undefined
+    ? `<p><b>Viviendas estimadas (OSM)</b><span>${route.estimatedHouseholds} · ${route.estimatedMinutesRange ? `${route.estimatedMinutesRange.min}-${route.estimatedMinutesRange.max} min` : 'No disponible'}</span></p>`
+    : '';
   return `<div class="drawer-head"><p class="eyebrow">Detalle de ruta</p><h2>${route.name}</h2>${pill(routeStatus(route))}</div>
-    <div class="detail-grid"><p><b>Unidad asignada</b><span>${route.truckId}</span></p><p><b>Conductor</b><span>${driverName(route.driverId)}</span></p><p><b>Sectores</b><span>${route.sectors.join(', ')}</span></p><p><b>Inicio</b><span>${route.started}</span></p><p><b>Programada</b><span>${route.scheduled}</span></p><p><b>Tiempo estimado</b><span>${route.estimatedMinutes} min</span></p><p><b>Distancia demo</b><span>${route.distanceKm} km</span></p><p><b>Paradas</b><span>${route.covered} completadas · ${route.pending} pendientes</span></p></div>
+    <div class="detail-grid"><p><b>Unidad asignada</b><span>${route.truckId}</span></p><p><b>Conductor</b><span>${driverName(route.driverId)}</span></p><p><b>Sectores</b><span>${route.sectors.join(', ')}</span></p><p><b>Inicio</b><span>${route.started}</span></p><p><b>Programada</b><span>${route.scheduled}</span></p><p><b>Tiempo estimado</b><span>${route.estimatedMinutes} min</span></p><p><b>Distancia demo</b><span>${route.distanceKm} km</span></p><p><b>Paradas</b><span>${route.covered} completadas · ${route.pending} pendientes</span></p>${householdEstimateRow}</div>
     ${assignAction}${completeAction}${reoptimizeAction}
     ${progress(route.progress)}<p><strong>${route.progress}%</strong> completado</p><h3>Incidencias</h3>${relatedIncidents.map((incident) => `<button class="incident-row" data-incident="${incident.code}">${incident.type} · ${incident.status}</button>`).join('') || '<p>Sin incidencias demo.</p>'}
     <h3>Timeline operativo</h3><div class="timeline">${routeFlow.map((step) => `<p>${step === route.status ? '●' : '○'} ${label(step)}</p>`).join('')}</div>
@@ -821,6 +828,16 @@ async function finishCreateRoute() {
   const stopPoints = generateRouteStopPoints(path);
   const distanceMeters = path.slice(1).reduce((total, point, index) => total + haversineMeters(path[index], point), 0);
 
+  // Roadmap item 5 ("estimación de viviendas"): this codebase has no real address/cadastral data —
+  // stopPoints above are synthetic points every ~100m, not actual houses. Estimate real household
+  // density near the route via OpenStreetMap building footprints (public Overpass instance, same
+  // free/no-credentials/rate-limited tradeoff as OSRM). Any failure falls back to "no disponible"
+  // and never blocks route creation (rule 5) — real municipal cadastral data is the accuracy
+  // upgrade path, explicitly out of scope for now (docs/TECHNICAL_DEBT_REGISTER.md).
+  if (status) status.textContent = 'Estimando número de viviendas (OpenStreetMap)…';
+  const buildingResult = await fetchBuildingCount(stopPoints.map((point) => [point.latitude, point.longitude]));
+  const timeEstimate = buildingResult.ok ? estimateCollectionMinutes(buildingResult.buildingCount) : null;
+
   const vehicleSelect = $('#createRouteVehicle');
   const vehicleId = vehicleSelect?.value;
   const truck = vehicleId ? trucks.find((item) => item.id === vehicleId) : null;
@@ -837,7 +854,10 @@ async function finishCreateRoute() {
   const newRoute = {
     id: routeId, name, status: 'planned', sectors: ['Ruta personalizada'], sector: 'Ruta personalizada',
     truckId: 'Sin asignar', driverId: null, progress: 0, scheduled: '—', started: 'Pendiente', eta: '—',
-    distanceKm: Math.round((distanceMeters / 1000) * 10) / 10, estimatedMinutes: '—',
+    distanceKm: Math.round((distanceMeters / 1000) * 10) / 10,
+    estimatedMinutes: timeEstimate ? timeEstimate.averageMinutes : '—',
+    estimatedHouseholds: buildingResult.ok ? buildingResult.buildingCount : undefined,
+    estimatedMinutesRange: timeEstimate ? { min: timeEstimate.minMinutes, max: timeEstimate.maxMinutes } : undefined,
     stops: stopPoints.length, covered: 0, pending: stopPoints.length, incidents: []
   };
   routes.push(newRoute);
@@ -868,7 +888,10 @@ async function finishCreateRoute() {
     ? 'trazado ajustado a calles reales (OSRM)'
     : 'trazo en línea recta — no se pudo calcular el ruteo por calles';
   const optimizePart = optimizeOrder ? ', orden de paradas optimizado' : '';
-  if (status) status.textContent = `Ruta "${name}" creada con ${stopPoints.length} puntos de recolección, ${roadPart}${optimizePart}.`;
+  const estimatePart = buildingResult.ok
+    ? `, ~${buildingResult.buildingCount} viviendas estimadas (${timeEstimate.minMinutes}-${timeEstimate.maxMinutes} min, OSM)`
+    : ', estimación de viviendas no disponible';
+  if (status) status.textContent = `Ruta "${name}" creada con ${stopPoints.length} puntos de recolección, ${roadPart}${optimizePart}${estimatePart}.`;
   if (tripPreview) tripPreview.textContent = truck ? formatTripPreview(splitIntoTrips(stopPoints, truck.max_stops ?? DEFAULT_MAX_STOPS)) : '';
 }
 
