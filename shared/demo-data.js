@@ -12,7 +12,8 @@ export const stateLabels = {
   assigned: 'Asignada',
   in_progress: 'En progreso',
   verified: 'Verificada',
-  open: 'Abierta'
+  open: 'Abierta',
+  maintenance: 'Mantenimiento'
 };
 
 export const routeFlow = ['planned', 'assigned', 'started', 'in_progress', 'delayed', 'completed', 'verified'];

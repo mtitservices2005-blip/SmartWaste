@@ -10,7 +10,9 @@ Las 7 migraciones en `migrations/` (`sw007_foundation` → `sw008_rls_draft` →
 
 **SW-034** conecta las escrituras de `frontend/app.js` al backend real con el mismo interruptor: una vez que la sesión resuelve `municipality_id`, `bootstrapRealBackend()` construye `createSupabaseOperationsAdapter` vía `resolveOperationsAdapter()` (`shared/operations-adapter.js`), y crear un vehículo/chofer/ruta desde la UI ("Flota y personal" / "Crear ruta") se refleja de verdad en Supabase, además de en el estado demo local (que sigue siendo la fuente de la UI en ejecución — ver limitación abajo). El indicador "fuente desacoplada" en el mapa operativo pasa de `DEMO_ONLY` a `REAL` cuando esto ocurre.
 
-**Limitación conocida (`docs/TECHNICAL_DEBT_REGISTER.md` ítem #17):** esto no *hidrata* vehículos/rutas/choferes que ya existieran en Supabase de sesiones anteriores hacia la página en ejecución — solo lo creado durante la sesión actual se persiste. Hidratar datos preexistentes requiere re-derivar varias piezas de estado de simulación que hoy se calculan una sola vez al cargar la página; queda como seguimiento (SW-035).
+**SW-035 (fase A)** agrega la hidratación de vehículos y choferes preexistentes: `hydrateVehiclesAndDrivers()`, llamada desde `bootstrapRealBackend()`, trae `listVehicles()`/`listDrivers()` reales y los suma (nunca reemplaza) a las listas que ya se ven en Municipal — así que un vehículo/chofer que ya existía en Supabase de una sesión anterior también aparece, no solo lo creado en la sesión actual.
+
+**Limitación conocida (`docs/TECHNICAL_DEBT_REGISTER.md` ítem #17):** las **rutas** con su asignación real (vehículo/chofer/progreso vía `route_runs`) todavía no se hidratan — requiere un método de adaptador nuevo que hoy no existe (solo se pueden transicionar `route_runs`, no listarlos) y extender el estado de simulación (`simState`/`driverSimulators`) por cada ruta hidratada. Queda como seguimiento (SW-035 fase B).
 
 ## Edge Functions
 
