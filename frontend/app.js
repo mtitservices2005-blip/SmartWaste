@@ -152,8 +152,11 @@ function progress(value) { return `<div class="progress" aria-label="${value}% c
 function pill(state) { return `<span class="pill ${state}">${label(state)}</span>`; }
 function routeStatus(route) { return route.status === 'completed' || route.status === 'verified' ? 'completed' : route.status; }
 function truckIcon(truck) {
-  const shapes = { active: '▶', stopped: '■', delayed: '!', offline: '×', completed: '✓' };
-  return `<span class="truck-icon ${truck.state}"><b>${shapes[truck.state]}</b><small>${truck.unit.replace('SW-LS-', '')}</small></span>`;
+  // Codex review on PR #39: real vehicles can legitimately be 'maintenance' (shared/contracts.js's
+  // VEHICLE_STATES / the DB check constraint both allow it), which this map didn't cover — a
+  // hydrated vehicle in that state rendered with an undefined icon.
+  const shapes = { active: '▶', stopped: '■', delayed: '!', offline: '×', completed: '✓', maintenance: '🔧' };
+  return `<span class="truck-icon ${truck.state}"><b>${shapes[truck.state] ?? '?'}</b><small>${truck.unit.replace('SW-LS-', '')}</small></span>`;
 }
 function kpiValue(predicate) { return trucks.filter(predicate).length; }
 function operationalKpis() {
