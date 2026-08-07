@@ -17,8 +17,8 @@ import { createIdentityProvider } from '../shared/core-ports.js';
 // designed for anonymous access — see supabase/migrations/202607150006_sw020_rls_fixes.sql's
 // anon_insert_citizen_report policy).
 export const SECTION_ROLES = {
-  mapa: ['municipal_admin', 'supervisor', 'dispatcher', 'driver'],
-  municipal: ['municipal_admin', 'dispatcher', 'driver'],
+  resumen: ['municipal_admin', 'supervisor', 'dispatcher', 'driver'],
+  operaciones: ['municipal_admin', 'supervisor', 'dispatcher', 'driver'],
   supervisor: ['supervisor'],
   conductor: ['municipal_admin', 'dispatcher', 'driver'],
   impacto: ['municipal_admin', 'supervisor'],
@@ -26,10 +26,29 @@ export const SECTION_ROLES = {
   ciudadania: null
 };
 
+// Fase 3 UX (auditoría SW-020): "mapa" y "municipal" se fusionaron en un único top-level section
+// #operaciones con sub-vistas locales (frontend/app.js — OPS_VIEWS/renderOperations()), pero el
+// límite de acceso original entre ellas se preserva: 'mapa' seguía siendo visible para supervisor,
+// 'municipal' (ahora repartida en rutas/flota/incidencias) nunca lo fue. Este mapa gatea las
+// sub-vistas dentro de #operaciones exactamente como antes gateaba las dos secciones separadas.
+export const OPS_SUBVIEW_ROLES = {
+  mapa: ['municipal_admin', 'supervisor', 'dispatcher', 'driver'],
+  rutas: ['municipal_admin', 'dispatcher', 'driver'],
+  flota: ['municipal_admin', 'dispatcher', 'driver'],
+  incidencias: ['municipal_admin', 'dispatcher', 'driver']
+};
+
 // Pure, DOM-free — unit-tested directly in tests/auth-gate.test.mjs. Given a role (or null for no
 // session / anonymous), returns the section ids that should be visible.
 export function pickVisibleSections(role, sections = SECTION_ROLES) {
   return Object.entries(sections)
+    .filter(([, allowedRoles]) => allowedRoles === null || (role && allowedRoles.includes(role)))
+    .map(([id]) => id);
+}
+
+// Same shape as pickVisibleSections(), for the sub-vistas inside #operaciones.
+export function pickVisibleOpsViews(role, views = OPS_SUBVIEW_ROLES) {
+  return Object.entries(views)
     .filter(([, allowedRoles]) => allowedRoles === null || (role && allowedRoles.includes(role)))
     .map(([id]) => id);
 }
@@ -54,8 +73,31 @@ function applySectionVisibility(visibleIds, sections = SECTION_ROLES) {
   Object.keys(sections).forEach((id) => {
     const section = document.getElementById(id);
     if (section) section.style.display = visibleIds.includes(id) ? '' : 'none';
-    const navLink = document.querySelector(`nav a[href="#${id}"]`);
-    if (navLink) navLink.style.display = visibleIds.includes(id) ? '' : 'none';
+    // Codex review on PR #49: "Resumen del día" (frontend/app.js's renderSummary()) links straight
+    // to sections/sub-vistas by hash too, same as the topbar nav — a role that can't see the
+    // destination must not get a dead-end card for it either. Matches on both the exact hash and a
+    // "#id/..." sub-vista prefix (e.g. an operaciones/<vista> link also counts as pointing at
+    // 'operaciones'), and isn't scoped to `nav` since these cards live in the page body.
+    document.querySelectorAll(`a[href="#${id}"], a[href^="#${id}/"]`).forEach((link) => {
+      link.style.display = visibleIds.includes(id) ? '' : 'none';
+    });
+  });
+}
+
+// Gates the sub-vista tabs/panels inside #operaciones the same way applySectionVisibility() gates
+// top-level sections — inline style, so it wins over app.js's own class-based tab-switching
+// ('hidden' toggled by showOpsView()) regardless of which sub-vista is currently active.
+function applyOpsViewVisibility(visibleViews, views = OPS_SUBVIEW_ROLES) {
+  Object.keys(views).forEach((view) => {
+    const tab = document.querySelector(`[data-ops-nav="${view}"]`);
+    if (tab) tab.style.display = visibleViews.includes(view) ? '' : 'none';
+    const panel = document.querySelector(`[data-ops-view="${view}"]`);
+    if (panel) panel.style.display = visibleViews.includes(view) ? '' : 'none';
+    // Same "Resumen del día" concern as applySectionVisibility() above, for cards that link
+    // straight to a specific sub-vista (e.g. "Vehículos fuera de servicio" -> #operaciones/flota).
+    document.querySelectorAll(`a[href="#operaciones/${view}"]`).forEach((link) => {
+      link.style.display = visibleViews.includes(view) ? '' : 'none';
+    });
   });
 }
 
@@ -95,6 +137,7 @@ export async function initAuthGate() {
     try {
       const ctx = await identity.resolveContext();
       applySectionVisibility(pickVisibleSections(ctx.role));
+      applyOpsViewVisibility(pickVisibleOpsViews(ctx.role));
       return ctx;
     } catch {
       return null;
@@ -111,6 +154,7 @@ export async function initAuthGate() {
       event.preventDefault();
       overlay.remove();
       applySectionVisibility(pickVisibleSections(null));
+      applyOpsViewVisibility(pickVisibleOpsViews(null));
       resolve(null);
     });
     overlay.querySelector('#authForm').addEventListener('submit', async (event) => {
