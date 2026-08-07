@@ -828,16 +828,6 @@ async function finishCreateRoute() {
   const stopPoints = generateRouteStopPoints(path);
   const distanceMeters = path.slice(1).reduce((total, point, index) => total + haversineMeters(path[index], point), 0);
 
-  // Roadmap item 5 ("estimación de viviendas"): this codebase has no real address/cadastral data —
-  // stopPoints above are synthetic points every ~100m, not actual houses. Estimate real household
-  // density near the route via OpenStreetMap building footprints (public Overpass instance, same
-  // free/no-credentials/rate-limited tradeoff as OSRM). Any failure falls back to "no disponible"
-  // and never blocks route creation (rule 5) — real municipal cadastral data is the accuracy
-  // upgrade path, explicitly out of scope for now (docs/TECHNICAL_DEBT_REGISTER.md).
-  if (status) status.textContent = 'Estimando número de viviendas (OpenStreetMap)…';
-  const buildingResult = await fetchBuildingCount(stopPoints.map((point) => [point.latitude, point.longitude]));
-  const timeEstimate = buildingResult.ok ? estimateCollectionMinutes(buildingResult.buildingCount) : null;
-
   const vehicleSelect = $('#createRouteVehicle');
   const vehicleId = vehicleSelect?.value;
   const truck = vehicleId ? trucks.find((item) => item.id === vehicleId) : null;
@@ -854,10 +844,7 @@ async function finishCreateRoute() {
   const newRoute = {
     id: routeId, name, status: 'planned', sectors: ['Ruta personalizada'], sector: 'Ruta personalizada',
     truckId: 'Sin asignar', driverId: null, progress: 0, scheduled: '—', started: 'Pendiente', eta: '—',
-    distanceKm: Math.round((distanceMeters / 1000) * 10) / 10,
-    estimatedMinutes: timeEstimate ? timeEstimate.averageMinutes : '—',
-    estimatedHouseholds: buildingResult.ok ? buildingResult.buildingCount : undefined,
-    estimatedMinutesRange: timeEstimate ? { min: timeEstimate.minMinutes, max: timeEstimate.maxMinutes } : undefined,
+    distanceKm: Math.round((distanceMeters / 1000) * 10) / 10, estimatedMinutes: '—',
     stops: stopPoints.length, covered: 0, pending: stopPoints.length, incidents: []
   };
   routes.push(newRoute);
@@ -888,11 +875,29 @@ async function finishCreateRoute() {
     ? 'trazado ajustado a calles reales (OSRM)'
     : 'trazo en línea recta — no se pudo calcular el ruteo por calles';
   const optimizePart = optimizeOrder ? ', orden de paradas optimizado' : '';
-  const estimatePart = buildingResult.ok
-    ? `, ~${buildingResult.buildingCount} viviendas estimadas (${timeEstimate.minMinutes}-${timeEstimate.maxMinutes} min, OSM)`
-    : ', estimación de viviendas no disponible';
-  if (status) status.textContent = `Ruta "${name}" creada con ${stopPoints.length} puntos de recolección, ${roadPart}${optimizePart}${estimatePart}.`;
+  const creationStatusText = `Ruta "${name}" creada con ${stopPoints.length} puntos de recolección, ${roadPart}${optimizePart}. Estimando viviendas (OpenStreetMap)…`;
+  if (status) status.textContent = creationStatusText;
   if (tripPreview) tripPreview.textContent = truck ? formatTripPreview(splitIntoTrips(stopPoints, truck.max_stops ?? DEFAULT_MAX_STOPS)) : '';
+
+  // Roadmap item 5 ("estimación de viviendas"): kept off the route-creation critical path (Codex
+  // review on PR #50/#48) — the public Overpass instance has no SLA, and the route above is already
+  // fully created/persisted/assigned by the time this call is even made, so a slow/unavailable
+  // Overpass no longer adds up to 15s to route creation on top of the OSRM wait. Never throws (same
+  // contract as fetchRoadRoute) — updates newRoute in place (routes.push() above already made it the
+  // live array entry) and only touches UI that's still showing this route: the creation status line
+  // (only if nothing else has overwritten it since) and the detail drawer, if still open on it.
+  fetchBuildingCount(stopPoints.map((point) => [point.latitude, point.longitude])).then((buildingResult) => {
+    const timeEstimate = buildingResult.ok ? estimateCollectionMinutes(buildingResult.buildingCount) : null;
+    if (timeEstimate) newRoute.estimatedMinutes = timeEstimate.averageMinutes;
+    newRoute.estimatedHouseholds = buildingResult.ok ? buildingResult.buildingCount : undefined;
+    newRoute.estimatedMinutesRange = timeEstimate ? { min: timeEstimate.minMinutes, max: timeEstimate.maxMinutes } : undefined;
+    const estimatePart = buildingResult.ok
+      ? `~${buildingResult.buildingCount} viviendas estimadas (${timeEstimate.minMinutes}-${timeEstimate.maxMinutes} min, OSM)`
+      : 'estimación de viviendas no disponible';
+    const statusEl = $('#createRouteStatus');
+    if (statusEl && statusEl.textContent === creationStatusText) statusEl.textContent = `Ruta "${name}": ${estimatePart}.`;
+    if (selectedRouteId === routeId) selectRoute(routeId);
+  });
 }
 
 function drawerContent(content) { return `<button class="drawer-close" data-close-detail aria-label="Cerrar detalle">✕ Cerrar</button><div class="drawer-scroll">${content}</div>`; }
