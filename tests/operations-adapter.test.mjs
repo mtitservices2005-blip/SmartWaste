@@ -109,4 +109,34 @@ const demoAssignmentResult = adapter.findOwnVehicleAssignment('profile-1');
 assert.equal(demoAssignmentResult.ok, false);
 assert.equal(demoAssignmentResult.error.code, 'NOT_SUPPORTED_IN_DEMO');
 
+// SW-036: listLatestPositions() dedupes vehicle_positions down to one (the most recent) row per
+// vehicle_id — the dispatcher map needs "where is this truck now", not its full history. The fake
+// client returns rows already ordered captured_at-desc (same as the real .order() call), same
+// pre-sorted-input assumption listRouteRuns' test above makes. Also asserts the query excludes
+// source:'simulator' (nothing writes that today, but it documents "real positions only").
+let lastNeqArgs = null;
+const fakePositions = [
+  { vehicle_id: 'veh-1', latitude: 19.43, longitude: -99.13, captured_at: '2026-01-02T00:00:10Z', source: 'browser_geolocation' },
+  { vehicle_id: 'veh-2', latitude: 19.40, longitude: -99.10, captured_at: '2026-01-02T00:00:05Z', source: 'browser_geolocation' },
+  { vehicle_id: 'veh-1', latitude: 19.42, longitude: -99.12, captured_at: '2026-01-01T00:00:00Z', source: 'browser_geolocation' }
+];
+const positionsClient = {
+  from: (table) => {
+    assert.equal(table, 'vehicle_positions');
+    return { select: () => ({ neq: (...args) => { lastNeqArgs = args; return { order: () => Promise.resolve({ data: fakePositions, error: null }) }; } }) };
+  }
+};
+const positionsResult = await createSupabaseOperationsAdapter(positionsClient).listLatestPositions();
+assert.equal(positionsResult.ok, true);
+assert.deepEqual(lastNeqArgs, ['source', 'simulator']);
+assert.equal(positionsResult.data.length, 2, 'one row per vehicle_id, not the full history');
+const latestVeh1 = positionsResult.data.find((row) => row.vehicle_id === 'veh-1');
+assert.equal(latestVeh1.captured_at, '2026-01-02T00:00:10Z', 'must keep the most recent row per vehicle, not the first/oldest');
+
+// Adapter-exception fallback path (no client): mirrors listPositions()'s own fallback, so
+// listLatestPositions() degrades the same way when Supabase isn't configured.
+const noClientResult = await createSupabaseOperationsAdapter(null).listLatestPositions();
+assert.equal(noClientResult.ok, true);
+assert.equal(noClientResult.source, 'DEMO_FALLBACK');
+
 console.log('operations-adapter ok');

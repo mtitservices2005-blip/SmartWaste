@@ -51,6 +51,12 @@ let backendMode = 'DEMO_ONLY';
 // handle while GPS sharing is active, null otherwise.
 let driverAuthContext = null;
 let driverGpsWatchId = null;
+// SW-036: the dispatcher-facing map's real-GPS overlay. realPositions is keyed by truck.real_id
+// (vehicle_positions.vehicle_id is the Supabase-generated uuid, same key already used everywhere
+// else a truck's real row needs matching — see hydrateVehiclesAndDrivers()/assignTruckToRoute()).
+// opsGpsPollTimer follows the exact startDriverPolling()/stopDriverPolling() pair below.
+let realPositions = {};
+let opsGpsPollTimer = null;
 let map;
 let mapReady = false;
 let routeLayers = [];
@@ -94,6 +100,15 @@ let driverCurrentMarker = null;
 let driverPollTimer = null;
 let driverStopsLayer = null;
 const DRIVER_POLL_INTERVAL_MS = 7000; // dentro del rango pedido de 5-10s
+// SW-036: mismo orden de magnitud que DRIVER_POLL_INTERVAL_MS — Realtime queda descartado por no
+// determinístico (ver docs/TECHNICAL_DEBT_REGISTER.md #14), así que el mapa del despachador también
+// resuelve GPS real vía polling. REAL_GPS_FRESHNESS_MS es la ventana de frescura contra
+// vehicle_positions.captured_at: sin esto, una posición real vieja (chofer cerró el navegador,
+// perdió señal, nunca tocó "Detener GPS real") se mostraría como vigente para siempre — no hay
+// ningún campo de estado "sigo compartiendo" persistido, por diseño (ver
+// docs/NEXT_MILESTONE_RECOMMENDATION_SW036.md).
+const OPS_GPS_POLL_INTERVAL_MS = 8000;
+const REAL_GPS_FRESHNESS_MS = 30000;
 
 // SW-027: "Crear ruta" — free-click drawing on its own Leaflet map (no street snapping/routing, no
 // new mapping library). drawnRoutePoints is [[lat,lng], ...] in click order, same shape routePaths
@@ -170,12 +185,15 @@ setInterval(tickDriverTelemetry, 4000);
 function progress(value) { return `<div class="progress" aria-label="${value}% completado"><i style="width:${value}%"></i></div>`; }
 function pill(state) { return `<span class="pill ${state}">${label(state)}</span>`; }
 function routeStatus(route) { return route.status === 'completed' || route.status === 'verified' ? 'completed' : route.status; }
-function truckIcon(truck) {
+function truckIcon(truck, isRealGps = false) {
   // Codex review on PR #39: real vehicles can legitimately be 'maintenance' (shared/contracts.js's
   // VEHICLE_STATES / the DB check constraint both allow it), which this map didn't cover — a
   // hydrated vehicle in that state rendered with an undefined icon.
   const shapes = { active: '▶', stopped: '■', delayed: '!', offline: '×', completed: '✓', maintenance: '🔧' };
-  return `<span class="truck-icon ${truck.state}"><b>${shapes[truck.state] ?? '?'}</b><small>${truck.unit.replace('SW-LS-', '')}</small></span>`;
+  // SW-036: distinción visual obligatoria entre posición real y simulada (regla 6/7 de CLAUDE.md) —
+  // sin esto, un camión con GPS real activo se ve idéntico a uno puramente simulado.
+  const badge = isRealGps ? '<i class="gps-real-badge" title="Posición GPS real">●</i>' : '';
+  return `<span class="truck-icon ${truck.state}">${badge}<b>${shapes[truck.state] ?? '?'}</b><small>${truck.unit.replace('SW-LS-', '')}</small></span>`;
 }
 function kpiValue(predicate) { return trucks.filter(predicate).length; }
 function operationalKpis() {
@@ -230,7 +248,7 @@ function renderSummary() {
 function renderMapPanel() {
   return `<div class="map-card">
       <div class="map-header">
-        <div><p class="eyebrow">${pilotMunicipality.branding.label}</p><h1>Mapa operativo real de ${pilotMunicipality.name}</h1><p class="demo">${demoNotice} · Las rutas son simuladas, no oficiales del ayuntamiento.</p></div>
+        <div><p class="eyebrow">${pilotMunicipality.branding.label}</p><h1>Mapa operativo real de ${pilotMunicipality.name}</h1><p class="demo">${demoNotice} · Las rutas son simuladas, no oficiales del ayuntamiento.</p><p class="demo gps-legend">● = posición GPS real · el resto son camiones simulados</p></div>
         <div class="sim-controls" aria-label="Controles de simulación"><span>${simulationNotice} · fuente desacoplada: ${backendMode}</span><select id="simVehicle">${trucks.map((t) => `<option value="${t.id}">${t.unit}</option>`).join('')}</select><button class="btn-primary" data-sim="start">Iniciar</button><button data-sim="pause">Pausar</button><button data-sim="reset">Reiniciar</button><button class="btn-ghost" data-sim="speed">${simulationSpeed}×</button><button class="btn-ghost" data-sim="fullscreen">Pantalla completa</button></div>
       </div>
       <div class="kpis compact">${operationalKpis().map(([name, value]) => `<div class="kpi"><strong>${value}</strong><br>${name}</div>`).join('')}</div>
@@ -608,7 +626,15 @@ function drawMapLayers(L = window.L) {
     routeLayers.push(...path.map((point, index) => L.circleMarker(point, { radius: index <= cut ? 5 : 4, color: index <= cut ? '#0f7b4f' : '#155eef', fillOpacity: .85 }).addTo(map)));
   });
   visibleTrucks.forEach((truck) => {
-    const marker = L.marker(routePosition({ ...truck, positionIndex: simState[truck.id]?.index ?? truck.positionIndex }), { icon: L.divIcon({ className: 'leaflet-truck', html: truckIcon(truck), iconSize: [44, 44], iconAnchor: [22, 22] }) }).addTo(map).on('click', () => selectTruck(truck.id));
+    // SW-036: a fresh real GPS position (polled from vehicle_positions, see fetchRealPositions())
+    // wins over the simulation entirely — bypasses simState/positionIndex, same "explicit position
+    // beats derived one" priority routePosition() already gives truck.position. Stale (past
+    // REAL_GPS_FRESHNESS_MS) or missing real data falls straight back to today's simulated path,
+    // zero behavior change for every truck without real GPS active.
+    const real = truck.real_id ? realPositions[truck.real_id] : null;
+    const isFreshReal = Boolean(real && (Date.now() - real.capturedAt) < REAL_GPS_FRESHNESS_MS);
+    const markerPosition = isFreshReal ? [real.latitude, real.longitude] : routePosition({ ...truck, positionIndex: simState[truck.id]?.index ?? truck.positionIndex });
+    const marker = L.marker(markerPosition, { icon: L.divIcon({ className: 'leaflet-truck', html: truckIcon(truck, isFreshReal), iconSize: [44, 44], iconAnchor: [22, 22] }) }).addTo(map).on('click', () => selectTruck(truck.id));
     truckMarkers.push(marker);
   });
   visibleIncidents.forEach((incident) => { incidentMarkers.push(L.marker(incident.position, { icon: L.divIcon({ className: 'leaflet-incident', html: `<span>⚠<small>${incident.type}</small></span>`, iconSize: [90, 34] }) }).addTo(map).on('click', () => selectIncident(incident.code))); });
@@ -699,6 +725,34 @@ function initDriverPolling() {
   if (!('IntersectionObserver' in window)) { startDriverPolling(); return; }
   new IntersectionObserver((entries) => entries.forEach((entry) => (entry.isIntersecting ? startDriverPolling() : stopDriverPolling())), { threshold: .15 }).observe(target);
 }
+// SW-036: same start/stop/visibility-gated pattern as startDriverPolling()/stopDriverPolling()/
+// initDriverPolling() just above, for the dispatcher's real-GPS overlay on the Operations map
+// instead of the driver's own view. fetchRealPositions() is a safe no-op until realAdapter exists
+// (Supabase configured and bootstrapRealBackend() resolved) — same guard every other real-adapter
+// call in this file already uses, so this can start unconditionally at module init.
+async function fetchRealPositions() {
+  if (!realAdapter) return;
+  const result = await realAdapter.listLatestPositions();
+  if (result.ok) {
+    const next = {};
+    result.data.forEach((row) => { next[row.vehicle_id] = { latitude: row.latitude, longitude: row.longitude, capturedAt: new Date(row.captured_at).getTime() }; });
+    realPositions = next;
+  }
+  // Codex review on PR #52: freshness (REAL_GPS_FRESHNESS_MS) is only evaluated inside
+  // drawMapLayers() itself — an already-rendered real-GPS marker never "ages out" on its own, it
+  // only does so the next time it's redrawn. Redraw on every poll tick regardless of success/
+  // failure (never blocks/breaks the map either way — rule 5), so a sustained Supabase outage
+  // doesn't leave a stale position on screen still flagged as live GPS forever.
+  if (mapReady) drawMapLayers();
+}
+function startOpsGpsPolling() { if (opsGpsPollTimer) return; fetchRealPositions(); opsGpsPollTimer = setInterval(fetchRealPositions, OPS_GPS_POLL_INTERVAL_MS); }
+function stopOpsGpsPolling() { clearInterval(opsGpsPollTimer); opsGpsPollTimer = null; }
+function initOpsGpsPolling() {
+  const target = document.querySelector('[data-ops-view="mapa"]');
+  if (!target) return;
+  if (!('IntersectionObserver' in window)) { startOpsGpsPolling(); return; }
+  new IntersectionObserver((entries) => entries.forEach((entry) => (entry.isIntersecting ? startOpsGpsPolling() : stopOpsGpsPolling())), { threshold: .15 }).observe(target);
+}
 
 // SW-027: registers a truck the driver view didn't know about at page load (one just assigned to a
 // newly created route) — same DeviceSimulator/positionHistory machinery every other truck already
@@ -743,7 +797,7 @@ async function assignVehicleToExistingRoute(routeId, vehicleId) {
   // snapshot taken at page load — without this they'd stay stale after every mutation that changes
   // them, same reason completeRouteManually()/the verify/resolve-incident handlers below already
   // re-render #supervisor on demand.
-  $('#resumen').outerHTML = renderSummary();
+  refreshResumen();
 }
 // Triggered from renderRouteDetail()'s "Reoptimizar ruta" action (roadmap item 4, "reoptimización
 // dinámica" — suggestion only, docs/TECHNICAL_DEBT_REGISTER.md #21). Computes and displays a
@@ -806,8 +860,8 @@ async function completeRouteManually(routeId) {
   // Supervisor's "pendientes de verificación" queue is only re-rendered on demand (same as the
   // existing verify/resolve-incident handlers do) — without this it stays stale showing whatever
   // was true when #supervisor was last rendered, even though route.status just changed above.
-  $('#supervisor').outerHTML = renderSupervisor();
-  $('#resumen').outerHTML = renderSummary();
+  refreshSupervisor();
+  refreshResumen();
   if (realAdapter) {
     const realRouteId = route.real_id ?? routeId;
     await mirrorToRealAdapter(realAdapter.completeRoute(realRouteId));
@@ -885,6 +939,14 @@ function showSection(id) {
   if (id === 'conductor' && driverMapReady) requestAnimationFrame(() => driverMap.invalidateSize());
 }
 window.addEventListener('hashchange', () => { if (!redirectLegacyHash()) showSection(sectionFromHash()); });
+// SW-036 fix: an outerHTML replace swaps in a brand-new element that never had the 'hidden' class
+// showSection() toggles on/off — every $('#resumen').outerHTML = renderSummary()/$('#supervisor')
+// .outerHTML = renderSupervisor() call site (refresh-on-mutation, added for the PR #49 Codex
+// review) was silently un-hiding that section on top of whatever tab the user was actually on,
+// found while verifying SW-036's polling target visibility. showSection(sectionFromHash()) after
+// the replace is idempotent — it just re-applies the correct hidden state for every section.
+function refreshResumen() { $('#resumen').outerHTML = renderSummary(); showSection(sectionFromHash()); }
+function refreshSupervisor() { $('#supervisor').outerHTML = renderSupervisor(); showSection(sectionFromHash()); }
 // Selecting a truck/route/incident updates #detail and the map, but both live inside the "mapa"
 // sub-vista of #operaciones — invisible while the click came from another tab/sub-vista (e.g. the
 // route list in "rutas"). Jumping to "operaciones/mapa" on selection is what actually shows the
@@ -988,7 +1050,7 @@ async function finishCreateRoute() {
   if (nameInput) nameInput.value = '';
   if (vehicleSelect) vehicleSelect.innerHTML = `<option value="">Sin vehículo asignado (asignar después)</option>${trucks.filter((item) => !item.routeId).map((item) => `<option value="${item.id}">${item.unit}</option>`).join('')}`;
   $('#routeList').innerHTML = renderRoutes(routes);
-  $('#resumen').outerHTML = renderSummary();
+  refreshResumen();
   if (mapReady) drawMapLayers();
   const roadPart = usedRoadRouting
     ? 'trazado ajustado a calles reales (OSRM)'
@@ -1059,7 +1121,7 @@ document.addEventListener('click', (event) => {
   const routeButton = event.target.closest('[data-route]'); if (routeButton?.dataset.route) { selectRoute(routeButton.dataset.route); goToMapTab(); }
   const incidentButton = event.target.closest('[data-incident]'); if (incidentButton) { selectIncident(incidentButton.dataset.incident); goToMapTab(); }
   const verifyButton = event.target.closest('[data-verify-route]');
-  if (verifyButton) { const route = routeById(verifyButton.dataset.verifyRoute); if (route) { route.status = 'verified'; $('#supervisor').outerHTML = renderSupervisor(); $('#resumen').outerHTML = renderSummary(); } }
+  if (verifyButton) { const route = routeById(verifyButton.dataset.verifyRoute); if (route) { route.status = 'verified'; refreshSupervisor(); refreshResumen(); } }
   const assignVehicleButton = event.target.closest('[data-assign-vehicle]');
   if (assignVehicleButton) { const vehicleId = $('#assignVehicleSelect')?.value; if (vehicleId) assignVehicleToExistingRoute(assignVehicleButton.dataset.assignVehicle, vehicleId); }
   const completeRouteButton = event.target.closest('[data-complete-route]');
@@ -1067,7 +1129,7 @@ document.addEventListener('click', (event) => {
   const reoptimizeButton = event.target.closest('[data-reoptimize-route]');
   if (reoptimizeButton) previewRouteReoptimization(reoptimizeButton.dataset.reoptimizeRoute);
   const resolveButton = event.target.closest('[data-resolve-incident]');
-  if (resolveButton) { const incident = incidents.find((item) => item.code === resolveButton.dataset.resolveIncident); if (incident) { incident.status = 'Cerrada'; $('#supervisor').outerHTML = renderSupervisor(); $('#resumen').outerHTML = renderSummary(); } }
+  if (resolveButton) { const incident = incidents.find((item) => item.code === resolveButton.dataset.resolveIncident); if (incident) { incident.status = 'Cerrada'; refreshSupervisor(); refreshResumen(); } }
   const onboardButton = event.target.closest('[data-onboarding]');
   if (onboardButton) { const status = document.querySelector(`[data-onboarding-status="${onboardButton.dataset.onboarding}"]`); if (status) status.textContent = 'Onboarding demo iniciado — flujo completo en desarrollo.'; }
   if (event.target.id === 'useGeo') { requestGeolocation(); }
@@ -1094,6 +1156,7 @@ if (!redirectLegacyHash()) showSection(sectionFromHash());
 initMap();
 initDriverMap();
 initDriverPolling();
+initOpsGpsPolling();
 initCreateRouteMap();
 // SW-035 fase A: pulls vehicles/drivers that already existed in Supabase before this page loaded
 // and appends them to trucks/drivers — additive, never replaces/clears those arrays, so
@@ -1215,7 +1278,7 @@ async function bootstrapRealBackend(ctx) {
   // Codex review on PR #49: #resumen is built synchronously at page load, before either hydrate
   // call above resolves — without this refresh, every route/vehicle pulled from Supabase stays
   // invisible to the landing KPIs and "Necesita tu atención" list even after hydration succeeds.
-  $('#resumen').outerHTML = renderSummary();
+  refreshResumen();
   // renderDriverMobile() already renders the GPS control conditionally, but that render happened
   // synchronously at page load, before this async function resolved backendMode — the driver view
   // is already in the DOM by then. Insert the control now instead of re-rendering #driverMobile

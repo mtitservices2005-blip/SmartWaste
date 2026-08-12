@@ -146,6 +146,21 @@ export function createSupabaseOperationsAdapter(client, { fallback = createDemoO
     listRouteRuns: (opts = {}) => run(() => scoped(table(client, 'route_runs').select('*').order('created_at')), () => fallback.listRouteRuns?.() ?? [], opts.correlation_id),
     registerIncident: (incident, opts = {}) => run(() => table(client, 'incidents').insert({ ...incident, municipality_id: incident.municipality_id ?? municipality_id, correlation_id: opts.correlation_id ?? incident.correlation_id }).select('*').single(), () => fallback.registerIncident(incident), opts.correlation_id),
     listPositions: (opts = {}) => run(() => scoped(table(client, 'vehicle_positions').select('*').order('captured_at', { ascending:false })), () => fallback.listPositions(), opts.correlation_id),
+    // SW-036: the dispatcher-facing map needs one row per vehicle (its most recent real position),
+    // not the full history listPositions() above returns. The Supabase JS client has no "distinct
+    // on" without an RPC/view, so this dedupes client-side over the same already-ordered-by-
+    // captured_at-desc query — first occurrence per vehicle_id wins, same pragmatic approach
+    // listRouteStopsWithStatus() below already uses over listPositions()'s bulk result.
+    // neq('source','simulator') is defensive (nothing writes that source today) but documents the
+    // intent: only real positions (browser_geolocation today, driver_app/dedicated_tracker/
+    // external_authorized once those sources exist) should ever reach this method.
+    listLatestPositions: async (opts = {}) => {
+      const result = await run(() => scoped(table(client, 'vehicle_positions').select('*').neq('source', 'simulator').order('captured_at', { ascending:false })), () => fallback.listPositions(), opts.correlation_id);
+      if (!result.ok) return result;
+      const seen = new Set();
+      const data = result.data.filter((row) => { if (seen.has(row.vehicle_id)) return false; seen.add(row.vehicle_id); return true; });
+      return { ...result, data };
+    },
     // Points come from shared/route-engine.js's generateRouteStopPoints()/splitIntoTrips() —
     // already sequence-ordered and, if the caller split by trip, flattened back into one list
     // before calling this (route_stops has no trip concept, only route_id + sequence).
