@@ -733,10 +733,16 @@ function initDriverPolling() {
 async function fetchRealPositions() {
   if (!realAdapter) return;
   const result = await realAdapter.listLatestPositions();
-  if (!result.ok) return; // never blocks/breaks the map (rule 5) — stale realPositions just ages out via REAL_GPS_FRESHNESS_MS
-  const next = {};
-  result.data.forEach((row) => { next[row.vehicle_id] = { latitude: row.latitude, longitude: row.longitude, capturedAt: new Date(row.captured_at).getTime() }; });
-  realPositions = next;
+  if (result.ok) {
+    const next = {};
+    result.data.forEach((row) => { next[row.vehicle_id] = { latitude: row.latitude, longitude: row.longitude, capturedAt: new Date(row.captured_at).getTime() }; });
+    realPositions = next;
+  }
+  // Codex review on PR #52: freshness (REAL_GPS_FRESHNESS_MS) is only evaluated inside
+  // drawMapLayers() itself — an already-rendered real-GPS marker never "ages out" on its own, it
+  // only does so the next time it's redrawn. Redraw on every poll tick regardless of success/
+  // failure (never blocks/breaks the map either way — rule 5), so a sustained Supabase outage
+  // doesn't leave a stale position on screen still flagged as live GPS forever.
   if (mapReady) drawMapLayers();
 }
 function startOpsGpsPolling() { if (opsGpsPollTimer) return; fetchRealPositions(); opsGpsPollTimer = setInterval(fetchRealPositions, OPS_GPS_POLL_INTERVAL_MS); }
