@@ -518,7 +518,7 @@ async function startDriverGps() {
     if (!shouldSendPosition(lastSentAt, now)) return;
     lastSentAt = now;
     const position = positionFromGeolocationEvent(geoPosition, { vehicle_id: vehicleId, municipality_id: driverAuthContext.municipality_id });
-    const result = await telemetry.ingest(position, { correlation_id: `gps-${now.toString(36)}` });
+    const result = await telemetry.ingest(position);
     const currentStatus = $('#driverGpsStatus');
     if (currentStatus) currentStatus.textContent = result.ok ? `Última posición real enviada: ${new Date().toLocaleTimeString()}` : `No se pudo enviar la posición real: ${result.error?.message ?? 'error desconocido'}`;
   }, (error) => {
