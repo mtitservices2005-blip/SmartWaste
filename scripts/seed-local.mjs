@@ -41,6 +41,18 @@ const env = loadLocalSupabaseEnv();
 const service = createServiceClient(env);
 const scenario = await seedScenario(service);
 
+// seedScenario() creates vehicleA and driverRowA but never links them — it was built only for
+// role-gating tests, which don't need a real assignment. SW-036 (GPS real en el mapa) needs the
+// driver to actually have a vehicle assigned (findOwnVehicleAssignment() in
+// shared/operations-adapter.js checks vehicle_assignments.status = 'assigned'), so link them here.
+const assignment = await service.from('vehicle_assignments').insert({
+  municipality_id: scenario.municipalityA.id,
+  vehicle_id: scenario.vehicleA.id,
+  driver_id: scenario.driverRowA.id,
+  status: 'assigned'
+}).select('*').single();
+if (assignment.error) throw new Error(`vehicle_assignments insert failed: ${assignment.error.message}`);
+
 console.log('\n=== Credenciales de login (misma contraseña para todos) ===\n');
 console.log(`Contraseña: ${scenario.adminA.password}\n`);
 console.log(`municipal_admin (municipio A): ${scenario.adminA.email}`);
