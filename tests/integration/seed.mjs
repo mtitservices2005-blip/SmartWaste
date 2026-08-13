@@ -73,3 +73,18 @@ export async function seedScenario(serviceClient) {
     routeA: routeA.data
   };
 }
+
+// SW-037 (wizard de configuración inicial): seedScenario() de arriba siempre deja vehículo/chofer/
+// ruta ya creados — nunca ejercita el estado "municipio real recién conectado, sin nada todavía"
+// que dispara el wizard de onboarding en frontend/app.js (bootstrapRealBackend()). Esta función
+// crea solo lo mínimo para iniciar sesión: un municipio nuevo y un municipal_admin, sin
+// vehículos/choferes/rutas/incidencias — cualquier dato demo/anterior de otros seeds queda intacto
+// (municipio distinto, por slug con timestamp), esto no lo borra.
+export async function seedEmptyMunicipality(serviceClient) {
+  const suffix = Date.now().toString(36);
+  const municipality = await serviceClient.from('municipalities').insert({ slug: `sw037-empty-${suffix}`, name: 'SW-037 Municipio Vacío' }).select('*').single();
+  if (municipality.error) throw new Error(`municipality insert failed: ${municipality.error.message}`);
+  const admin = await createUserWithProfile(serviceClient, { email: `admin-empty-${suffix}@sw037.test`, displayName: 'Admin Municipio Vacío' });
+  await membership(serviceClient, { municipality_id: municipality.data.id, profile_id: admin.id, role: 'municipal_admin' });
+  return { municipality: municipality.data, admin };
+}
