@@ -571,9 +571,14 @@ function renderCreateRoute() {
 }
 function renderDriverMobile() {
   const truck = trucks.find((item) => item.id === driverVehicleId);
+  // Defensivo (Codex review PR #54): driverVehicleId puede quedar en null cuando el wizard de
+  // onboarding vacía trucks para un municipio real recién conectado — sin esto, un truck.state
+  // sobre undefined tumbaría esta vista si algo la volviera a invocar antes de que exista un
+  // vehículo real.
+  const routeInfoLine = truck ? `${pill(truck.state)} ${routeName(truck.routeId)} · ${truck.progress}% completado` : 'Sin vehículo real asignado todavía.';
   return `<div class="mobile" id="driverMobile">
     <select id="driverVehicleSelect" aria-label="Vehículo del conductor">${trucksWithRoute.map((t) => `<option value="${t.id}" ${t.id === driverVehicleId ? 'selected' : ''}>${t.unit}</option>`).join('')}</select>
-    <p id="driverRouteInfo">${pill(truck.state)} ${routeName(truck.routeId)} · ${truck.progress}% completado</p>
+    <p id="driverRouteInfo">${routeInfoLine}</p>
     <p id="driverStopsProgress"></p>
     <div id="driverMap" class="real-map driver-map" role="application" aria-label="Posición y trazo del vehículo (demo)"></div>
     <p class="demo">${simulationNotice} · trazo histórico vía polling cada ${DRIVER_POLL_INTERVAL_MS / 1000}s (sin Realtime, ver docs/TECHNICAL_DEBT_REGISTER.md #14)</p>
@@ -685,7 +690,7 @@ function renderUsagePanel(metrics) {
   const routeRows = usage.byRoute.map((r) => `<p><b>${r.name}</b><span>${r.stops} paradas · ${r.distanceKm} km · ${r.totalMinutes} min estimados (${r.stopMinutes} recolección + ${r.travelMinutes} traslado)</span></p>`).join('') || '<p>Sin rutas.</p>';
   return `<p class="impact-notice small">Estimado, no medido: paradas × minutos/parada + distancia ÷ velocidad promedio. Sirve para empezar a recoger uso por corrida y afinar los supuestos con el tiempo.</p>
     <div class="impact-grid">
-      <article><h3>Supuestos de uso</h3><label>Minutos por parada <input id="minutesPerStop" type="number" step="0.1" min="0" value="${defaultImpactAssumptions.minutesPerStop}"></label><label>Velocidad promedio km/h <input id="avgSpeedKmh" type="number" step="0.5" min="1" value="${defaultImpactAssumptions.avgSpeedKmh}"></label></article>
+      <article><h3>Supuestos de uso</h3><label>Minutos por parada <input id="minutesPerStop" type="number" step="0.1" min="0" value="${usage.minutesPerStop}"></label><label>Velocidad promedio km/h <input id="avgSpeedKmh" type="number" step="0.5" min="1" value="${usage.avgSpeedKmh}"></label></article>
       <article><h3>Uso total estimado hoy</h3><p><b>${usage.totalHours} h</b> de flota en uso estimadas · ${usage.byRoute.length} ruta(s) · ${usage.byVehicle.length} vehículo(s) con ruta.</p></article>
     </div>
     <div class="impact-grid"><article><h3>Por vehículo</h3><div class="comparison-table">${vehicleRows}</div></article><article><h3>Por ruta</h3><div class="comparison-table">${routeRows}</div></article></div>`;
@@ -707,7 +712,7 @@ function renderImpactCenter(assumptions = defaultImpactAssumptions, filters = {}
       <div class="kpis impact-kpis" id="impactKpis">${renderImpactKpiCards(impactKpiGroup, metrics)}</div>
     </div>
     <div class="impact-panel${impactTab === 'economia' ? '' : ' hidden'}" data-impact-tab-panel="economia">
-      <div class="impact-grid"><article><h3>Supuestos configurables</h3><label>Precio combustible RD$/L <input id="fuelPrice" type="number" value="${defaultImpactAssumptions.fuelPrice}"></label><label>Rendimiento km/L <input id="fuelEfficiency" type="number" step="0.1" value="${defaultImpactAssumptions.fuelEfficiency}"></label><label>Días operativos <input id="operatingDays" type="number" value="${defaultImpactAssumptions.operatingDays}"></label><label>Costo operativo por hora <input id="hourlyCost" type="number" value="${defaultImpactAssumptions.hourlyCost}"></label><p class="demo">Distancia base: ${defaultImpactAssumptions.baseDistanceKm} km · distancia actual simulada: ${defaultImpactAssumptions.currentDistanceKm} km · horas operativas: ${defaultImpactAssumptions.operatingHours} h.</p></article><article id="impactEconomics">${renderImpactEconomics(metrics)}</article></div>
+      <div class="impact-grid"><article><h3>Supuestos configurables</h3><label>Precio combustible RD$/L <input id="fuelPrice" type="number" value="${metrics.assumptions.fuelPrice}"></label><label>Rendimiento km/L <input id="fuelEfficiency" type="number" step="0.1" value="${metrics.assumptions.fuelEfficiency}"></label><label>Días operativos <input id="operatingDays" type="number" value="${metrics.assumptions.operatingDays}"></label><label>Costo operativo por hora <input id="hourlyCost" type="number" value="${metrics.assumptions.hourlyCost}"></label><p class="demo">Distancia base: ${metrics.assumptions.baseDistanceKm} km · distancia actual simulada: ${metrics.assumptions.currentDistanceKm} km · horas operativas: ${metrics.assumptions.operatingHours} h.</p></article><article id="impactEconomics">${renderImpactEconomics(metrics)}</article></div>
     </div>
     <div class="impact-panel${impactTab === 'analisis' ? '' : ' hidden'}" data-impact-tab-panel="analisis">
       <div class="impact-grid"><article><h3>Visualizaciones operativas</h3>${renderImpactBars(metrics)}</article><article><h3>Antes del sistema vs. con SmartWaste</h3><p class="impact-notice small">${IMPACT_SCENARIO_NOTICE}</p>${renderBeforeAfter(metrics)}</article></div>
@@ -1342,8 +1347,13 @@ initCreateRouteMap();
 // what assignVehicleToExistingRoute()/createDriverAccount() already use to reach the real row).
 // Route hydration (with real vehicle/driver assignment and progress from route_runs) is a separate,
 // larger follow-up (fase B, docs/TECHNICAL_DEBT_REGISTER.md item 17) — not attempted here.
+// Devuelve si AMBAS lecturas realmente llegaron a Supabase (Codex review en PR #54, P1): un fallo
+// transitorio de red/RLS deja vehiclesResult.ok/driversResult.ok en false sin agregar ningún
+// real_id, lo cual antes era indistinguible de "este municipio no tiene nada todavía" — el caller
+// (bootstrapRealBackend()) solo debe declarar el municipio vacío y activar el wizard cuando esto
+// devuelve true, nunca cuando la lectura simplemente falló.
 async function hydrateVehiclesAndDrivers() {
-  if (!realAdapter) return;
+  if (!realAdapter) return false;
   const vehiclesResult = await realAdapter.listVehicles();
   if (vehiclesResult.ok) {
     vehiclesResult.data.forEach((row) => {
@@ -1365,6 +1375,7 @@ async function hydrateVehiclesAndDrivers() {
     });
   }
   refreshFleetSelects();
+  return vehiclesResult.ok && driversResult.ok;
 }
 // SW-035 fase B: hydrates routes with their real assignment/progress. Must run AFTER
 // hydrateVehiclesAndDrivers() (above) — matches a route's vehicle_id/driver_id (from route_runs,
@@ -1378,9 +1389,9 @@ async function hydrateVehiclesAndDrivers() {
 // finishCreateRoute() already does) and a simState entry, so it can participate in
 // startSimulation()'s tick like every other route — additive, doesn't touch demo trucks/routes.
 async function hydrateRoutes() {
-  if (!realAdapter) return;
+  if (!realAdapter) return false;
   const routesResult = await realAdapter.listRoutes();
-  if (!routesResult.ok) return;
+  if (!routesResult.ok) return false;
   const routeRunsResult = await realAdapter.listRouteRuns();
   const latestRunByRouteId = {};
   // Ordered oldest-first by the adapter — overwriting as we iterate leaves the most recent
@@ -1433,6 +1444,7 @@ async function hydrateRoutes() {
   $('#routeList').innerHTML = renderRoutes(routes);
   refreshFleetSelects();
   if (mapReady) drawMapLayers();
+  return true;
 }
 // SW-034: once a real session resolves (municipality_id known), builds the real adapter that
 // createVehicleFromForm/createDriverFromForm/finishCreateRoute mirror their writes to. Patches only
@@ -1446,16 +1458,36 @@ async function bootstrapRealBackend(ctx) {
   driverAuthContext = ctx;
   const sourceLabel = document.querySelector('.sim-controls span');
   if (sourceLabel) sourceLabel.textContent = `${simulationNotice} · fuente desacoplada: ${backendMode}`;
-  await hydrateVehiclesAndDrivers();
-  await hydrateRoutes();
-  // Onboarding en vacío: si la hidratación de arriba no trajo NINGÚN vehículo/chofer/ruta real, este
-  // municipio nunca operó en Supabase — mostrarle los 5 datos demo sembrados al cargar el módulo
-  // (module-init, antes de que se supiera si habría backend real) lo confundiría pensando que es
-  // operación real. Solo corre con backend real conectado (nunca en DEMO_ONLY — regla 5); vacía los
-  // arrays y activa el wizard en vez de la UI normal.
-  if (!trucks.some((t) => t.real_id) && !drivers.some((d) => d.real_id) && !routes.some((r) => r.real_id)) {
+  // Codex review on PR #54 (P1): un fallo transitorio de red/RLS deja *Result.ok en false sin
+  // agregar ningún real_id — antes eso era indistinguible de "este municipio no tiene nada
+  // todavía", así que un error de lectura podía vaciar datos reales ya existentes y ofrecer
+  // onboarding, permitiendo crear vehículos/choferes/rutas duplicados. Solo se declara vacío cuando
+  // AMBAS hidrataciones realmente resolvieron (ok), no cuando fallaron.
+  const vehiclesAndDriversHydrated = await hydrateVehiclesAndDrivers();
+  const routesHydrated = await hydrateRoutes();
+  // Onboarding en vacío: si la hidratación de arriba resolvió bien y no trajo NINGÚN vehículo/
+  // chofer/ruta real, este municipio nunca operó en Supabase — mostrarle los 5 datos demo
+  // sembrados al cargar el módulo (module-init, antes de que se supiera si habría backend real) lo
+  // confundiría pensando que es operación real. Solo corre con backend real conectado (nunca en
+  // DEMO_ONLY — regla 5); vacía los arrays y activa el wizard en vez de la UI normal.
+  if (vehiclesAndDriversHydrated && routesHydrated && !trucks.some((t) => t.real_id) && !drivers.some((d) => d.real_id) && !routes.some((r) => r.real_id)) {
     trucks.length = 0; drivers.length = 0; routes.length = 0; incidents.length = 0;
     needsOnboarding = true;
+    // Codex review on PR #54 (P1): trucksWithRoute/driverSimulators/driverVehicleId son estado
+    // derivado, calculado UNA VEZ a partir de los 5 camiones demo al cargar el módulo — vaciar
+    // trucks/drivers/routes arriba no los toca (son arrays/valor independientes), así que sin esto
+    // registerDriverSimulator() (al asignar la primera ruta real) reconstruye el selector del
+    // conductor mezclando los 5 camiones demo (todavía en trucksWithRoute) con el vehículo real
+    // nuevo — justo lo que el wizard promete que no va a pasar.
+    trucksWithRoute.length = 0;
+    Object.keys(driverSimulators).forEach((key) => delete driverSimulators[key]);
+    driverVehicleId = null;
+    const driverSelect = $('#driverVehicleSelect');
+    if (driverSelect) driverSelect.innerHTML = '';
+    const driverRouteInfo = $('#driverRouteInfo');
+    if (driverRouteInfo) driverRouteInfo.textContent = 'Sin vehículo real asignado todavía.';
+    const driverStopsProgress = $('#driverStopsProgress');
+    if (driverStopsProgress) driverStopsProgress.textContent = '';
     const incidenciasPanel = document.querySelector('[data-ops-view="incidencias"]');
     if (incidenciasPanel) incidenciasPanel.innerHTML = renderIncidenciasPanel();
     $('#routeList') && ($('#routeList').innerHTML = renderRoutes(routes));

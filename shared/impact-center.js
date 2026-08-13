@@ -72,7 +72,13 @@ export function calculateImpactMetrics(assumptions = defaultImpactAssumptions, f
     completed: count(filteredTrucks, (truck) => truck.state === 'completed')
   };
   const bySector = sectors.map((sector) => ({ name: sector.name, covered: sector.covered, pending: sector.pending, coverage: pct(sector.covered, sector.covered + sector.pending), incidents: count(filteredIncidents, (incident) => incident.sector === sector.name) }));
-  const usage = calculateUsageMetrics(filteredRoutes, assumptions);
+  // Codex review on PR #54: filteredRoutes only respects sector/route/status — filters.vehicle only
+  // narrowed filteredTrucks, so picking a specific vehicle left Uso reporting every route regardless
+  // (e.g. selecting an unassigned truck still showed usage for all 5 demo routes). Scoped to usage
+  // only, not filteredRoutes itself, since routes/coverage/economics were never meant to narrow by
+  // vehicle (a vehicle filter says "show me this truck's load", not "hide routes it isn't on").
+  const usageRoutes = filteredRoutes.filter((route) => !filters.vehicle || route.truckId === filters.vehicle);
+  const usage = calculateUsageMetrics(usageRoutes, assumptions);
   return {
     filters,
     assumptions: { ...defaultImpactAssumptions, ...assumptions },

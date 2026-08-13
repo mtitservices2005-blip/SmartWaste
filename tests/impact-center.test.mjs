@@ -44,4 +44,13 @@ assert.ok(Math.abs(usageByVehicleTotal - metrics.usage.totalMinutes) < 0.2, 'la 
 const higherUsage = calculateImpactMetrics({ ...defaultImpactAssumptions, minutesPerStop: defaultImpactAssumptions.minutesPerStop * 2 });
 assert.ok(higherUsage.usage.totalMinutes > metrics.usage.totalMinutes, 'duplicar minutesPerStop debe aumentar el uso total estimado');
 
+// Codex review PR #54 (P2): filtrar por vehículo debía acotar Uso a las rutas de ese vehículo, no
+// seguir reportando la flota completa. truck-05 (offline, sin ruta) debe dar uso cero.
+const unassignedVehicleMetrics = calculateImpactMetrics(defaultImpactAssumptions, { vehicle: 'truck-05' });
+assert.equal(unassignedVehicleMetrics.usage.byRoute.length, 0, 'un vehículo sin ruta asignada no debe aportar rutas al uso filtrado');
+assert.equal(unassignedVehicleMetrics.usage.totalMinutes, 0);
+const assignedVehicleMetrics = calculateImpactMetrics(defaultImpactAssumptions, { vehicle: 'truck-01' });
+assert.equal(assignedVehicleMetrics.usage.byRoute.length, 1, 'un vehículo con una ruta asignada debe aportar exactamente esa ruta al uso filtrado');
+assert.ok(assignedVehicleMetrics.usage.totalMinutes < metrics.usage.totalMinutes, 'el uso filtrado por un vehículo debe ser menor que el total de la flota');
+
 console.log('impact-center ok');
