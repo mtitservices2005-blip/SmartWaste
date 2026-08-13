@@ -304,8 +304,11 @@ function renderRouteDetail(route) {
     ? `<p><b>Viviendas estimadas (OSM)</b><span>${route.estimatedHouseholds} · ${route.estimatedMinutesRange ? `${route.estimatedMinutesRange.min}-${route.estimatedMinutesRange.max} min` : 'No disponible'}</span></p>`
     : '';
   return `<div class="drawer-head"><p class="eyebrow">Detalle de ruta</p><h2>${route.name}</h2>${pill(routeStatus(route))}</div>
-    <div class="detail-grid"><p><b>Unidad asignada</b><span>${route.truckId}</span></p><p><b>Conductor</b><span>${driverName(route.driverId)}</span></p><p><b>Sectores</b><span>${route.sectors.join(', ')}</span></p><p><b>Inicio</b><span>${route.started}</span></p><p><b>Programada</b><span>${route.scheduled}</span></p><p><b>Tiempo estimado</b><span>${route.estimatedMinutes} min</span></p><p><b>Distancia demo</b><span>${route.distanceKm} km</span></p><p><b>Paradas</b><span>${route.covered} completadas · ${route.pending} pendientes</span></p>${householdEstimateRow}</div>
+    <div class="detail-grid"><p><b>Unidad asignada</b><span>${route.truckId}</span></p><p><b>Conductor</b><span>${driverName(route.driverId)}</span></p><p><b>Paradas</b><span>${route.covered} completadas · ${route.pending} pendientes</span></p></div>
     ${assignAction}${completeAction}${reoptimizeAction}
+    <details class="detail-more"><summary>Ver detalles técnicos</summary>
+      <div class="detail-grid"><p><b>Sectores</b><span>${route.sectors.join(', ')}</span></p><p><b>Inicio</b><span>${route.started}</span></p><p><b>Programada</b><span>${route.scheduled}</span></p><p><b>Tiempo estimado</b><span>${route.estimatedMinutes} min</span></p><p><b>Distancia demo</b><span>${route.distanceKm} km</span></p>${householdEstimateRow}</div>
+    </details>
     ${progress(route.progress)}<p><strong>${route.progress}%</strong> completado</p><h3>Incidencias</h3>${relatedIncidents.map((incident) => `<button class="incident-row" data-incident="${incident.code}">${incident.type} · ${incident.status}</button>`).join('') || '<p>Sin incidencias demo.</p>'}
     <h3>Timeline operativo</h3><div class="timeline">${routeFlow.map((step) => `<p>${step === route.status ? '●' : '○'} ${label(step)}</p>`).join('')}</div>
     ${reoptimizationPreview}`;
@@ -316,7 +319,7 @@ function renderRutasPanel() {
   return `<h2>Rutas</h2><p class="demo">${demoNotice} · Municipio piloto configurable: ${pilotMunicipality.name}, ${pilotMunicipality.country}</p>
     <div class="controls"><input id="search" placeholder="Buscar ruta, camión o sector"><select id="sectorFilter"><option value="">Todos los sectores</option>${sectors.map((s) => `<option>${s.name}</option>`).join('')}</select></div>
     <h3>Rutas del día</h3><div class="list" id="routeList">${renderRoutes(routes)}</div>
-    ${renderCreateRoute()}`;
+    <details class="create-route-toggle" id="createRouteToggle"><summary>+ Nueva ruta</summary>${renderCreateRoute()}</details>`;
 }
 function renderFlotaPanel() {
   return `<h2>Flota</h2><p class="demo">${demoNotice}</p>
@@ -556,26 +559,80 @@ function renderCitizen() { return `<section id="ciudadania" class="section card"
 const money = (value) => `RD$ ${Number(value).toLocaleString('es-DO', { maximumFractionDigits: 0 })}`;
 const num = (value, suffix = '') => `${Number(value).toLocaleString('es-DO', { maximumFractionDigits: 1 })}${suffix}`;
 function bar(value, max = 100) { return `<span class="mini-bar"><i style="width:${Math.min(100, Math.max(0, (value / max) * 100))}%"></i></span>`; }
+// UX cleanup (SW-037): Impacto y Ahorros dumped ~50 piezas de contenido (34 tarjetas KPI + 4
+// artículos de resumen + supuestos + economía + gráficos + antes/después + lectura de sectores) en
+// un solo scroll continuo — la mayor fuente de "demasiada data en pantalla". Reorganizado en 4
+// pestañas de nivel superior (mismo patrón ops-nav/ops-tab que ya usa Operaciones) para que solo se
+// vea una porción enfocada a la vez; los filtros quedan fuera de las pestañas porque afectan a las 4.
+// impactTab/impactKpiGroup son estado de módulo (no del hash, a diferencia de las sub-vistas de
+// Operaciones) porque esta sección no necesita enlaces profundos propios — mismo patrón que
+// selectedRouteId.
+const IMPACT_TABS = ['resumen', 'uso', 'metricas', 'economia', 'analisis'];
+const IMPACT_TAB_LABELS = { resumen: 'Resumen', uso: 'Uso', metricas: 'Métricas', economia: 'Economía', analisis: 'Análisis' };
+let impactTab = IMPACT_TABS[0];
+const IMPACT_KPI_GROUPS = [
+  { id: 'servicio', label: 'Servicio', build: (m) => [
+    ['Rutas planificadas', m.routes.planned], ['Asignadas', m.routes.assigned], ['Iniciadas', m.routes.started], ['En progreso', m.routes.inProgress], ['Retrasadas', m.routes.delayed], ['Completadas', m.routes.completed], ['Verificadas', m.routes.verified], ['Cumplimiento', `${m.routes.complianceRate}%`], ['Puntualidad', `${m.routes.punctualityRate}%`], ['Progreso promedio', `${m.routes.progressAverage}%`],
+    ['Sectores planificados', m.coverage.plannedSectors], ['Sectores atendidos', m.coverage.attendedSectors], ['Cobertura', `${m.coverage.coverageRate}%`], ['Pendientes', m.coverage.pendingSectors]
+  ] },
+  { id: 'flota', label: 'Flota', build: (m) => [
+    ['Vehículos totales', m.fleet.total], ['Activos', m.fleet.active], ['Detenidos', m.fleet.stopped], ['Retrasados', m.fleet.delayed], ['Offline', m.fleet.offline], ['Mantenimiento', m.fleet.maintenance], ['Disponibilidad', `${m.fleet.availabilityRate}%`], ['Utilización', `${m.fleet.utilizationRate}%`]
+  ] },
+  { id: 'incidencias', label: 'Incidencias', build: (m) => [
+    ['Incidencias abiertas', m.incidents.open], ['Incidencias resueltas', m.incidents.resolved], ['Resolución promedio', `${m.incidents.avgResolutionHours} h`], ['Reincidencias demo', m.incidents.recurrenceDemo]
+  ] },
+  { id: 'operacion', label: 'Operación', build: (m) => [
+    ['Km recorridos', `${m.operation.distanceKm} km`], ['Km productivos est.', `${m.operation.productiveKm} km`], ['Km potencialmente evitados', `${m.operation.avoidedKm} km`], ['Horas operativas', `${m.operation.operatingHours} h`], ['Tiempo detenido', `${m.operation.stoppedHours} h`], ['Tiempo improductivo est.', `${m.operation.unproductiveHours} h`]
+  ] }
+];
+let impactKpiGroup = IMPACT_KPI_GROUPS[0].id;
+function renderImpactKpiCards(groupId, metrics) {
+  const group = IMPACT_KPI_GROUPS.find((g) => g.id === groupId) ?? IMPACT_KPI_GROUPS[0];
+  return group.build(metrics).map(([name, value]) => `<div class="kpi"><strong>${value}</strong><br>${name}</div>`).join('');
+}
+// Pedido del Project Owner: priorizar estadísticas de USO (paradas × min/parada + distancia/
+// velocidad) por encima de "ahorro" — con eso las autoridades ya tienen con qué decidir cómo bajar
+// costos, aunque todavía sea una estimación por fórmula (no un tiempo real medido — no hay
+// timestamps de inicio/fin de ruta persistidos hoy, ver item #4 del debt register). La idea es
+// empezar a recoger esta estimación corrida a corrida y afinar minutesPerStop/avgSpeedKmh con el
+// tiempo, no reportar un número ya exacto — de ahí el aviso explícito abajo.
+function renderUsagePanel(metrics) {
+  const usage = metrics.usage;
+  const vehicleRows = usage.byVehicle.map((v) => `<p><b>${trucks.find((t) => t.id === v.truckId)?.unit ?? v.truckId}</b><span>${v.routes} ruta(s) · ${v.totalMinutes} min (${v.totalHours} h) estimados</span></p>`).join('') || '<p>Sin vehículos con ruta asignada.</p>';
+  const routeRows = usage.byRoute.map((r) => `<p><b>${r.name}</b><span>${r.stops} paradas · ${r.distanceKm} km · ${r.totalMinutes} min estimados (${r.stopMinutes} recolección + ${r.travelMinutes} traslado)</span></p>`).join('') || '<p>Sin rutas.</p>';
+  return `<p class="impact-notice small">Estimado, no medido: paradas × minutos/parada + distancia ÷ velocidad promedio. Sirve para empezar a recoger uso por corrida y afinar los supuestos con el tiempo.</p>
+    <div class="impact-grid">
+      <article><h3>Supuestos de uso</h3><label>Minutos por parada <input id="minutesPerStop" type="number" step="0.1" min="0" value="${defaultImpactAssumptions.minutesPerStop}"></label><label>Velocidad promedio km/h <input id="avgSpeedKmh" type="number" step="0.5" min="1" value="${defaultImpactAssumptions.avgSpeedKmh}"></label></article>
+      <article><h3>Uso total estimado hoy</h3><p><b>${usage.totalHours} h</b> de flota en uso estimadas · ${usage.byRoute.length} ruta(s) · ${usage.byVehicle.length} vehículo(s) con ruta.</p></article>
+    </div>
+    <div class="impact-grid"><article><h3>Por vehículo</h3><div class="comparison-table">${vehicleRows}</div></article><article><h3>Por ruta</h3><div class="comparison-table">${routeRows}</div></article></div>`;
+}
 function renderImpactCenter(assumptions = defaultImpactAssumptions, filters = {}) {
   const metrics = calculateImpactMetrics(assumptions, filters);
-  const kpis = [
-    ['Rutas planificadas', metrics.routes.planned], ['Asignadas', metrics.routes.assigned], ['Iniciadas', metrics.routes.started], ['En progreso', metrics.routes.inProgress], ['Retrasadas', metrics.routes.delayed], ['Completadas', metrics.routes.completed], ['Verificadas', metrics.routes.verified], ['Cumplimiento', `${metrics.routes.complianceRate}%`], ['Puntualidad', `${metrics.routes.punctualityRate}%`], ['Progreso promedio', `${metrics.routes.progressAverage}%`],
-    ['Sectores planificados', metrics.coverage.plannedSectors], ['Sectores atendidos', metrics.coverage.attendedSectors], ['Cobertura', `${metrics.coverage.coverageRate}%`], ['Pendientes', metrics.coverage.pendingSectors],
-    ['Vehículos totales', metrics.fleet.total], ['Activos', metrics.fleet.active], ['Detenidos', metrics.fleet.stopped], ['Retrasados', metrics.fleet.delayed], ['Offline', metrics.fleet.offline], ['Mantenimiento', metrics.fleet.maintenance], ['Disponibilidad', `${metrics.fleet.availabilityRate}%`], ['Utilización', `${metrics.fleet.utilizationRate}%`],
-    ['Incidencias abiertas', metrics.incidents.open], ['Incidencias resueltas', metrics.incidents.resolved], ['Resolución promedio', `${metrics.incidents.avgResolutionHours} h`], ['Reincidencias demo', metrics.incidents.recurrenceDemo],
-    ['Km recorridos', `${metrics.operation.distanceKm} km`], ['Km productivos est.', `${metrics.operation.productiveKm} km`], ['Km potencialmente evitados', `${metrics.operation.avoidedKm} km`], ['Horas operativas', `${metrics.operation.operatingHours} h`], ['Tiempo detenido', `${metrics.operation.stoppedHours} h`], ['Tiempo improductivo est.', `${metrics.operation.unproductiveHours} h`]
-  ];
   return `<section id="impacto" class="section impact-center card">
     <div class="impact-hero"><div><p class="eyebrow">Centro de Impacto Operacional</p><h2>Impacto y Ahorros</h2><p class="impact-notice">${IMPACT_DEMO_NOTICE}</p></div><div><strong>Ahorro potencial estimado mensual</strong><b>${money(metrics.economics.monthlyPotentialAvoided)}</b><span>Proyección anual demo: ${money(metrics.economics.annualProjectionDemo)}</span></div></div>
     <div class="impact-filters" aria-label="Filtros demo"><select id="impactPeriod"><option>Hoy</option><option>Últimos 7 días</option><option>Últimos 30 días</option><option>Trimestre</option><option>Año</option><option>Rango personalizado preparado</option></select><select id="impactSector"><option value="">Todos los sectores</option>${sectors.map((s)=>`<option>${s.name}</option>`).join('')}</select><select id="impactRoute"><option value="">Todas las rutas</option>${routes.map((r)=>`<option value="${r.id}">${r.name}</option>`).join('')}</select><select id="impactVehicle"><option value="">Todos los vehículos</option>${trucks.map((t)=>`<option value="${t.id}">${t.unit}</option>`).join('')}</select><select id="impactStatus"><option value="">Todos los estados</option>${['assigned','in_progress','delayed','completed','verified','active','stopped','offline'].map((st)=>`<option value="${st}">${label(st)}</option>`).join('')}</select></div>
-    <div class="kpis impact-kpis">${kpis.map(([name,value])=>`<div class="kpi"><strong>${value}</strong><br>${name}</div>`).join('')}</div>
-    <div class="municipal-360"><article><h3>Servicio</h3><p>${metrics.routes.planned} rutas · ${metrics.coverage.coverageRate}% cobertura · ${metrics.routes.complianceRate}% cumplimiento · ${metrics.coverage.attendedSectors} sectores atendidos.</p></article><article><h3>Operación</h3><p>${metrics.fleet.total} vehículos · ${metrics.operation.distanceKm} km · ${metrics.routes.delayed} retrasos · ${metrics.incidents.open} incidencias abiertas.</p></article><article><h3>Eficiencia</h3><p>${metrics.efficiency.optimizedHours} h optimizadas · ${metrics.efficiency.avoidedKm} km potencialmente evitados · ${metrics.efficiency.fuelSavedLiters} L potencialmente optimizados.</p></article><article><h3>Impacto económico</h3><p>${money(metrics.economics.monthlyPotentialAvoided)} mensual potencial · ${money(metrics.economics.annualProjectionDemo)} anual demo · supuestos visibles abajo.</p></article></div>
-    <div class="impact-grid"><article><h3>Supuestos configurables</h3><label>Precio combustible RD$/L <input id="fuelPrice" type="number" value="${defaultImpactAssumptions.fuelPrice}"></label><label>Rendimiento km/L <input id="fuelEfficiency" type="number" step="0.1" value="${defaultImpactAssumptions.fuelEfficiency}"></label><label>Días operativos <input id="operatingDays" type="number" value="${defaultImpactAssumptions.operatingDays}"></label><label>Costo operativo por hora <input id="hourlyCost" type="number" value="${defaultImpactAssumptions.hourlyCost}"></label><p class="demo">Distancia base: ${defaultImpactAssumptions.baseDistanceKm} km · distancia actual simulada: ${defaultImpactAssumptions.currentDistanceKm} km · horas operativas: ${defaultImpactAssumptions.operatingHours} h.</p></article><article id="impactEconomics">${renderImpactEconomics(metrics)}</article></div>
-    <div class="impact-grid"><article><h3>Visualizaciones operativas</h3>${renderImpactBars(metrics)}</article><article><h3>Antes del sistema vs. con SmartWaste</h3><p class="impact-notice small">${IMPACT_SCENARIO_NOTICE}</p>${renderBeforeAfter(metrics)}</article></div>
-    <div class="impact-grid"><article><h3>Integración futura con datos reales</h3>${Object.entries(metricReadiness).map(([k,v])=>`<p><b>${k}</b>: ${v.join(', ')}</p>`).join('')}</article><article><h3>Incidencias y sectores</h3><p>Categorías: ${Object.entries(metrics.incidents.byCategory).map(([k,v])=>`${k} (${v})`).join(' · ')}</p><p>Sectores: ${Object.entries(metrics.incidents.bySector).map(([k,v])=>`${k} (${v})`).join(' · ')}</p><p>Zonas con más incidencias: ${metrics.coverage.topIncidentZones.map((z)=>`${z.name} (${z.incidents})`).join(' · ')}</p></article></div>
+    <div class="ops-nav" role="tablist" aria-label="Secciones de Impacto y Ahorros">${IMPACT_TABS.map((t) => `<button type="button" class="ops-tab${t === impactTab ? ' active' : ''}" data-impact-tab="${t}" role="tab">${IMPACT_TAB_LABELS[t]}</button>`).join('')}</div>
+    <div class="impact-panel${impactTab === 'resumen' ? '' : ' hidden'}" data-impact-tab-panel="resumen">
+      <div class="municipal-360"><article><h3>Servicio</h3><p>${metrics.routes.planned} rutas · ${metrics.coverage.coverageRate}% cobertura · ${metrics.routes.complianceRate}% cumplimiento · ${metrics.coverage.attendedSectors} sectores atendidos.</p></article><article><h3>Operación</h3><p>${metrics.fleet.total} vehículos · ${metrics.operation.distanceKm} km · ${metrics.routes.delayed} retrasos · ${metrics.incidents.open} incidencias abiertas.</p></article><article><h3>Eficiencia</h3><p>${metrics.efficiency.optimizedHours} h optimizadas · ${metrics.efficiency.avoidedKm} km potencialmente evitados · ${metrics.efficiency.fuelSavedLiters} L potencialmente optimizados.</p></article><article><h3>Impacto económico</h3><p>${money(metrics.economics.monthlyPotentialAvoided)} mensual potencial · ${money(metrics.economics.annualProjectionDemo)} anual demo · supuestos en la pestaña Economía.</p></article></div>
+    </div>
+    <div class="impact-panel${impactTab === 'uso' ? '' : ' hidden'}" data-impact-tab-panel="uso">
+      ${renderUsagePanel(metrics)}
+    </div>
+    <div class="impact-panel${impactTab === 'metricas' ? '' : ' hidden'}" data-impact-tab-panel="metricas">
+      <div class="ops-nav" role="tablist" aria-label="Categorías de métricas">${IMPACT_KPI_GROUPS.map((g) => `<button type="button" class="ops-tab${g.id === impactKpiGroup ? ' active' : ''}" data-impact-kpi-group="${g.id}" role="tab">${g.label}</button>`).join('')}</div>
+      <div class="kpis impact-kpis" id="impactKpis">${renderImpactKpiCards(impactKpiGroup, metrics)}</div>
+    </div>
+    <div class="impact-panel${impactTab === 'economia' ? '' : ' hidden'}" data-impact-tab-panel="economia">
+      <div class="impact-grid"><article><h3>Supuestos configurables</h3><label>Precio combustible RD$/L <input id="fuelPrice" type="number" value="${defaultImpactAssumptions.fuelPrice}"></label><label>Rendimiento km/L <input id="fuelEfficiency" type="number" step="0.1" value="${defaultImpactAssumptions.fuelEfficiency}"></label><label>Días operativos <input id="operatingDays" type="number" value="${defaultImpactAssumptions.operatingDays}"></label><label>Costo operativo por hora <input id="hourlyCost" type="number" value="${defaultImpactAssumptions.hourlyCost}"></label><p class="demo">Distancia base: ${defaultImpactAssumptions.baseDistanceKm} km · distancia actual simulada: ${defaultImpactAssumptions.currentDistanceKm} km · horas operativas: ${defaultImpactAssumptions.operatingHours} h.</p></article><article id="impactEconomics">${renderImpactEconomics(metrics)}</article></div>
+    </div>
+    <div class="impact-panel${impactTab === 'analisis' ? '' : ' hidden'}" data-impact-tab-panel="analisis">
+      <div class="impact-grid"><article><h3>Visualizaciones operativas</h3>${renderImpactBars(metrics)}</article><article><h3>Antes del sistema vs. con SmartWaste</h3><p class="impact-notice small">${IMPACT_SCENARIO_NOTICE}</p>${renderBeforeAfter(metrics)}</article></div>
+      <div class="impact-grid"><article><h3>Integración futura con datos reales</h3>${Object.entries(metricReadiness).map(([k,v])=>`<p><b>${k}</b>: ${v.join(', ')}</p>`).join('')}</article><article><h3>Incidencias y sectores</h3><p>Categorías: ${Object.entries(metrics.incidents.byCategory).map(([k,v])=>`${k} (${v})`).join(' · ')}</p><p>Sectores: ${Object.entries(metrics.incidents.bySector).map(([k,v])=>`${k} (${v})`).join(' · ')}</p><p>Zonas con más incidencias: ${metrics.coverage.topIncidentZones.map((z)=>`${z.name} (${z.incidents})`).join(' · ')}</p></article></div>
+    </div>
   </section>`;
 }
-function currentImpactAssumptions(){ return { ...defaultImpactAssumptions, fuelPrice: Number($('#fuelPrice')?.value ?? defaultImpactAssumptions.fuelPrice), fuelEfficiency: Number($('#fuelEfficiency')?.value ?? defaultImpactAssumptions.fuelEfficiency), operatingDays: Number($('#operatingDays')?.value ?? defaultImpactAssumptions.operatingDays), hourlyCost: Number($('#hourlyCost')?.value ?? defaultImpactAssumptions.hourlyCost) }; }
+function currentImpactAssumptions(){ return { ...defaultImpactAssumptions, fuelPrice: Number($('#fuelPrice')?.value ?? defaultImpactAssumptions.fuelPrice), fuelEfficiency: Number($('#fuelEfficiency')?.value ?? defaultImpactAssumptions.fuelEfficiency), operatingDays: Number($('#operatingDays')?.value ?? defaultImpactAssumptions.operatingDays), hourlyCost: Number($('#hourlyCost')?.value ?? defaultImpactAssumptions.hourlyCost), minutesPerStop: Number($('#minutesPerStop')?.value ?? defaultImpactAssumptions.minutesPerStop), avgSpeedKmh: Number($('#avgSpeedKmh')?.value ?? defaultImpactAssumptions.avgSpeedKmh) }; }
 function currentImpactFilters(){ return { sector: $('#impactSector')?.value || '', route: $('#impactRoute')?.value || '', vehicle: $('#impactVehicle')?.value || '', status: $('#impactStatus')?.value || '', period: $('#impactPeriod')?.value || 'Hoy' }; }
 function renderImpactEconomics(m){return `<h3>Impacto económico estimado</h3><p><b>${num(m.efficiency.fuelSavedLiters,' L')}</b> combustible potencialmente optimizado.</p><p><b>${money(m.economics.monthlyPotentialAvoided)}</b> costo mensual potencialmente evitado.</p><p><b>${money(m.economics.annualProjectionDemo)}</b> proyección anual demo.</p><p><b>${num(m.efficiency.avoidedKm,' km')}</b> kilómetros potencialmente evitados · <b>${num(m.efficiency.optimizedHours,' h')}</b> horas operativas potencialmente optimizadas.</p><p><b>${money(m.economics.incidentCostAvoided)}</b> costo potencial por incidencias evitadas con supuesto configurable válido.</p><p class="demo">Ahorro potencial estimado; no es ahorro garantizado ni resultado real.</p>`}
 function renderImpactBars(m){return [...m.coverage.bySector.map((s)=>`${s.name} cobertura ${s.coverage}% ${bar(s.coverage)}`),`Cumplimiento rutas ${m.routes.complianceRate}% ${bar(m.routes.complianceRate)}`,`Estado flota activa ${m.fleet.availabilityRate}% ${bar(m.fleet.availabilityRate)}`,`Kilómetros productivos ${m.operation.productiveKm}/${m.operation.distanceKm} ${bar(m.operation.productiveKm,m.operation.distanceKm)}`,`Combustible optimizado ${m.efficiency.fuelSavedLiters} L ${bar(m.efficiency.fuelSavedLiters,3)}`,`Ahorro mensual/anual ${money(m.economics.monthlyPotentialAvoided)} / ${money(m.economics.annualProjectionDemo)} ${bar(m.economics.monthlyPotentialAvoided,m.economics.annualProjectionDemo/6)}`].map(x=>`<p>${x}</p>`).join('')}
@@ -1044,6 +1101,11 @@ async function finishCreateRoute() {
   }
 
   if (truck) await assignTruckToRoute(newRoute, truck);
+  // UX cleanup (SW-037): a route created without a vehicle used to leave the Project Owner staring
+  // at the Rutas list with no obvious next step — "Asignar vehículo" only lived in the route's own
+  // detail drawer, which they'd have to know to open manually. Jump straight there, same navigation
+  // (selectRoute()+goToMapTab()) already used when clicking a route row.
+  if (!truck) { selectRoute(routeId); goToMapTab(); }
 
   drawnRoutePoints = [];
   redrawCreateRouteTrace();
@@ -1103,6 +1165,19 @@ document.addEventListener('click', (event) => {
   if (event.target.matches('[data-close-detail]')) { closeDetail(); return; }
   const opsNavButton = event.target.closest('[data-ops-nav]');
   if (opsNavButton) location.hash = `operaciones/${opsNavButton.dataset.opsNav}`;
+  const impactTabButton = event.target.closest('[data-impact-tab]');
+  if (impactTabButton) {
+    impactTab = impactTabButton.dataset.impactTab;
+    document.querySelectorAll('#impacto [data-impact-tab]').forEach((tab) => tab.classList.toggle('active', tab.dataset.impactTab === impactTab));
+    document.querySelectorAll('#impacto [data-impact-tab-panel]').forEach((panel) => panel.classList.toggle('hidden', panel.dataset.impactTabPanel !== impactTab));
+  }
+  const impactKpiGroupButton = event.target.closest('[data-impact-kpi-group]');
+  if (impactKpiGroupButton) {
+    impactKpiGroup = impactKpiGroupButton.dataset.impactKpiGroup;
+    document.querySelectorAll('#impacto [data-impact-kpi-group]').forEach((tab) => tab.classList.toggle('active', tab.dataset.impactKpiGroup === impactKpiGroup));
+    const kpisEl = $('#impactKpis');
+    if (kpisEl) kpisEl.innerHTML = renderImpactKpiCards(impactKpiGroup, calculateImpactMetrics(currentImpactAssumptions(), currentImpactFilters()));
+  }
   // Empty-state pointers like "registra uno en Municipal · Flota y personal" used to be plain
   // text — this makes them real links: switch tab via the normal hash nav, then scroll the
   // referenced panel into view once its section is visible (a hashchange handles the tab switch
@@ -1139,7 +1214,19 @@ document.addEventListener('click', (event) => {
   if (event.target.id === 'checkFolio') { const found = findIncidentStatus($('#folioSearch').value); $('#folioStatus').textContent = found ? `${found.type}: ${found.status}` : 'Folio demo no encontrado'; }
   const sim = event.target.dataset.sim; if (sim === 'start') startSimulation(); if (sim === 'pause') pauseSimulation(); if (sim === 'reset') resetSimulation(); if (sim === 'fullscreen') toggleMapFullscreen(); if (sim === 'speed') { simulationSpeed = simulationSpeed === 1 ? 2 : simulationSpeed === 2 ? 4 : 1; event.target.textContent = `${simulationSpeed}×`; if (simulationTimer) { pauseSimulation(); startSimulation(); } }
 });
-document.addEventListener('change', (event) => { if (event.target.closest('#impacto') && event.target.matches('select')) { $('#impacto').outerHTML = renderImpactCenter(currentImpactAssumptions(), currentImpactFilters()); } });
+// Extendido a inputs numéricos (antes solo <select>) para que los supuestos configurables —
+// incluyendo minutesPerStop/avgSpeedKmh de la pestaña Uso — recalculen al perder foco, no solo los
+// filtros. 'change' (no 'input') ya evita recalcular en cada tecla.
+document.addEventListener('change', (event) => { if (event.target.closest('#impacto') && event.target.matches('select, input[type="number"]')) { $('#impacto').outerHTML = renderImpactCenter(currentImpactAssumptions(), currentImpactFilters()); } });
+// UX cleanup (SW-037): "Crear ruta" now lives collapsed behind a <details> ("+ Nueva ruta") instead
+// of always taking up space in the Rutas panel. Its Leaflet map (#createRouteMap) is built once at
+// module init regardless of visibility (see initCreateRouteMap() below), so — same as
+// showOpsView()'s invalidateSize() call for the 'rutas' ops-tab — it needs an explicit
+// invalidateSize() once the <details> actually opens, or it renders with zero size. The native
+// `toggle` event doesn't bubble, so this must listen on the capture phase to reach it via delegation.
+document.addEventListener('toggle', (event) => {
+  if (event.target.id === 'createRouteToggle' && event.target.open && createRouteMapReady) requestAnimationFrame(() => createRouteMap.invalidateSize());
+}, true);
 $('#search').addEventListener('input', (event) => { const term = event.target.value.toLowerCase(); $('#routeList').innerHTML = renderRoutes(routes.filter((route) => JSON.stringify(route).toLowerCase().includes(term))); });
 $('#sectorFilter').addEventListener('change', (event) => { $('#routeList').innerHTML = renderRoutes(routes.filter((route) => !event.target.value || route.sectors.includes(event.target.value))); });
 $('#citizenSector').addEventListener('change', (event) => { const service = findSectorService(event.target.value); $('#pickupResult').textContent = service ? `${service.pickupDay} · Estado: ${service.status}` : 'Sector demo no encontrado'; });
