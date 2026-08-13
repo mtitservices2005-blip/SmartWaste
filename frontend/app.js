@@ -51,6 +51,14 @@ let backendMode = 'DEMO_ONLY';
 // handle while GPS sharing is active, null otherwise.
 let driverAuthContext = null;
 let driverGpsWatchId = null;
+// Onboarding en vacío (pedido del Project Owner): un municipio real recién conectado a Supabase, sin
+// ningún vehículo/chofer/ruta real todavía, no debería ver los 5 datos demo como si fueran
+// operación real — bootstrapRealBackend() (más abajo) detecta ese caso, vacía los arrays demo, y
+// muestra este wizard de 2 pasos (vehículo, chofer) antes de entregar el control al flujo normal de
+// "Crear ruta" ya existente para el tercer paso (la primera ruta real).
+let needsOnboarding = false;
+let onboardingVehicle = null;
+let onboardingDriver = null;
 // SW-036: the dispatcher-facing map's real-GPS overlay. realPositions is keyed by truck.real_id
 // (vehicle_positions.vehicle_id is the Supabase-generated uuid, same key already used everywhere
 // else a truck's real row needs matching — see hydrateVehiclesAndDrivers()/assignTruckToRoute()).
@@ -199,7 +207,7 @@ function kpiValue(predicate) { return trucks.filter(predicate).length; }
 function operationalKpis() {
   const completedRoutes = routes.filter((route) => ['completed', 'verified'].includes(route.status)).length;
   const openIncidents = incidents.filter((incident) => incident.status !== 'Cerrada').length;
-  const compliance = Math.round(routes.reduce((total, route) => total + route.progress, 0) / routes.length);
+  const compliance = routes.length ? Math.round(routes.reduce((total, route) => total + route.progress, 0) / routes.length) : 0;
   return [
     ['Camiones activos', kpiValue((truck) => truck.state === 'active')],
     ['Camiones detenidos', kpiValue((truck) => truck.state === 'stopped')],
@@ -417,36 +425,111 @@ async function mirrorToRealAdapter(promise, status) {
     return null;
   }
 }
-async function createVehicleFromForm() {
-  const unitInput = $('#fleetVehicleUnit'); const plateInput = $('#fleetVehiclePlate'); const maxStopsInput = $('#fleetVehicleMaxStops'); const status = $('#fleetVehicleStatus');
-  const unit = unitInput?.value.trim();
-  if (!unit) { if (status) status.textContent = 'Ingresa una unidad para el vehículo.'; return; }
-  const plate = plateInput?.value.trim() ?? ''; const maxStops = Number(maxStopsInput?.value) || DEFAULT_MAX_STOPS;
+// Extraído de createVehicleFromForm/createDriverFromForm (antes duplicaban la escritura dual +
+// real_id linking inline) para que el wizard de configuración inicial (renderOnboardingOverlay()
+// más abajo) pueda crear el primer vehículo/chofer sin reimplementar esa lógica ni depender de los
+// ids del formulario de Flota, que viven en otro panel del DOM.
+async function createVehicle({ unit, plate = '', maxStops = DEFAULT_MAX_STOPS }, status) {
   const created = operationsAdapter.createVehicle({ unit, name: unit, plate, max_stops: maxStops });
   trucks.push(created);
-  if (unitInput) unitInput.value = ''; if (plateInput) plateInput.value = ''; if (maxStopsInput) maxStopsInput.value = '20';
-  if (status) status.textContent = `Vehículo "${created.unit}" registrado.`;
   refreshFleetSelects();
-  // Same real-id linking as drivers below — a real vehicles row gets its own Postgres id, kept on
-  // the demo-shaped truck object so a later route assignment can reference the real row too.
+  // Same real-id linking as createDriver() below — a real vehicles row gets its own Postgres id,
+  // kept on the demo-shaped truck object so a later route assignment can reference the real row too.
   const realVehicle = await mirrorToRealAdapter(realAdapter?.createVehicle({ code: unit, plate, max_stops: maxStops }), status);
   if (realVehicle) created.real_id = realVehicle.id;
+  return created;
 }
-async function createDriverFromForm() {
-  const nameInput = $('#fleetDriverName'); const phoneInput = $('#fleetDriverPhone'); const emailInput = $('#fleetDriverEmail'); const status = $('#fleetDriverStatus');
-  const name = nameInput?.value.trim();
-  if (!name) { if (status) status.textContent = 'Ingresa un nombre para el chofer.'; return; }
-  const email = emailInput?.value.trim() || undefined;
-  const created = operationsAdapter.createDriver({ name, phone: phoneInput?.value.trim() ?? '', email });
+async function createDriver({ name, phone = '', email } = {}, status) {
+  const created = operationsAdapter.createDriver({ name, phone, email });
   drivers.push(created);
-  if (nameInput) nameInput.value = ''; if (phoneInput) phoneInput.value = ''; if (emailInput) emailInput.value = '';
-  if (status) status.textContent = `Chofer "${created.name}" registrado (sin cuenta de acceso todavía).`;
   refreshFleetSelects();
   // The real drivers row gets its own id (a Postgres uuid, never the same as the demo id above) —
   // createDriverAccount() needs THAT id to call the Edge Function against a row that actually
   // exists in Supabase, so it's kept on the demo-shaped object rather than discarded.
   const realDriver = await mirrorToRealAdapter(realAdapter?.createDriver({ display_name: name }), status);
   if (realDriver) created.real_id = realDriver.id;
+  return created;
+}
+async function createVehicleFromForm() {
+  const unitInput = $('#fleetVehicleUnit'); const plateInput = $('#fleetVehiclePlate'); const maxStopsInput = $('#fleetVehicleMaxStops'); const status = $('#fleetVehicleStatus');
+  const unit = unitInput?.value.trim();
+  if (!unit) { if (status) status.textContent = 'Ingresa una unidad para el vehículo.'; return; }
+  const created = await createVehicle({ unit, plate: plateInput?.value.trim() ?? '', maxStops: Number(maxStopsInput?.value) || DEFAULT_MAX_STOPS }, status);
+  if (unitInput) unitInput.value = ''; if (plateInput) plateInput.value = ''; if (maxStopsInput) maxStopsInput.value = '20';
+  if (status) status.textContent = `Vehículo "${created.unit}" registrado.`;
+}
+async function createDriverFromForm() {
+  const nameInput = $('#fleetDriverName'); const phoneInput = $('#fleetDriverPhone'); const emailInput = $('#fleetDriverEmail'); const status = $('#fleetDriverStatus');
+  const name = nameInput?.value.trim();
+  if (!name) { if (status) status.textContent = 'Ingresa un nombre para el chofer.'; return; }
+  const created = await createDriver({ name, phone: phoneInput?.value.trim() ?? '', email: emailInput?.value.trim() || undefined }, status);
+  if (nameInput) nameInput.value = ''; if (phoneInput) phoneInput.value = ''; if (emailInput) emailInput.value = '';
+  if (status) status.textContent = `Chofer "${created.name}" registrado (sin cuenta de acceso todavía).`;
+}
+function renderOnboardingOverlay() {
+  const step = !onboardingVehicle ? 1 : !onboardingDriver ? 2 : 3;
+  return `<div id="onboardingOverlay" class="onboarding-overlay" role="dialog" aria-modal="true" aria-label="Configuración inicial">
+    <div class="onboarding-card card">
+      <p class="eyebrow">Configuración inicial · Municipio real</p>
+      <h2>Arranquemos con tu primera ruta</h2>
+      <p class="demo">Sin datos demo — lo que registres acá es real y queda en Supabase. Dos pasos rápidos (vehículo, chofer); el tercero es dibujar tu primera ruta en el mapa normal, ya con todo pre-seleccionado.</p>
+      <ol class="onboarding-steps">
+        <li class="${step > 1 ? 'done' : 'active'}">1. Vehículo</li>
+        <li class="${step > 2 ? 'done' : step === 2 ? 'active' : ''}">2. Chofer</li>
+        <li class="${step === 3 ? 'active' : ''}">3. Primera ruta</li>
+      </ol>
+      ${step === 1 ? renderOnboardingVehicleStep() : renderOnboardingDriverStep()}
+    </div>
+  </div>`;
+}
+function renderOnboardingVehicleStep() {
+  return `<div class="controls"><input id="onboardVehicleUnit" placeholder="Unidad (p. ej. SW-LS-01)"><input id="onboardVehiclePlate" placeholder="Matrícula"><input id="onboardVehicleMaxStops" type="number" min="1" value="20" placeholder="Paradas máx. por viaje"></div>
+    <p id="onboardVehicleStatus" class="demo"></p>
+    <div class="controls"><button type="button" class="btn-primary" data-onboard="vehicle">Siguiente: chofer</button></div>`;
+}
+function renderOnboardingDriverStep() {
+  return `<p class="demo">Vehículo registrado: <b>${onboardingVehicle.unit}</b></p>
+    <div class="controls"><input id="onboardDriverName" placeholder="Nombre del chofer"><input id="onboardDriverPhone" placeholder="Teléfono"></div>
+    <p id="onboardDriverStatus" class="demo"></p>
+    <div class="controls"><button type="button" class="btn-primary" data-onboard="driver">Siguiente: primera ruta</button></div>`;
+}
+function showOnboardingOverlay() {
+  if ($('#onboardingOverlay')) return;
+  document.body.insertAdjacentHTML('beforeend', renderOnboardingOverlay());
+}
+async function onboardVehicleStep() {
+  const unitInput = $('#onboardVehicleUnit'); const plateInput = $('#onboardVehiclePlate'); const maxStopsInput = $('#onboardVehicleMaxStops'); const status = $('#onboardVehicleStatus');
+  const unit = unitInput?.value.trim();
+  if (!unit) { if (status) status.textContent = 'Ingresa una unidad para el vehículo.'; return; }
+  if (status) status.textContent = 'Registrando vehículo…';
+  onboardingVehicle = await createVehicle({ unit, plate: plateInput?.value.trim() ?? '', maxStops: Number(maxStopsInput?.value) || DEFAULT_MAX_STOPS }, status);
+  const overlay = $('#onboardingOverlay');
+  if (overlay) overlay.outerHTML = renderOnboardingOverlay();
+}
+async function onboardDriverStep() {
+  const nameInput = $('#onboardDriverName'); const phoneInput = $('#onboardDriverPhone'); const status = $('#onboardDriverStatus');
+  const name = nameInput?.value.trim();
+  if (!name) { if (status) status.textContent = 'Ingresa un nombre para el chofer.'; return; }
+  if (status) status.textContent = 'Registrando chofer…';
+  onboardingDriver = await createDriver({ name, phone: phoneInput?.value.trim() ?? '' }, status);
+  finishOnboardingHandoff();
+}
+// Cierra el wizard y entrega el control al flujo de "Crear ruta" que ya existe (mismo mapa/OSRM/
+// generación de paradas que usa cualquier ruta creada a mano) — nada nuevo que mantener para el
+// paso 3, solo lo dejamos abierto y con el vehículo recién creado ya seleccionado.
+function finishOnboardingHandoff() {
+  needsOnboarding = false;
+  $('#onboardingOverlay')?.remove();
+  location.hash = 'operaciones/rutas';
+  requestAnimationFrame(() => {
+    const toggle = $('#createRouteToggle');
+    if (toggle && !toggle.open) toggle.open = true;
+    const vehicleSelect = $('#createRouteVehicle');
+    if (vehicleSelect && onboardingVehicle) vehicleSelect.value = onboardingVehicle.id;
+    const status = $('#createRouteStatus');
+    if (status) status.textContent = `Vehículo "${onboardingVehicle.unit}" y chofer "${onboardingDriver.name}" listos. Dibuja al menos 2 puntos en el mapa para tu primera ruta real.`;
+    toggle?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
 }
 // SW-032/SW-034: calls the supabase/functions/create-driver-account Edge Function with the
 // currently signed-in session (getAuthClient(), set by auth-gate.js) — never touches service_role
@@ -1192,6 +1275,9 @@ document.addEventListener('click', (event) => {
   if (fleetAction === 'create-driver') createDriverFromForm();
   const driverAccountButton = event.target.closest('[data-fleet-driver-account]');
   if (driverAccountButton) createDriverAccount(driverAccountButton.dataset.fleetDriverAccount);
+  const onboardAction = event.target.closest('[data-onboard]')?.dataset.onboard;
+  if (onboardAction === 'vehicle') onboardVehicleStep();
+  if (onboardAction === 'driver') onboardDriverStep();
   const truckButton = event.target.closest('[data-truck]'); if (truckButton) { selectTruck(truckButton.dataset.truck); goToMapTab(); }
   const routeButton = event.target.closest('[data-route]'); if (routeButton?.dataset.route) { selectRoute(routeButton.dataset.route); goToMapTab(); }
   const incidentButton = event.target.closest('[data-incident]'); if (incidentButton) { selectIncident(incidentButton.dataset.incident); goToMapTab(); }
@@ -1362,10 +1448,24 @@ async function bootstrapRealBackend(ctx) {
   if (sourceLabel) sourceLabel.textContent = `${simulationNotice} · fuente desacoplada: ${backendMode}`;
   await hydrateVehiclesAndDrivers();
   await hydrateRoutes();
+  // Onboarding en vacío: si la hidratación de arriba no trajo NINGÚN vehículo/chofer/ruta real, este
+  // municipio nunca operó en Supabase — mostrarle los 5 datos demo sembrados al cargar el módulo
+  // (module-init, antes de que se supiera si habría backend real) lo confundiría pensando que es
+  // operación real. Solo corre con backend real conectado (nunca en DEMO_ONLY — regla 5); vacía los
+  // arrays y activa el wizard en vez de la UI normal.
+  if (!trucks.some((t) => t.real_id) && !drivers.some((d) => d.real_id) && !routes.some((r) => r.real_id)) {
+    trucks.length = 0; drivers.length = 0; routes.length = 0; incidents.length = 0;
+    needsOnboarding = true;
+    const incidenciasPanel = document.querySelector('[data-ops-view="incidencias"]');
+    if (incidenciasPanel) incidenciasPanel.innerHTML = renderIncidenciasPanel();
+    $('#routeList') && ($('#routeList').innerHTML = renderRoutes(routes));
+    refreshFleetSelects();
+  }
   // Codex review on PR #49: #resumen is built synchronously at page load, before either hydrate
   // call above resolves — without this refresh, every route/vehicle pulled from Supabase stays
   // invisible to the landing KPIs and "Necesita tu atención" list even after hydration succeeds.
   refreshResumen();
+  if (needsOnboarding) showOnboardingOverlay();
   // renderDriverMobile() already renders the GPS control conditionally, but that render happened
   // synchronously at page load, before this async function resolved backendMode — the driver view
   // is already in the DOM by then. Insert the control now instead of re-rendering #driverMobile
