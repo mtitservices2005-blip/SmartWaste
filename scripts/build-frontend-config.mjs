@@ -12,11 +12,14 @@
 // as opening frontend/index.html locally with no config (rule 5, never break the demo). Only warns
 // loudly, never fails the build, so a misconfigured env doesn't take down a deploy that was only
 // ever meant to show the demo.
-import { readFileSync, writeFileSync, mkdirSync, cpSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, cpSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 
 const FRONTEND_DIR = fileURLToPath(new URL('../frontend', import.meta.url));
+const SHARED_DIR = fileURLToPath(new URL('../shared', import.meta.url));
 const DIST_DIR = fileURLToPath(new URL('../dist', import.meta.url));
+const DIST_SHARED_DIR = fileURLToPath(new URL('../dist/shared', import.meta.url));
 const INDEX_HTML_PATH = fileURLToPath(new URL('../dist/index.html', import.meta.url));
 const CONFIG_START = '<!-- SMARTWASTE_SUPABASE_CONFIG:START (generado por scripts/build-frontend-config.mjs) -->';
 const CONFIG_END = '<!-- SMARTWASTE_SUPABASE_CONFIG:END -->';
@@ -47,6 +50,21 @@ function writeSupabaseConfigIntoIndexHtml({ url, anonKey, municipality_id }) {
 
 mkdirSync(DIST_DIR, { recursive: true });
 cpSync(FRONTEND_DIR, DIST_DIR, { recursive: true });
+
+// frontend/app.js and frontend/auth-gate.js import from '../shared/...' — that only resolves
+// locally because frontend/ and shared/ are siblings in the repo. Vercel's outputDirectory is
+// dist/ alone, so without this, the very first static import (shared/demo-data.js) 404s in the
+// browser and the whole module fails to evaluate — no error banner, just a page where nothing
+// past the static <header> ever renders (no login overlay, no buttons wired up). Copy shared/ in
+// as dist/shared/ and rewrite the copied frontend files' import specifiers to match.
+cpSync(SHARED_DIR, DIST_SHARED_DIR, { recursive: true });
+for (const file of readdirSync(DIST_DIR)) {
+  if (!file.endsWith('.js')) continue;
+  const filePath = join(DIST_DIR, file);
+  const contents = readFileSync(filePath, 'utf8');
+  const rewritten = contents.replaceAll('../shared/', './shared/');
+  if (rewritten !== contents) writeFileSync(filePath, rewritten);
+}
 
 const url = process.env.SUPABASE_URL;
 const anonKey = process.env.SUPABASE_ANON_KEY;
