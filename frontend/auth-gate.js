@@ -128,7 +128,11 @@ export async function initAuthGate() {
   const config = readSupabaseConfig();
   if (!config) return null;
 
-  const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2.45.0');
+  // Vendored locally (frontend/vendor/supabase-js.mjs, built from node_modules via esbuild — see
+  // frontend/vendor/README.md) instead of a runtime esm.sh import: a real staging test found that
+  // esm.sh being unreachable from the visitor's network (corporate firewall, etc.) silently killed
+  // the whole auth gate — no login overlay, no error shown, just the raw demo dashboard unfiltered.
+  const { createClient } = await import('./vendor/supabase-js.mjs');
   const client = createClient(config.url, config.anonKey);
   authClient = client;
   const identity = createIdentityProvider(client);
