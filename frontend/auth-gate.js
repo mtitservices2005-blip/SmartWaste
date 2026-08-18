@@ -55,10 +55,16 @@ export function pickVisibleOpsViews(role, views = OPS_SUBVIEW_ROLES) {
 
 // Pure, DOM-free — unit-tested with a fake `win` object. Reads and validates the page's optional
 // Supabase config without ever touching a real `window`.
+// SW-039: municipality_id is optional and only meaningful for the anonymous citizen portal — every
+// other real-backend flow derives it from the signed-in session's membership
+// (resolveSupabaseAuthContext()), but an anonymous visitor has no session, and municipalities has
+// no anon SELECT policy (see supabase/migrations/202607150006_sw020_rls_fixes.sql's
+// municipality_is_onboarded() comment), so there is no way for the browser to discover it on its
+// own. The deployer sets it once per municipality-specific deployment, alongside url/anonKey.
 export function readSupabaseConfig(win = typeof window !== 'undefined' ? window : {}) {
   const config = win.SMARTWASTE_SUPABASE_CONFIG;
   if (!config?.url || !config?.anonKey) return null;
-  return { url: config.url, anonKey: config.anonKey };
+  return { url: config.url, anonKey: config.anonKey, municipality_id: config.municipality_id ?? null };
 }
 
 // SW-032: the client initAuthGate() creates below is what carries the signed-in session (JWT) —

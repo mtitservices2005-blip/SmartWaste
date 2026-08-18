@@ -50,12 +50,17 @@ allRoles.forEach((role) => {
   assert.ok(visible.includes('ciudadania'), `${role} must always see the public citizen portal`);
 });
 
-// readSupabaseConfig: absent, partial, and complete config.
+// readSupabaseConfig: absent, partial, and complete config. municipality_id (SW-039) is optional —
+// only the anonymous citizen portal needs it, since it has no session to derive it from.
 assert.equal(readSupabaseConfig({}), null);
 assert.equal(readSupabaseConfig({ SMARTWASTE_SUPABASE_CONFIG: { url: 'http://x' } }), null);
 assert.deepEqual(
   readSupabaseConfig({ SMARTWASTE_SUPABASE_CONFIG: { url: 'http://x', anonKey: 'k' } }),
-  { url: 'http://x', anonKey: 'k' }
+  { url: 'http://x', anonKey: 'k', municipality_id: null }
+);
+assert.deepEqual(
+  readSupabaseConfig({ SMARTWASTE_SUPABASE_CONFIG: { url: 'http://x', anonKey: 'k', municipality_id: 'muni-1' } }),
+  { url: 'http://x', anonKey: 'k', municipality_id: 'muni-1' }
 );
 
 // SECTION_ROLES itself: ciudadania must stay public (regression guard against accidentally gating
