@@ -12,13 +12,19 @@ export const defaultImpactAssumptions = {
   currentDistanceKm: Number(routes.reduce((sum, route) => sum + route.distanceKm, 0).toFixed(1)),
   operatingHours: 6.1,
   baselineOperatingHours: 7.4,
-  incidentAvoidanceCost: 1200
+  incidentAvoidanceCost: 1200,
+  // Uso estimado del camión (paradas × minutos/parada + distancia/velocidad): arranca como supuesto
+  // configurable, no una medición real (no hay timestamps de inicio/fin de ruta persistidos hoy —
+  // ver item #4 de docs/TECHNICAL_DEBT_REGISTER.md). La idea es empezar a recoger estas
+  // estimaciones corrida a corrida y afinar los supuestos con datos reales más adelante.
+  minutesPerStop: 1,
+  avgSpeedKmh: 18
 };
 
 export const metricReadiness = {
   REAL_READY: ['routes', 'vehicles', 'incidents', 'sectors', 'contracts', 'auth context', 'operations adapter'],
   PARTIAL: ['route_runs', 'vehicle_positions', 'cumplimiento por vehículo', 'cumplimiento por ruta', 'telemetry simulator'],
-  DEMO_ONLY: ['kilómetros potencialmente evitados', 'combustible potencialmente optimizado', 'impacto económico estimado', 'reincidencias demo', 'antes vs después'],
+  DEMO_ONLY: ['kilómetros potencialmente evitados', 'combustible potencialmente optimizado', 'impacto económico estimado', 'reincidencias demo', 'antes vs después', 'uso estimado del camión (paradas × min/parada + distancia/velocidad)'],
   BLOCKED: ['ahorros reales auditados', 'GPS físico verificado', 'costos oficiales del ayuntamiento', 'histórico real de resolución']
 };
 
@@ -66,6 +72,13 @@ export function calculateImpactMetrics(assumptions = defaultImpactAssumptions, f
     completed: count(filteredTrucks, (truck) => truck.state === 'completed')
   };
   const bySector = sectors.map((sector) => ({ name: sector.name, covered: sector.covered, pending: sector.pending, coverage: pct(sector.covered, sector.covered + sector.pending), incidents: count(filteredIncidents, (incident) => incident.sector === sector.name) }));
+  // Codex review on PR #54: filteredRoutes only respects sector/route/status — filters.vehicle only
+  // narrowed filteredTrucks, so picking a specific vehicle left Uso reporting every route regardless
+  // (e.g. selecting an unassigned truck still showed usage for all 5 demo routes). Scoped to usage
+  // only, not filteredRoutes itself, since routes/coverage/economics were never meant to narrow by
+  // vehicle (a vehicle filter says "show me this truck's load", not "hide routes it isn't on").
+  const usageRoutes = filteredRoutes.filter((route) => !filters.vehicle || route.truckId === filters.vehicle);
+  const usage = calculateUsageMetrics(usageRoutes, assumptions);
   return {
     filters,
     assumptions: { ...defaultImpactAssumptions, ...assumptions },
@@ -76,8 +89,33 @@ export function calculateImpactMetrics(assumptions = defaultImpactAssumptions, f
     operation: { distanceKm, productiveKm, avoidedKm, operatingHours: Number(assumptions.operatingHours), stoppedHours: 1.1, unproductiveHours: round(Number(assumptions.operatingHours) - (Number(assumptions.operatingHours) * 0.78), 1), byVehicle: filteredTrucks.map((truck) => ({ name: truck.unit, compliance: truck.progress })), byRoute: filteredRoutes.map((route) => ({ name: route.name, compliance: route.progress })) },
     efficiency: { avoidedKm, fuelSavedLiters, fuelCostAvoided, optimizedHours },
     economics: { monthlyFuelAvoided, monthlyHoursAvoided, incidentCostAvoided, monthlyPotentialAvoided, annualProjectionDemo: round(monthlyPotentialAvoided * 12, 2) },
-    beforeAfter: buildBeforeAfter({ assumptions, currentKm, fuelSavedLiters, fuelCostAvoided, optimizedHours, monthlyPotentialAvoided })
+    beforeAfter: buildBeforeAfter({ assumptions, currentKm, fuelSavedLiters, fuelCostAvoided, optimizedHours, monthlyPotentialAvoided }),
+    usage
   };
+}
+
+// Uso estimado del camión: paradas × minutos/parada (tiempo de recolección) + distancia/velocidad
+// promedio (tiempo de traslado). Es una fórmula, no una medición — no hay timestamps reales de
+// inicio/fin de ruta persistidos todavía (item #4 del debt register). El objetivo es empezar a
+// registrar esta estimación en cada corrida para, con el tiempo, comparar contra datos reales y
+// afinar los supuestos (minutesPerStop/avgSpeedKmh) — no para reportar un número final ya exacto.
+function calculateUsageMetrics(filteredRoutes, assumptions) {
+  const minutesPerStop = Number(assumptions.minutesPerStop ?? defaultImpactAssumptions.minutesPerStop);
+  const avgSpeedKmh = Number(assumptions.avgSpeedKmh ?? defaultImpactAssumptions.avgSpeedKmh);
+  const byRoute = filteredRoutes.map((route) => {
+    const stopMinutes = round(route.stops * minutesPerStop, 1);
+    const travelMinutes = avgSpeedKmh ? round((route.distanceKm / avgSpeedKmh) * 60, 1) : 0;
+    return { id: route.id, name: route.name, truckId: route.truckId, stops: route.stops, distanceKm: route.distanceKm, stopMinutes, travelMinutes, totalMinutes: round(stopMinutes + travelMinutes, 1) };
+  });
+  const totalMinutes = round(sum(byRoute, (r) => r.totalMinutes), 1);
+  const byVehicle = Object.values(byRoute.reduce((acc, r) => {
+    const key = r.truckId && r.truckId !== 'Sin asignar' ? r.truckId : 'Sin asignar';
+    if (!acc[key]) acc[key] = { truckId: key, routes: 0, totalMinutes: 0 };
+    acc[key].routes += 1;
+    acc[key].totalMinutes = round(acc[key].totalMinutes + r.totalMinutes, 1);
+    return acc;
+  }, {})).map((v) => ({ ...v, totalHours: round(v.totalMinutes / 60, 2) }));
+  return { minutesPerStop, avgSpeedKmh, totalMinutes, totalHours: round(totalMinutes / 60, 2), byRoute, byVehicle };
 }
 
 function routeStatus(routeId) { return routes.find((route) => route.id === routeId)?.status; }
