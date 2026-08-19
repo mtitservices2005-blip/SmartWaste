@@ -70,6 +70,9 @@ let mapReady = false;
 let routeLayers = [];
 let truckMarkers = [];
 let incidentMarkers = [];
+// SW-043: which route's bounds the map last fitBounds()-ed to — lets drawMapLayers() tell "just
+// focused this route, fit its full bounds" apart from "still focused on it, just follow the truck".
+let mapFocusRouteId = null;
 let simulationTimer = null;
 let simulationSpeed = 1;
 // Seeded per page load (not a fixed 1) so two concurrent demo sessions don't both hand out
@@ -253,11 +256,25 @@ function renderSummary() {
   </section>`;
 }
 
+// SW-043: was a truck selector with no wiring at all — selecting one did nothing (dead UI, "no hace
+// nada"). Repurposed as a route selector: choosing one calls selectRoute() (frontend/app.js's
+// click-a-route-row/click-a-route-polyline path), focusing the map on just that route's trajectory
+// and truck — same effect, without needing to touch the map or leave "Operaciones · Mapa" to pick a
+// route from the "Rutas" list first. Does not "start" anything: a real route's movement is driven
+// entirely by the driver's own GPS, and a demo route's "Iniciar" button already runs the shared
+// simulation for every demo truck at once (not scoped per-route) — this control only changes what's
+// in view, matching frontend/auth-gate.js and the rest of this file's "never invent state that
+// isn't backed by something real" bias.
+function routeFocusSelect() {
+  if (!routes.length) return '<select id="simVehicle" disabled><option>Sin rutas</option></select>';
+  return `<select id="simVehicle"><option value="">Seleccionar ruta a monitorear…</option>${routes.map((route) => `<option value="${route.id}"${route.id === selectedRouteId ? ' selected' : ''}>${route.name}</option>`).join('')}</select>`;
+}
+
 function renderMapPanel() {
   return `<div class="map-card">
       <div class="map-header">
         <div><p class="eyebrow">${pilotMunicipality.branding.label}</p><h1>Mapa operativo real de ${pilotMunicipality.name}</h1><p class="demo">${demoNotice} · Las rutas son simuladas, no oficiales del ayuntamiento.</p><p class="demo gps-legend">● = posición GPS real · el resto son camiones simulados</p></div>
-        <div class="sim-controls" aria-label="Controles de simulación"><span>${simulationNotice} · fuente desacoplada: ${backendMode}</span><select id="simVehicle">${trucks.map((t) => `<option value="${t.id}">${t.unit}</option>`).join('')}</select><button class="btn-primary" data-sim="start">Iniciar</button><button data-sim="pause">Pausar</button><button data-sim="reset">Reiniciar</button><button class="btn-ghost" data-sim="speed">${simulationSpeed}×</button><button class="btn-ghost" data-sim="fullscreen">Pantalla completa</button></div>
+        <div class="sim-controls" aria-label="Controles de simulación"><span>${simulationNotice} · fuente desacoplada: ${backendMode}</span>${routeFocusSelect()}<button class="btn-primary" data-sim="start">Iniciar</button><button data-sim="pause">Pausar</button><button data-sim="reset">Reiniciar</button><button class="btn-ghost" data-sim="speed">${simulationSpeed}×</button><button class="btn-ghost" data-sim="fullscreen">Pantalla completa</button></div>
       </div>
       <div class="kpis compact">${operationalKpis().map(([name, value]) => `<div class="kpi"><strong>${value}</strong><br>${name}</div>`).join('')}</div>
       <div id="realMap" class="real-map" role="application" aria-label="Mapa OpenStreetMap de Laguna Salada"><div class="map-fallback"><strong>Mapa externo no disponible.</strong><span>Fallback operativo demo: use listas, paneles y coordenadas simuladas.</span></div></div>
@@ -406,6 +423,10 @@ function refreshFleetSelects() {
   if (vehicleList) vehicleList.innerHTML = renderVehicleList();
   const driverList = $('#driverList');
   if (driverList) driverList.innerHTML = renderDriverList();
+  // SW-043: routeFocusSelect()'s dropdown must pick up routes created/hydrated after page load —
+  // outerHTML (not innerHTML) since routeFocusSelect() also decides whether the element is disabled.
+  const simVehicleSelect = $('#simVehicle');
+  if (simVehicleSelect) simVehicleSelect.outerHTML = routeFocusSelect();
 }
 // SW-034: best-effort mirror of a mutation to the real adapter, on top of the existing demo-
 // adapter write every mutation handler already does first (unchanged, so the UI still updates
@@ -770,6 +791,7 @@ function drawMapLayers(L = window.L) {
     routeLayers.push(L.polyline(path.slice(cut), { color: '#155eef', weight: 6, opacity: .45, dashArray: '8 10' }).addTo(map).on('click', () => selectRoute(route.id)));
     routeLayers.push(...path.map((point, index) => L.circleMarker(point, { radius: index <= cut ? 5 : 4, color: index <= cut ? '#0f7b4f' : '#155eef', fillOpacity: .85 }).addTo(map)));
   });
+  let focusTruckPosition = null;
   visibleTrucks.forEach((truck) => {
     // SW-036: a fresh real GPS position (polled from vehicle_positions, see fetchRealPositions())
     // wins over the simulation entirely — bypasses simState/positionIndex, same "explicit position
@@ -781,9 +803,22 @@ function drawMapLayers(L = window.L) {
     const markerPosition = isFreshReal ? [real.latitude, real.longitude] : routePosition({ ...truck, positionIndex: simState[truck.id]?.index ?? truck.positionIndex });
     const marker = L.marker(markerPosition, { icon: L.divIcon({ className: 'leaflet-truck', html: truckIcon(truck, isFreshReal), iconSize: [44, 44], iconAnchor: [22, 22] }) }).addTo(map).on('click', () => selectTruck(truck.id));
     truckMarkers.push(marker);
+    if (focusRoute) focusTruckPosition = markerPosition;
   });
   visibleIncidents.forEach((incident) => { incidentMarkers.push(L.marker(incident.position, { icon: L.divIcon({ className: 'leaflet-incident', html: `<span>⚠<small>${incident.type}</small></span>`, iconSize: [90, 34] }) }).addTo(map).on('click', () => selectIncident(incident.code))); });
-  if (focusRoute) map.fitBounds(routeGeometry(focusRoute.id), { padding: [40, 40] });
+  // SW-043: keep the truck centered while a single route is focused, instead of re-fitting the
+  // whole route's bounds on every redraw (which recenters on the path's static bounding box, not
+  // where the truck actually is — most of a route's length is usually still ahead of it). fitBounds
+  // once when a route is FIRST focused (so the initial zoom level shows the entire trajectory), then
+  // panTo() the truck's live position on every subsequent redraw at that same zoom level — this
+  // runs on every drawMapLayers() call, including the GPS polling tick (fetchRealPositions()), so a
+  // real vehicle's marker stays centered as new positions arrive.
+  if (focusRoute) {
+    if (mapFocusRouteId !== focusRoute.id) { map.fitBounds(routeGeometry(focusRoute.id), { padding: [40, 40] }); mapFocusRouteId = focusRoute.id; }
+    else if (focusTruckPosition) map.panTo(focusTruckPosition, { animate: true });
+  } else {
+    mapFocusRouteId = null;
+  }
 }
 
 // Fullscreens #realMap itself (not the whole map-card), so the header/KPIs/detail drawer step
@@ -1214,6 +1249,7 @@ async function finishCreateRoute() {
   if (vehicleSelect) vehicleSelect.innerHTML = `<option value="">Sin vehículo asignado (asignar después)</option>${trucks.filter((item) => !item.routeId).map((item) => `<option value="${item.id}">${item.unit}</option>`).join('')}`;
   $('#routeList').innerHTML = renderRoutes(routes);
   refreshResumen();
+  refreshFleetSelects(); // SW-043: picks up the just-created route in routeFocusSelect()'s dropdown
   if (mapReady) drawMapLayers();
   const roadPart = usedRoadRouting
     ? 'trazado ajustado a calles reales (OSRM)'
@@ -1253,6 +1289,10 @@ function markSelection() {
   document.querySelectorAll('[data-route]').forEach((el) => el.classList.toggle('selected', el.dataset.route === selectedRouteId));
   document.querySelectorAll('[data-truck]').forEach((el) => el.classList.toggle('selected', el.dataset.truck === selectedTruckId));
   document.querySelectorAll('[data-incident]').forEach((el) => el.classList.toggle('selected', el.dataset.incident === selectedIncidentId));
+  // SW-043: keep routeFocusSelect()'s dropdown in sync when the route gets (de)selected some other
+  // way — clicking its row in "Rutas", its polyline on the map, or closing the detail drawer.
+  const simVehicleSelect = $('#simVehicle');
+  if (simVehicleSelect) simVehicleSelect.value = selectedRouteId ?? '';
 }
 function closeDetail() { const detail = $('#detail'); detail.classList.add('is-hidden'); detail.setAttribute('aria-hidden', 'true'); detail.innerHTML = ''; selectedTruckId = null; selectedRouteId = null; selectedIncidentId = null; drawMapLayers(); markSelection(); }
 function selectTruck(id) { selectedTruckId = id; selectedRouteId = null; selectedIncidentId = null; const truck = trucks.find((item) => item.id === id); openDetail(renderTruckDetail(truck)); drawMapLayers(); markSelection(); }
@@ -1322,6 +1362,10 @@ document.addEventListener('click', (event) => {
 // incluyendo minutesPerStop/avgSpeedKmh de la pestaña Uso — recalculen al perder foco, no solo los
 // filtros. 'change' (no 'input') ya evita recalcular en cada tecla.
 document.addEventListener('change', (event) => { if (event.target.closest('#impacto') && event.target.matches('select, input[type="number"]')) { $('#impacto').outerHTML = renderImpactCenter(currentImpactAssumptions(), currentImpactFilters()); } });
+// SW-043: routeFocusSelect()'s change handler — selecting a route from the sim-controls dropdown
+// focuses the map on it exactly like clicking its row/polyline does. goToMapTab() so picking one
+// while on a different Operaciones sub-vista (Rutas, Flota) actually switches to Mapa to show it.
+document.addEventListener('change', (event) => { if (event.target.id === 'simVehicle' && event.target.value) { selectRoute(event.target.value); goToMapTab(); } });
 // UX cleanup (SW-037): "Crear ruta" now lives collapsed behind a <details> ("+ Nueva ruta") instead
 // of always taking up space in the Rutas panel. Its Leaflet map (#createRouteMap) is built once at
 // module init regardless of visibility (see initCreateRouteMap() below), so — same as
