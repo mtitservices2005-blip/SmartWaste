@@ -264,4 +264,62 @@ const { client: alreadyCompletedClient, getUpdatePatch: getAlreadyCompletedPatch
 await createSupabaseOperationsAdapter(alreadyCompletedClient).completeRoute('route-x');
 assert.equal(getAlreadyCompletedPatch().completed_at, undefined, 'must not overwrite an existing completed_at');
 
+// SW-045: on completion, with a vehicle_id and started_at present, transitionRouteRun() also sums
+// the real vehicle_positions trail since started_at into distance_meters. Fake client routes by
+// table name — route_runs uses the same chain as above, vehicle_positions gets its own
+// select().eq().neq().gte().order() chain.
+function makeRouteRunWithPositionsFakeClient(currentRun, positions) {
+  let updatePatch = null;
+  let positionsQueryArgs = null;
+  const client = {
+    from: (table) => {
+      if (table === 'route_runs') {
+        return {
+          select: () => ({ eq: () => ({ order: () => ({ limit: () => ({ maybeSingle: async () => ({ data: currentRun, error: null }) }) }) }) }),
+          update: (patch) => {
+            updatePatch = patch;
+            return { eq: () => ({ select: () => ({ single: async () => ({ data: { ...currentRun, ...patch }, error: null }) }) }) };
+          }
+        };
+      }
+      if (table === 'vehicle_positions') {
+        return {
+          select: () => ({ eq: (...eqArgs) => { positionsQueryArgs = eqArgs; return { neq: () => ({ gte: () => ({ order: async () => ({ data: positions, error: null }) }) }) }; } })
+        };
+      }
+      throw new Error(`unexpected table ${table}`);
+    }
+  };
+  return { client, getUpdatePatch: () => updatePatch, getPositionsQueryArgs: () => positionsQueryArgs };
+}
+
+// >= 2 real positions: distance_meters gets computed and stamped (haversine between them, > 0 for
+// two genuinely different coordinates).
+const twoPositions = [
+  { latitude: 19.43, longitude: -99.13, captured_at: '2026-01-01T00:00:00Z' },
+  { latitude: 19.44, longitude: -99.14, captured_at: '2026-01-01T00:05:00Z' }
+];
+const { client: distanceClient, getUpdatePatch: getDistancePatch, getPositionsQueryArgs } = makeRouteRunWithPositionsFakeClient(
+  { id: 'run-5', route_id: 'route-x', status: 'in_progress', vehicle_id: 'veh-1', started_at: '2026-01-01T00:00:00Z', completed_at: null }, twoPositions
+);
+const distanceResult = await createSupabaseOperationsAdapter(distanceClient).completeRoute('route-x');
+assert.equal(distanceResult.ok, true);
+assert.deepEqual(getPositionsQueryArgs(), ['vehicle_id', 'veh-1']);
+assert.ok(getDistancePatch().distance_meters > 0, 'must compute a positive distance_meters from 2 distinct positions');
+
+// Fewer than 2 positions: no GPS trail to measure a distance between — distance_meters stays
+// unstamped (falls back to the route's estimated distance in the UI), completion still succeeds.
+const { client: noTrailClient, getUpdatePatch: getNoTrailPatch } = makeRouteRunWithPositionsFakeClient(
+  { id: 'run-6', route_id: 'route-x', status: 'in_progress', vehicle_id: 'veh-2', started_at: '2026-01-01T00:00:00Z', completed_at: null }, [twoPositions[0]]
+);
+const noTrailResult = await createSupabaseOperationsAdapter(noTrailClient).completeRoute('route-x');
+assert.equal(noTrailResult.ok, true, 'completion must still succeed with no measurable distance');
+assert.equal(getNoTrailPatch().distance_meters, undefined, 'must not stamp distance_meters without at least 2 positions');
+
+// No vehicle_id on the run: skips the distance query entirely rather than querying vehicle_id=null.
+const { client: noVehicleClient, getUpdatePatch: getNoVehiclePatch } = makeRouteRunFakeClient({ id: 'run-7', route_id: 'route-x', status: 'in_progress', started_at: '2026-01-01T00:00:00Z', completed_at: null });
+const noVehicleResult = await createSupabaseOperationsAdapter(noVehicleClient).completeRoute('route-x');
+assert.equal(noVehicleResult.ok, true);
+assert.equal(getNoVehiclePatch().distance_meters, undefined);
+
 console.log('operations-adapter ok');

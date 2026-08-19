@@ -181,6 +181,24 @@ SW-044 queda cerrado. Pendiente de que el Project Owner mergee el PR #61 (varios
 
 ---
 
+## SW-045 — Distancia real medida + consumo de combustible estimado ✅ Hecho (2026-08-19)
+
+**Por qué:** con SW-044 ya midiendo duración real, la distancia de una ruta seguía siendo siempre el trazo dibujado al crearla (estimado), nunca lo que el vehículo recorrió de verdad — y sin distancia real, cualquier estimación de consumo de combustible tampoco podía apoyarse en un dato medido.
+
+**Alcance:**
+1. Migración: `route_runs.distance_meters` (numeric, nullable), sin backfill inventado — mismo criterio que `started_at`/`completed_at` en SW-044.
+2. `shared/operations-adapter.js`: `transitionRouteRun()`, al completar una corrida con `vehicle_id` y `started_at` presentes, suma la distancia real recorrida (`haversineMeters`, ya existente en `shared/route-engine.js`) entre las posiciones GPS reales registradas desde que arrancó (`vehicle_positions`, filtrando `source != 'simulator'`). Nunca inventa un valor: con menos de 2 posiciones (sin GPS activo durante la corrida), `distance_meters` queda sin sellar y la ruta cae a la distancia estimada del trazo, igual que siempre. Best-effort — cualquier error en esta consulta nunca bloquea la finalización de la ruta en sí.
+3. `frontend/app.js`: fila "Distancia" en el detalle de ruta, mismo criterio medido/estimado que "Duración". Fila nueva "Consumo estimado" (siempre estimado — nada mide combustible realmente cargado), calculado como distancia (real si existe, estimada si no) ÷ rendimiento configurable en "Impacto y Ahorros → Economía" (reutiliza el supuesto existente, no uno nuevo y desconectado).
+4. Histórico entre corridas (ya existía para duración desde SW-044): extendido para mostrar también cuántas corridas tienen distancia real medida, su promedio y la última.
+
+**Fuera de alcance (confirmado con el Project Owner):** consumo medido de verdad (requeriría capturar cargas de combustible manualmente — más trabajo de captura en campo, evaluado y descartado por ahora a favor de la estimación por fórmula).
+
+### Resultado
+
+Verificado con `tests/operational-cycle.test.mjs` (extendido: sin ingesta de GPS en ese escenario, `distance_meters` debe quedar `null`, nunca inventado — no ejecutable en este sandbox sin Docker) y `tests/operations-adapter.test.mjs` (extendido, cliente simulado: distancia se computa y sella con ≥2 posiciones reales, no se sella con menos de 2, se salta la consulta por completo si no hay `vehicle_id` en la corrida). `node --check` sobre los archivos tocados y verificación del grafo de imports del build de Vercel. Verificación interactiva en staging pendiente del Project Owner.
+
+---
+
 ## Resumen de secuencia y dependencias
 
 | Hito | Estado | Depende de | Severidad de lo que resuelve | Esfuerzo relativo |
@@ -194,5 +212,6 @@ SW-044 queda cerrado. Pendiente de que el Project Owner mergee el PR #61 (varios
 | SW-042 | ✅ Hecho (2026-08-19) | SW-040 | Media — sin esto, un despachador no podía operar sin editar la base de datos a mano | Bajo-medio |
 | SW-043 | ✅ Hecho (2026-08-19) | SW-042 | Baja — UX del mapa | Bajo |
 | SW-044 | ✅ Hecho (2026-08-19) | SW-042, SW-043 | Media — sin duración medida, las estadísticas de uso quedan siempre estimadas | Medio |
+| SW-045 | ✅ Hecho (2026-08-19) | SW-044 | Media — mismo problema que SW-044 pero para distancia/consumo | Medio |
 
 No se propone trabajar dos de estos hitos en paralelo en la misma rama (regla 2) — y, en la práctica, ya está pasando entre sesiones/herramientas distintas sobre el mismo repo (ver nota de coordinación al inicio); antes de arrancar SW-038 hay que confirmar con quien esté en Claude Code qué rama/hito real está tomando ese número para no repetir el choque de SW-037. SW-040 y SW-041 en particular requieren autorización explícita del Project Owner antes de tocar cualquier entorno remoto o dato real de un municipio, consistente con la regla 6 (no afirmar integraciones reales sin evidencia) y la regla 10 (esperar autorización antes de commit/push/PR).
