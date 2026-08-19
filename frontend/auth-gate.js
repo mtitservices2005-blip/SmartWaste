@@ -101,6 +101,28 @@ function applyOpsViewVisibility(visibleViews, views = OPS_SUBVIEW_ROLES) {
   });
 }
 
+// Inserted into the (static, HTML-authored) topbar once a session actually resolves — never shown
+// for the anonymous/"skip to public" path, since there's no session to close. A full page reload
+// after signOut() is deliberate: app.js holds a lot of module-level mutable state (trucks/routes
+// arrays, simState, driverSimulators, hydration flags...) that a real teardown would have to reset
+// by hand; reloading is the same "start clean" guarantee login-as-a-different-user needs anyway.
+function renderLogoutButton(client) {
+  if (document.getElementById('authLogout')) return;
+  const topbar = document.querySelector('.topbar');
+  if (!topbar) return;
+  const button = document.createElement('button');
+  button.id = 'authLogout';
+  button.type = 'button';
+  button.className = 'auth-logout';
+  button.textContent = 'Cerrar sesión';
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    await client.auth.signOut();
+    window.location.reload();
+  });
+  topbar.append(button);
+}
+
 function renderOverlay() {
   const overlay = document.createElement('div');
   overlay.id = 'authOverlay';
@@ -142,6 +164,7 @@ export async function initAuthGate() {
       const ctx = await identity.resolveContext();
       applySectionVisibility(pickVisibleSections(ctx.role));
       applyOpsViewVisibility(pickVisibleOpsViews(ctx.role));
+      renderLogoutButton(client);
       return ctx;
     } catch {
       return null;
