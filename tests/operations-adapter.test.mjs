@@ -139,4 +139,65 @@ const noClientResult = await createSupabaseOperationsAdapter(null).listLatestPos
 assert.equal(noClientResult.ok, true);
 assert.equal(noClientResult.source, 'DEMO_FALLBACK');
 
+// SW-042 (docs/TECHNICAL_DEBT_REGISTER.md #24): demo adapter's assignDriverToVehicle()/
+// listVehicleAssignments() — demo trucks already carry driverId directly, so
+// listVehicleAssignments() must derive the same {vehicle_id, driver_id, status} shape the real
+// adapter reads from the vehicle_assignments table, and assigning a driver already parked on
+// another truck must clear them from it first (a driver drives one truck at a time).
+assert.ok(adapter.listVehicleAssignments().length > 0, 'the demo trucks seeded from shared/demo-data.js already carry a driverId each');
+const demoAssignAdapter = createDemoOperationsAdapter();
+demoAssignAdapter.assignDriverToVehicle('truck-05', 'drv-01'); // truck-05 has no driver by default; drv-01 already drives truck-02
+assert.equal(demoAssignAdapter.getVehicle('truck-05').driverId, 'drv-01');
+assert.equal(demoAssignAdapter.getVehicle('truck-02').driverId, null, 'drv-01 must be cleared from truck-02 once reassigned to truck-05');
+assert.ok(demoAssignAdapter.listVehicleAssignments().some((a) => a.vehicle_id === 'truck-05' && a.driver_id === 'drv-01'));
+assert.ok(!demoAssignAdapter.listVehicleAssignments().some((a) => a.vehicle_id === 'truck-02'), 'truck-02 must have dropped out of the list once its driver was reassigned');
+assert.throws(() => demoAssignAdapter.assignDriverToVehicle('vehicle-does-not-exist', 'drv-01'));
+
+// Real adapter: listVehicleAssignments() is a plain scoped select filtered to status='assigned'.
+const assignmentsFakeClient = { from: (table) => { assert.equal(table, 'vehicle_assignments'); return { select: () => ({ eq: () => Promise.resolve({ data: [{ vehicle_id: 'veh-1', driver_id: 'drv-1', status: 'assigned' }], error: null }) }) }; } };
+const assignmentsListResult = await createSupabaseOperationsAdapter(assignmentsFakeClient).listVehicleAssignments();
+assert.equal(assignmentsListResult.ok, true);
+assert.equal(assignmentsListResult.data.length, 1);
+assert.equal(assignmentsListResult.data[0].vehicle_id, 'veh-1');
+
+// Real adapter: assignDriverToVehicle() ends any other 'assigned' row for the same vehicle_id or
+// driver_id (2 separate update calls, no vehicle_assignments unique constraint enforces this
+// server-side — see shared/operations-adapter.js) before inserting the new link. Fake client
+// records every update/insert call so the test can assert both ends ran before the insert, and
+// that the insert carries municipality_id/vehicle_id/driver_id/status correctly.
+function makeAssignDriverFakeClient() {
+  const calls = [];
+  // scoped() (municipality_id set in this test) adds one extra leading .eq('municipality_id', ...)
+  // in front of the update()'s own .eq('vehicle_id'|'driver_id', ...).eq('status', 'assigned')
+  // chain — this chainable stub just resolves on any .eq() call count, mirroring
+  // makeChainableQuery() above.
+  const chainableUpdate = { eq: () => chainableUpdate, then: (resolve) => resolve({ data: null, error: null }) };
+  const client = {
+    from: (table) => {
+      assert.equal(table, 'vehicle_assignments');
+      return {
+        update: (patch) => { calls.push({ op: 'update', patch }); return chainableUpdate; },
+        insert: (row) => { calls.push({ op: 'insert', row }); return { select: () => ({ single: async () => ({ data: { id: 'assignment-new', ...row }, error: null }) }) }; }
+      };
+    }
+  };
+  return { client, calls };
+}
+const { client: assignDriverClient, calls: assignDriverCalls } = makeAssignDriverFakeClient();
+const assignDriverResult = await createSupabaseOperationsAdapter(assignDriverClient, { municipality_id: 'mun-a' }).assignDriverToVehicle('veh-1', 'drv-1');
+assert.equal(assignDriverResult.ok, true);
+assert.equal(assignDriverResult.data.vehicle_id, 'veh-1');
+assert.equal(assignDriverCalls.length, 3, 'end-by-vehicle, end-by-driver, then insert');
+assert.equal(assignDriverCalls[0].op, 'update');
+assert.equal(assignDriverCalls[0].patch.status, 'reassigned');
+assert.equal(assignDriverCalls[1].op, 'update');
+assert.equal(assignDriverCalls[2].op, 'insert');
+assert.deepEqual(assignDriverCalls[2].row, { municipality_id: 'mun-a', vehicle_id: 'veh-1', driver_id: 'drv-1', status: 'assigned' });
+
+// No client (demo fallback): falls back to the demo adapter's own assignDriverToVehicle().
+const noClientAssignResult = await createSupabaseOperationsAdapter(null).assignDriverToVehicle('truck-05', 'drv-01');
+assert.equal(noClientAssignResult.ok, true);
+assert.equal(noClientAssignResult.source, 'DEMO_FALLBACK');
+assert.equal(noClientAssignResult.data.driverId, 'drv-01');
+
 console.log('operations-adapter ok');

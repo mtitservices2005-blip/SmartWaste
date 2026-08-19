@@ -265,11 +265,23 @@ function renderMapPanel() {
     <aside class="detail-drawer is-hidden" id="detail" aria-hidden="true"></aside>`;
 }
 
+// SW-042 (docs/TECHNICAL_DEBT_REGISTER.md #24): there was no UI to assign a driver to a vehicle at
+// all — a real vehicle's driver could only be linked by writing vehicle_assignments directly
+// against Supabase (what scripts/seed-local.mjs/seed-remote.mjs do). Only offers drivers of the
+// same kind as the truck (real drivers for a real/hydrated truck, demo drivers for a demo one) —
+// a demo driver has no backing Supabase profile/auth account to assign to a real vehicle_id.
+function driverAssignmentControl(truck) {
+  const candidateDrivers = drivers.filter((driver) => Boolean(driver.real_id) === Boolean(truck.real_id) && driver.id !== truck.driverId);
+  if (!candidateDrivers.length) return '<p class="demo">No hay choferes disponibles para asignar.</p>';
+  return `<div class="controls"><select id="assignDriverSelect">${candidateDrivers.map((driver) => `<option value="${driver.id}">${driver.name}</option>`).join('')}</select><button type="button" class="btn-primary" data-assign-driver="${truck.id}">${truck.driverId ? 'Reasignar chofer' : 'Asignar chofer'}</button></div>`;
+}
+
 function renderTruckDetail(truck) {
   const route = routeById(truck.routeId);
   const relatedIncidents = route ? incidents.filter((incident) => route.incidents.includes(incident.code)) : [];
   return `<div class="drawer-head"><p class="eyebrow">Detalle del camión</p><h2>${truck.unit} · ${truck.name}</h2>${pill(truck.state)}</div>
     <div class="detail-grid"><p><b>Conductor</b><span>${driverName(truck.driverId)}</span></p><p><b>Matrícula demo</b><span>${truck.plate}</span></p><p><b>Ruta</b><span>${routeName(truck.routeId)}</span></p><p><b>Velocidad demo</b><span>${truck.speedKmh} km/h</span></p><p><b>Última actualización</b><span>${truck.updatedAt}</span></p><p><b>Sector actual</b><span>${truck.sector}</span></p><p><b>Próxima parada</b><span>${truck.nextStop}</span></p><p><b>Nivel de carga demo</b><span>${truck.loadLevel}%</span></p></div>
+    ${driverAssignmentControl(truck)}
     ${progress(truck.progress)}<p><strong>${truck.progress}%</strong> completado · ${demoNotice}</p>
     <h3>Incidencias</h3>${relatedIncidents.length ? relatedIncidents.map((incident) => `<button class="incident-row" data-incident="${incident.code}">${incident.type} · ${incident.priority}</button>`).join('') : '<p>Sin incidencias demo asociadas.</p>'}
     <div class="actions"><button data-route="${truck.routeId ?? ''}">Ver ruta completa</button><button data-history="${truck.id}">Ver historial demo</button></div>`;
@@ -944,6 +956,28 @@ async function assignVehicleToExistingRoute(routeId, vehicleId) {
   // re-render #supervisor on demand.
   refreshResumen();
 }
+// Triggered from renderTruckDetail()'s "Asignar chofer"/"Reasignar chofer" action (SW-042). Unlike
+// assignTruckToRoute() above, this never calls operationsAdapter.assignDriverToVehicle() for a
+// real/hydrated truck: operationsAdapter's own internal demo state (a clone taken at module init,
+// see shared/operations-adapter.js) never learns about vehicles hydrated from Supabase, so looking
+// one up there would throw "Vehicle not found" — the local write for a real truck is just this
+// function's own trucks[]/drivers[] mutation below, mirrored to Supabase separately.
+async function assignDriverToTruck(vehicleId, driverId) {
+  const truck = trucks.find((item) => item.id === vehicleId);
+  const driver = drivers.find((item) => item.id === driverId);
+  if (!truck || !driver) return;
+  if (truck.real_id) {
+    if (driver.real_id) await mirrorToRealAdapter(realAdapter?.assignDriverToVehicle(truck.real_id, driver.real_id));
+  } else {
+    operationsAdapter.assignDriverToVehicle(truck.id, driver.id);
+  }
+  // A driver drives one truck at a time — clear them from wherever they were assigned before,
+  // same constraint shared/operations-adapter.js's assignDriverToVehicle() enforces server-side.
+  trucks.forEach((item) => { if (item.driverId === driver.id) item.driverId = null; });
+  truck.driverId = driver.id;
+  selectTruck(vehicleId); // re-render the detail panel so it reflects the new assignment immediately
+  refreshFleetSelects();
+}
 // Triggered from renderRouteDetail()'s "Reoptimizar ruta" action (roadmap item 4, "reoptimización
 // dinámica" — suggestion only, docs/TECHNICAL_DEBT_REGISTER.md #21). Computes and displays a
 // suggested new order for the route's still-pending stops from the truck's current position; never
@@ -1303,6 +1337,8 @@ document.addEventListener('click', (event) => {
   if (verifyButton) verifyRouteManually(verifyButton.dataset.verifyRoute);
   const assignVehicleButton = event.target.closest('[data-assign-vehicle]');
   if (assignVehicleButton) { const vehicleId = $('#assignVehicleSelect')?.value; if (vehicleId) assignVehicleToExistingRoute(assignVehicleButton.dataset.assignVehicle, vehicleId); }
+  const assignDriverButton = event.target.closest('[data-assign-driver]');
+  if (assignDriverButton) { const driverId = $('#assignDriverSelect')?.value; if (driverId) assignDriverToTruck(assignDriverButton.dataset.assignDriver, driverId); }
   const completeRouteButton = event.target.closest('[data-complete-route]');
   if (completeRouteButton) completeRouteManually(completeRouteButton.dataset.completeRoute);
   const reoptimizeButton = event.target.closest('[data-reoptimize-route]');
@@ -1421,6 +1457,20 @@ async function hydrateVehiclesAndDrivers() {
     driversResult.data.forEach((row) => {
       if (drivers.some((driver) => driver.real_id === row.id)) return;
       drivers.push({ id: row.id, real_id: row.id, name: row.display_name, phone: '', status: DRIVER_STATUS_LABELS[row.status] ?? row.status, profile_id: row.profile_id ?? null });
+    });
+  }
+  // SW-042 (docs/TECHNICAL_DEBT_REGISTER.md #24): the two pushes above always hardcoded
+  // driverId: null on a hydrated truck — vehicle_assignments (the actual link) was never
+  // consulted, so the truck detail panel showed "Conductor: Sin asignar" even for a vehicle that
+  // did have a driver assigned server-side. Cosmetic-only (findOwnVehicleAssignment(), used by the
+  // driver's own GPS button, always read vehicle_assignments directly and was never affected), but
+  // real enough to cause confusion during interactive testing — see SW-040's staging verification.
+  const assignmentsResult = await realAdapter.listVehicleAssignments();
+  if (assignmentsResult.ok) {
+    assignmentsResult.data.forEach((assignment) => {
+      const truck = trucks.find((item) => item.real_id === assignment.vehicle_id);
+      const driver = drivers.find((item) => item.real_id === assignment.driver_id);
+      if (truck && driver) truck.driverId = driver.id;
     });
   }
   refreshFleetSelects();

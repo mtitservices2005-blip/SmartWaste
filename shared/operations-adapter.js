@@ -75,6 +75,20 @@ export function createDemoOperationsAdapter(seed = { trucks, routes, drivers, in
     verifyRoute: (routeId) => transitionRoute(state, routeId, 'verified'),
     registerIncident: (incident) => { const created = { code:`INC-${state.incidents.length + 1}`, status:'Abierta', priority:'Media', ...incident }; state.incidents.push(created); return clone(created); },
     listPositions: () => state.trucks.map((truck) => ({ vehicle_id: truck.id, municipality_id:'laguna-salada-rd', position: truck.position ?? routePaths[truck.routeId]?.[truck.positionIndex ?? 0] ?? null, source:'demo' })),
+    // SW-042: demo trucks already carry driverId directly (see shared/demo-data.js) rather than
+    // through a separate join table — listVehicleAssignments() derives the same {vehicle_id,
+    // driver_id, status} shape the real adapter reads from vehicle_assignments, so callers (e.g.
+    // frontend/app.js's fleet panel) don't need to branch on adapter mode to read "who drives this
+    // truck". assignDriverToVehicle() clears the driver from any other truck first — a driver
+    // drives one truck at a time in this model, same constraint the real adapter enforces below.
+    listVehicleAssignments: () => state.trucks.filter((truck) => truck.driverId).map((truck) => ({ vehicle_id: truck.id, driver_id: truck.driverId, status:'assigned' })),
+    assignDriverToVehicle: (vehicleId, driverId) => {
+      const vehicle = state.trucks.find((v) => v.id === vehicleId);
+      if (!vehicle) throw new Error('Vehicle not found');
+      state.trucks.forEach((truck) => { if (truck.driverId === driverId) truck.driverId = null; });
+      vehicle.driverId = driverId;
+      return clone(vehicle);
+    },
     // Roadmap item 3 ("GPS real"): resolving "which real vehicle is assigned to this signed-in
     // driver" only makes sense once a real Supabase profile/vehicle_assignments row exists — the
     // demo adapter has no such concept to model, so this always fails. The GPS button in
@@ -226,7 +240,19 @@ export function createSupabaseOperationsAdapter(client, { fallback = createDemoO
     // driver (by their auth profile_id), so frontend/app.js's GPS button knows which vehicle_id to
     // tag positions with before calling createTelemetryIngestionAdapter().ingest(). Two-step lookup
     // (drivers -> vehicle_assignments), so it doesn't fit the single-query run() wrapper above.
-    findOwnVehicleAssignment: (profileId, opts = {}) => findOwnVehicleAssignment(client, municipality_id, profileId, opts)
+    findOwnVehicleAssignment: (profileId, opts = {}) => findOwnVehicleAssignment(client, municipality_id, profileId, opts),
+    // SW-042 (docs/TECHNICAL_DEBT_REGISTER.md #24): there was no way to read or create a
+    // driver<->vehicle link from the frontend at all — vehicle_assignments could only be written
+    // directly against Supabase (what scripts/seed-local.mjs/seed-remote.mjs do). listVehicleAssignments()
+    // lets hydrateVehiclesAndDrivers() (frontend/app.js) resolve each hydrated truck's real driver
+    // instead of always showing "Sin asignar"; assignDriverToVehicle() is the write side, wired to
+    // the new "Asignar chofer" control in the truck detail panel.
+    listVehicleAssignments: (opts = {}) => run(
+      () => scoped(table(client, 'vehicle_assignments').select('*')).eq('status', 'assigned'),
+      () => fallback.listVehicleAssignments(),
+      opts.correlation_id
+    ),
+    assignDriverToVehicle: (vehicleId, driverId, opts = {}) => assignDriverToVehicle(client, fallback, municipality_id, vehicleId, driverId, opts)
   };
 }
 
@@ -240,6 +266,29 @@ async function findOwnVehicleAssignment(client, municipality_id, profileId, opts
   if (assignment.error) return fail(assignment.error.code ?? 'SUPABASE_ERROR', assignment.error.message, { correlation_id: opts.correlation_id });
   if (!assignment.data) return fail('NO_VEHICLE_ASSIGNED', 'This driver has no vehicle currently assigned.', { correlation_id: opts.correlation_id });
   return ok(assignment.data, { correlation_id: opts.correlation_id });
+}
+
+// SW-042: creates the driver<->vehicle link a despachador makes from the truck detail panel.
+// vehicle_assignments has no unique/exclusion constraint stopping two "assigned" rows for the same
+// vehicle or the same driver (see supabase/migrations/202607150001_sw007_foundation.sql), so this
+// ends any other active assignment for either side first — a truck has one driver, a driver drives
+// one truck, matching the model the demo adapter's trucks[].driverId already assumes. Two update
+// calls (not one .or()) to keep the same eq()-chaining style as the rest of this file. Not a single
+// query, so — like findOwnVehicleAssignment() above — it doesn't fit the run() wrapper.
+async function assignDriverToVehicle(client, fallback, municipality_id, vehicleId, driverId, opts = {}) {
+  if (!client?.from) return ok(fallback.assignDriverToVehicle(vehicleId, driverId), { source:'DEMO_FALLBACK', correlation_id: opts.correlation_id });
+  const scoped = (query) => municipality_id ? query.eq('municipality_id', municipality_id) : query;
+  try {
+    const endVehicle = await scoped(client.from('vehicle_assignments').update({ status: 'reassigned' })).eq('vehicle_id', vehicleId).eq('status', 'assigned');
+    if (endVehicle.error) return fail(endVehicle.error.code ?? 'SUPABASE_ERROR', endVehicle.error.message, { correlation_id: opts.correlation_id });
+    const endDriver = await scoped(client.from('vehicle_assignments').update({ status: 'reassigned' })).eq('driver_id', driverId).eq('status', 'assigned');
+    if (endDriver.error) return fail(endDriver.error.code ?? 'SUPABASE_ERROR', endDriver.error.message, { correlation_id: opts.correlation_id });
+    const inserted = await client.from('vehicle_assignments').insert({ municipality_id, vehicle_id: vehicleId, driver_id: driverId, status: 'assigned' }).select('*').single();
+    if (inserted.error) return fail(inserted.error.code ?? 'SUPABASE_ERROR', inserted.error.message, { correlation_id: opts.correlation_id });
+    return ok(inserted.data, { correlation_id: opts.correlation_id });
+  } catch (error) {
+    return fail('ADAPTER_EXCEPTION', error.message, { correlation_id: opts.correlation_id });
+  }
 }
 
 // Finds the most recent non-terminal route_run for a route, or creates one, scoped to municipality_id.
