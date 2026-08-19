@@ -165,6 +165,20 @@ La verificación interactiva del Project Owner en staging confirmó los pasos b�
 1. **Decisión de producto confirmada:** el flujo principal debe ser 100% del chofer — "Iniciar recorrido" arranca la ruta **y** prende el GPS real en un solo toque; "Finalizar recorrido" la completa **y** apaga el GPS. Admin/dispatcher conservan sus propios botones (`renderRouteDetail()`) como respaldo para una emergencia (chofer sin señal, celular sin batería), pero esos nunca tocan el GPS de otra persona — atributos `[data-driver-start-route]`/`[data-driver-complete-route]` separados de los `[data-start-route]`/`[data-complete-route]` de admin, cada uno con su propio handler (`driverStartRoute()`/`driverCompleteRoute()` vs. `startRouteManually()`/`completeRouteManually()` directamente).
 2. **Bug real encontrado:** la fila "Duración" mostraba "medido" (dato local optimista) mientras el histórico de corridas debajo mostraba "todavía no hay corridas medidas" al mismo tiempo — condición de carrera entre la consulta del histórico (disparada apenas se abre el detalle) y la escritura real de `completed_at` en Supabase, que todavía no había terminado. Corregido repitiendo la consulta del histórico después de que la escritura real se confirma.
 
+### Cierre — verificación interactiva completa en staging (2026-08-19)
+
+La sesión de verificación en staging terminó destapando una cadena larga de bugs reales preexistentes (ninguno introducido por este hito, todos expuestos por ser la primera vez que se ejercitaba el ciclo completo con un vehículo real, reasignado varias veces, en un navegador real) — todos documentados con su hallazgo/causa/fix en `docs/TECHNICAL_DEBT_REGISTER.md` ítems **#27 a #31**:
+
+- #27: un vehículo quedaba "ocupado" para siempre después de su primera ruta (`truck.routeId` nunca se liberaba).
+- #28: `assignTruckToRoute()` explotaba en silencio para una ruta real hidratada tras un reload ("Asignar vehículo" no hacía nada, sin error visible).
+- #29: `hydrateRoutes()` le asignaba a un vehículo la primera ruta con la que se cruzaba en vez de la más reciente (una ruta vieja completada "ganaba" para siempre sobre una nueva).
+- #30: la Edge Function `create-driver-account` nunca manejó CORS — nunca se había invocado desde un navegador real en un dominio propio.
+- #31: la mezcla demo+real dificultaba probar — se agregó `SUPABASE_HIDE_DEMO` (opt-in por despliegue, no cambia el comportamiento por defecto), lo que a su vez destapó dos crashes de módulo completo por asumir que `trucks`/`routes` nunca están vacíos (`trucks[0].id` sin verificar, y `driverVehicleId` nunca se sincronizaba con el primer vehículo real cuando arrancaba en `null`).
+
+**Resultado final verificado en staging por el Project Owner:** ciclo completo funcionando de punta a punta — crear ruta → asignar vehículo real → reasignar sin quedar "atascado" → el chofer inicia el recorrido (arranca la ruta y el GPS real en un solo toque) → se mueve en el mapa con seguimiento en vivo → finaliza (cierra la ruta y apaga el GPS) → duración real medida visible en el detalle, con histórico entre corridas. Con `SUPABASE_HIDE_DEMO=true`, un municipio real ya no muestra ningún dato demo, sin importar cuántos datos reales acumule.
+
+SW-044 queda cerrado. Pendiente de que el Project Owner mergee el PR #61 (varios commits, todos en la misma rama `feature/sw044-route-start-duration` — se mantuvieron juntos porque cada fix era un prerrequisito directo para poder seguir verificando el mismo hito, no hitos separados).
+
 ---
 
 ## Resumen de secuencia y dependencias
