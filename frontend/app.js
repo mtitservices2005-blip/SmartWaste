@@ -1023,7 +1023,13 @@ function registerDriverSimulator(truck) {
 // (only truck.routeId was), so the detail panel always showed "Sin asignar" even for routes
 // assigned at creation.
 async function assignTruckToRoute(route, truck) {
-  operationsAdapter.assignVehicle(route.id, truck.id);
+  // Guard added alongside SW-042/044's equivalent fixes: operationsAdapter's own internal demo
+  // state (a clone taken at module init) never learns about a route hydrated from Supabase after a
+  // page reload — calling operationsAdapter.assignVehicle() for one throws "Route not found"
+  // synchronously, uncaught here, silently killing this whole async function with nothing visible
+  // to the user ("Asignar vehículo" does nothing). Same as assignDriverToTruck()/
+  // startRouteManually()/completeRouteManually() already do.
+  if (!route.real_id) operationsAdapter.assignVehicle(route.id, truck.id);
   route.truckId = truck.unit;
   if (route.status === 'planned') route.status = 'assigned';
   truck.routeId = route.id; truck.state = 'active'; truck.positionIndex = 0; truck.progress = 0; truck.sector = route.sector ?? truck.sector; truck.updatedAt = 'Recién asignado';
