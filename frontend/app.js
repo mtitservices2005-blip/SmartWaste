@@ -1035,9 +1035,23 @@ function registerDriverSimulator(truck) {
   simulator.index = truck.positionIndex ?? 0;
   driverSimulators[truck.id] = simulator;
   if (!trucksWithRoute.some((item) => item.id === truck.id)) trucksWithRoute.push(truck);
+  // SW-044: driverVehicleId is only ever picked once, at module init (line ~143) — with
+  // SUPABASE_HIDE_DEMO=true or a real municipality starting empty, trucks is [] at that point, so
+  // it starts out null. Nothing set it afterward when the first real vehicle-with-a-route showed
+  // up: the <select> below re-renders with a real option and the browser defaults to showing it
+  // (a <select> always visually shows its first option when none has the `selected` attribute),
+  // but driverVehicleId itself stayed null — renderDriverMobile()'s trucks.find(...) then failed
+  // to match, showing "Sin vehículo real asignado todavía." for a vehicle that was right there in
+  // the dropdown. Only defaults when nothing is currently selected — never overrides an existing
+  // (possibly user-chosen) selection.
+  if (!driverVehicleId) driverVehicleId = truck.id;
   positionHistory.record(simulator.start());
   const select = $('#driverVehicleSelect');
   if (select) select.innerHTML = trucksWithRoute.map((item) => `<option value="${item.id}" ${item.id === driverVehicleId ? 'selected' : ''}>${item.unit}</option>`).join('');
+  const routeInfo = $('#driverRouteInfo');
+  if (routeInfo && driverVehicleId === truck.id) routeInfo.innerHTML = `${pill(truck.state)} ${routeName(truck.routeId)} · ${truck.progress}% completado`;
+  const lifecycleControl = $('#driverRouteLifecycleControl');
+  if (lifecycleControl && driverVehicleId === truck.id) lifecycleControl.innerHTML = driverRouteLifecycleControl(truck);
 }
 // Single place that assigns a vehicle to a route — used both by finishCreateRoute() (assignment at
 // creation time) and assignVehicleToExistingRoute() (below, for a route created without one). Fixes
