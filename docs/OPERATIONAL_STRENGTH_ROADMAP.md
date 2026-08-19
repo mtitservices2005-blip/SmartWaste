@@ -58,7 +58,7 @@ Esto no estaba en el roadmap original bajo este número, pero **sí resuelve por
 
 ---
 
-## SW-040 — Activación en entorno remoto (staging)
+## SW-040 — Activación en entorno remoto (staging) ✅ Hecho (2026-08-19)
 
 **Por qué cuarto:** todo lo de SW-020/036/038/039 se verifica contra Supabase **local** (Docker en LabPC). Un ayuntamiento no va a entrar a una laptop — hace falta un entorno real accesible por navegador, y esto requiere decisiones de seguridad (regla 8) que no se deben apurar.
 
@@ -73,6 +73,21 @@ Esto no estaba en el roadmap original bajo este número, pero **sí resuelve por
 - Revisión de seguridad explícita antes de considerar esto listo (regla 8) — no es un checkbox automático de este hito, es una condición de cierre.
 
 **Fuera de alcance:** producción final — staging es el paso intermedio antes de decidir con el Project Owner si se pasa a producción.
+
+### Resultado
+
+- Proyecto Supabase remoto dedicado provisionado (`smartwaste-staging`, ref `wcgkmqeuzemhaexzhyrx`, región `us-east-2`), con las 10 migraciones aplicadas vía `supabase db push` tras revisión con `--dry-run` (nunca a ciegas). Edge Function `create-driver-account` redesplegada contra ese proyecto (usa las env vars que Supabase inyecta automáticamente al runtime — sin `service_role` hardcodeado en ningún lado).
+- `frontend/` desplegado como sitio estático en Vercel (`https://smartwaste-staging.vercel.app`), con `SUPABASE_URL`/`SUPABASE_ANON_KEY` configuradas como variables de entorno de Vercel (nunca commiteadas) e inyectadas en `dist/index.html` en build time por `scripts/build-frontend-config.mjs` (nuevo). Solo la `anon key` toca el navegador — confirmado, `service_role` solo se usó localmente en la terminal del Project Owner para `scripts/seed-remote.mjs` (nuevo, nunca pegada a este chat/IA por diseño explícito).
+- Verificación interactiva end-to-end del Project Owner contra staging real, sin acceso a LabPC: login real (`municipal_admin`), creación de ruta, asignación del vehículo real sembrado, login como `driver` real y activación de "Compartir mi ubicación real" (GPS del navegador), y confirmación visual de la insignia de GPS real en el mapa de Operaciones visto por `municipal_admin` — cumple el criterio de aceptación central de este hito.
+- **3 bugs reales encontrados y corregidos durante esta activación** (ninguno visible en local, todos específicos de un deploy hosteado):
+  1. `scripts/build-frontend-config.mjs` copiaba `frontend/` a `dist/` pero nunca `shared/` — los imports estáticos `../shared/...` de `app.js`/`auth-gate.js` 404eaban en Vercel y el módulo entero fallaba en silencio (sin login, sin botones, sin ningún error visible al usuario). Corregido copiando `shared/` a `dist/shared/` y reescribiendo los imports copiados a `./shared/`.
+  2. `frontend/auth-gate.js` importaba `@supabase/supabase-js` en tiempo de ejecución desde `esm.sh` — cuando ese CDN no era alcanzable desde la red del usuario (bloqueo de firewall corporativo), el login fallaba en silencio, mismo síntoma que el bug anterior. Corregido vendorizando el paquete (`frontend/vendor/supabase-js.mjs`, bundle autocontenido vía esbuild, sin llamadas a CDN en tiempo de ejecución).
+  3. No existía ningún botón de "Cerrar sesión" en la interfaz — imposible probar con múltiples roles sin borrar el storage del navegador a mano. Agregado un botón en la barra superior, visible solo con sesión real activa.
+- **Brechas aceptadas, documentadas, no bloqueantes para este hito:**
+  - `SUPABASE_MUNICIPALITY_ID` no se configuró en Vercel (se perdió la salida de la primera corrida de `seed-remote.mjs`) — el portal ciudadano sigue en modo demo en este deploy de staging. Corregible seteando esa env var y re-desplegando cuando se quiera probar ese flujo específico.
+  - La hidratación de datos reales (`bootstrapRealBackend()`) es **aditiva**: mezcla los vehículos/rutas reales con los 5 demo pre-cargados en vez de reemplazarlos (por diseño, para no romper la demo — regla 5), lo que puede confundir a un usuario nuevo que no sepa distinguir un `SW-LS-0X` (demo) de un `SW020-...` (real).
+  - **Brecha real de producto encontrada en esta verificación**: no existe ninguna pantalla para asignar un chofer a un vehículo — ese vínculo solo se puede crear escribiendo directamente en `vehicle_assignments` (lo que hizo `seed-remote.mjs`). Ver `docs/TECHNICAL_DEBT_REGISTER.md` #24 y la propuesta de hito siguiente.
+- Suite de tests completa no se re-ejecutó contra staging de forma automatizada (punto 4 del alcance) — este sandbox no tiene salida de red hacia el proyecto Supabase remoto ni hacia Vercel; toda la verificación de este punto fue manual e interactiva por el Project Owner, documentada arriba. Automatizar esto (p. ej. una suite de Playwright corrida desde la máquina del Project Owner contra staging) queda como mejora futura, no bloqueante.
 
 ---
 
@@ -104,7 +119,10 @@ Esto no estaba en el roadmap original bajo este número, pero **sí resuelve por
 | SW-037 | 🔄 En curso en paralelo (PR #54, `feature/sw037-ux-cleanup`) | SW-020 (ya cerrado) | — (UX + onboarding) | Medio |
 | SW-038 | Propuesto | SW-020 (ya cerrado) | Alta | Medio |
 | SW-039 | Propuesto | SW-038 (progress consistente antes de exponerlo en UI real) | Media | Medio |
-| SW-040 | Propuesto | SW-036, SW-037, SW-038, SW-039 | — (habilitador) | Medio, con gate de seguridad |
+| SW-040 | ✅ Hecho (2026-08-19) | SW-036, SW-037, SW-038, SW-039 | — (habilitador) | Medio, con gate de seguridad |
 | SW-041 | Propuesto | SW-037 (wizard ya construido), SW-040 | — (no técnico + ajuste de datos) | Bajo técnico, alto en coordinación con el ayuntamiento |
+| SW-042 (candidato, no confirmado) | Identificado durante la verificación de SW-040 | SW-040 | Media — sin esto, un despachador no puede operar sin editar la base de datos a mano | Bajo-medio |
+
+SW-042 (nombre propuesto: "asignación de chofer a vehículo desde la UI") no está confirmado ni tiene alcance detallado todavía — es solo el gap real encontrado durante la verificación interactiva de SW-040 (ver esa sección arriba y `docs/TECHNICAL_DEBT_REGISTER.md` #24), señalado aquí para que no se pierda antes de la próxima planificación con el Project Owner.
 
 No se propone trabajar dos de estos hitos en paralelo en la misma rama (regla 2) — y, en la práctica, ya está pasando entre sesiones/herramientas distintas sobre el mismo repo (ver nota de coordinación al inicio); antes de arrancar SW-038 hay que confirmar con quien esté en Claude Code qué rama/hito real está tomando ese número para no repetir el choque de SW-037. SW-040 y SW-041 en particular requieren autorización explícita del Project Owner antes de tocar cualquier entorno remoto o dato real de un municipio, consistente con la regla 6 (no afirmar integraciones reales sin evidencia) y la regla 10 (esperar autorización antes de commit/push/PR).
