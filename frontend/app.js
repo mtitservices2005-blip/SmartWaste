@@ -1692,9 +1692,21 @@ async function hydrateRoutes() {
   if (!routesResult.ok) return false;
   const routeRunsResult = await realAdapter.listRouteRuns();
   const latestRunByRouteId = {};
+  // Real bug found in staging during SW-044 verification: reassigning a vehicle from an old,
+  // already-finished route to a brand new one, then reloading, kept showing the OLD route in the
+  // driver's own Conductor view. Root cause was the `truck.routeId = row.id` assignment below —
+  // routesResult.data is ordered oldest-first (listRoutes()'s own .order('created_at')), and that
+  // assignment only checked "is this truck still unclaimed", not "is this route actually the
+  // vehicle's most recent one" — so whichever route the vehicle had EVER been on first always won,
+  // even a completed one from weeks ago. latestRunByVehicleId (new, below) tracks each vehicle's
+  // truly most recent route_run across every route, so the assignment can check the right thing.
+  const latestRunByVehicleId = {};
   // Ordered oldest-first by the adapter — overwriting as we iterate leaves the most recent
-  // route_run per route_id, same "most recent" intent transitionRouteRun() applies per-route.
-  if (routeRunsResult.ok) routeRunsResult.data.forEach((run) => { latestRunByRouteId[run.route_id] = run; });
+  // route_run per route_id/vehicle_id, same "most recent" intent transitionRouteRun() applies per-route.
+  if (routeRunsResult.ok) routeRunsResult.data.forEach((run) => {
+    latestRunByRouteId[run.route_id] = run;
+    if (run.vehicle_id) latestRunByVehicleId[run.vehicle_id] = run;
+  });
 
   for (const row of routesResult.data) {
     if (routes.some((route) => route.real_id === row.id)) continue;
@@ -1741,7 +1753,10 @@ async function hydrateRoutes() {
       operationsAdapter.saveRouteStops(row.id, stopPoints.map((stop) => ({ sequence: stop.sequence, label: stop.label, latitude: stop.latitude, longitude: stop.longitude, status: stop.status })));
     }
 
-    if (truck && !truck.routeId) {
+    // Only claims this route for the truck if it's truly the vehicle's most recent route_run
+    // (see latestRunByVehicleId above) — not just "the first route in creation order this truck
+    // happens to appear on and hasn't been claimed by yet".
+    if (truck && !truck.routeId && latestRunByVehicleId[truck.real_id]?.route_id === row.id) {
       truck.routeId = row.id;
       truck.state = newRoute.status === 'completed' ? 'completed' : newRoute.status === 'delayed' ? 'delayed' : 'active';
       truck.progress = newRoute.progress;
