@@ -244,15 +244,18 @@ setInterval(tickDriverTelemetry, 4000);
 function progress(value) { return `<div class="progress" aria-label="${value}% completado"><i style="width:${value}%"></i></div>`; }
 function pill(state) { return `<span class="pill ${state}">${label(state)}</span>`; }
 function routeStatus(route) { return route.status === 'completed' || route.status === 'verified' ? 'completed' : route.status; }
+// Pedido del Project Owner: el marcador del mapa se veía como un círculo genérico (el estado
+// 'completed' incluso lo fuerza a serlo vía CSS, .truck-icon.completed{border-radius:999px}), no
+// reconocible como un vehículo. Reemplaza el símbolo unicode por una silueta de camión inline
+// (sin depender de ningún CDN/ícono externo — misma lección de esm.sh de SW-040) mientras
+// conserva el color/forma del contenedor por estado que ya codifica el estado del vehículo, así
+// que sigue siendo igual de rápido de distinguir "detenido" vs "activo" de un vistazo.
+const TRUCK_SILHOUETTE_SVG = `<svg viewBox="0 0 32 20" width="24" height="15" fill="none" aria-hidden="true"><rect x="1" y="3" width="18" height="11" rx="1.5" fill="currentColor"/><path d="M19 7h6l4 5v2H19V7z" fill="currentColor"/><rect x="21" y="8.5" width="4" height="3.2" fill="#fff" opacity=".85"/><circle cx="8" cy="16" r="2.6" fill="#1f2937"/><circle cx="24" cy="16" r="2.6" fill="#1f2937"/></svg>`;
 function truckIcon(truck, isRealGps = false) {
-  // Codex review on PR #39: real vehicles can legitimately be 'maintenance' (shared/contracts.js's
-  // VEHICLE_STATES / the DB check constraint both allow it), which this map didn't cover — a
-  // hydrated vehicle in that state rendered with an undefined icon.
-  const shapes = { active: '▶', stopped: '■', delayed: '!', offline: '×', completed: '✓', maintenance: '🔧' };
   // SW-036: distinción visual obligatoria entre posición real y simulada (regla 6/7 de CLAUDE.md) —
   // sin esto, un camión con GPS real activo se ve idéntico a uno puramente simulado.
   const badge = isRealGps ? '<i class="gps-real-badge" title="Posición GPS real">●</i>' : '';
-  return `<span class="truck-icon ${truck.state}">${badge}<b>${shapes[truck.state] ?? '?'}</b><small>${truck.unit.replace('SW-LS-', '')}</small></span>`;
+  return `<span class="truck-icon ${truck.state}" title="${label(truck.state)}">${badge}${TRUCK_SILHOUETTE_SVG}<small>${truck.unit.replace('SW-LS-', '')}</small></span>`;
 }
 function kpiValue(predicate) { return trucks.filter(predicate).length; }
 function operationalKpis() {
