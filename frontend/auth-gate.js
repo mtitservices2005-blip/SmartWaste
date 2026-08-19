@@ -64,7 +64,11 @@ export function pickVisibleOpsViews(role, views = OPS_SUBVIEW_ROLES) {
 export function readSupabaseConfig(win = typeof window !== 'undefined' ? window : {}) {
   const config = win.SMARTWASTE_SUPABASE_CONFIG;
   if (!config?.url || !config?.anonKey) return null;
-  return { url: config.url, anonKey: config.anonKey, municipality_id: config.municipality_id ?? null };
+  // SW-044: deployment-level opt-out of ever showing the bundled demo data (frontend/app.js clears
+  // trucks/routes/drivers/incidents on module init when this is true) — defaults to false/absent,
+  // so every existing deployment (including a plain frontend/index.html with no config at all)
+  // keeps behaving exactly as before.
+  return { url: config.url, anonKey: config.anonKey, municipality_id: config.municipality_id ?? null, hideDemo: Boolean(config.hideDemo) };
 }
 
 // SW-032: the client initAuthGate() creates below is what carries the signed-in session (JWT) —

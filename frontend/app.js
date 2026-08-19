@@ -14,6 +14,19 @@ import { initAuthGate, readSupabaseConfig, getAuthClient } from './auth-gate.js'
 
 const $ = (selector) => document.querySelector(selector);
 const app = $('#app');
+// SW-044: a real municipality only starts genuinely demo-free the very first time it has zero
+// real vehicles/drivers/routes (bootstrapRealBackend()'s "vacío real" branch, further down) — the
+// moment any real record exists, later logins go back to showing the 5 bundled demo
+// routes/trucks merged alongside real data (by design, rule 5 — never wipe real data). Confirmed
+// with the Project Owner during SW-044 staging verification that the demo/real mix was making
+// testing hard to follow. This is a deployment-level opt-in (SUPABASE_HIDE_DEMO, read from
+// scripts/build-frontend-config.mjs's injected config — never the default, so a plain
+// frontend/index.html or a deploy without this env var keeps showing the demo exactly as before,
+// same as always), not a change to the demo itself — clears the bundled demo arrays before
+// anything downstream (module-init seeding below, the initial render) ever reads them, so a
+// deployment with this flag set stays demo-free permanently, regardless of how much real data
+// accumulates.
+if (readSupabaseConfig()?.hideDemo) { trucks.length = 0; routes.length = 0; drivers.length = 0; incidents.length = 0; }
 const driverName = (id) => drivers.find((driver) => driver.id === id)?.name ?? 'Sin asignar';
 const routeById = (id) => routes.find((route) => route.id === id);
 const routeName = (id) => routeById(id)?.name ?? 'Sin ruta asignada';
