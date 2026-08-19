@@ -19,6 +19,18 @@ const routeById = (id) => routes.find((route) => route.id === id);
 const routeName = (id) => routeById(id)?.name ?? 'Sin ruta asignada';
 const label = (state) => stateLabels[state] ?? state;
 const routePosition = (truck) => truck.position ?? routeGeometry(truck.routeId)[truck.positionIndex ?? 0] ?? pilotMunicipality.center;
+// SW-044: only returns a value once both timestamps exist (see startRouteManually()/
+// completeRouteManually()) — a route completed without ever being started, or a demo route that
+// hasn't run through either yet, has no measured duration to show.
+const routeMeasuredDurationMinutes = (route) => (route.started_at && route.completed_at)
+  ? Math.max(0, Math.round((Date.parse(route.completed_at) - Date.parse(route.started_at)) / 60000))
+  : null;
+const formatMinutes = (minutes) => {
+  if (minutes === null || minutes === undefined) return '—';
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return hours > 0 ? `${hours}h ${rest}min` : `${rest} min`;
+};
 let selectedTruckId = null;
 let selectedRouteId = null;
 // Roadmap item 4 ("reoptimización dinámica" — suggestion only, docs/TECHNICAL_DEBT_REGISTER.md
@@ -317,6 +329,13 @@ function renderRouteDetail(route) {
       ? `<div class="controls"><select id="assignVehicleSelect">${availableTrucks.map((truck) => `<option value="${truck.id}">${truck.unit}</option>`).join('')}</select><button type="button" class="btn-primary" data-assign-vehicle="${route.id}">Asignar vehículo</button></div>`
       : '<p class="demo">No hay vehículos disponibles para asignar — <a href="#operaciones/flota" data-scroll-to="fleetManagement">registra uno en Operaciones · Flota</a>.</p>')
     : '';
+  // SW-044: only offered once a vehicle is assigned (ROUTE_TRANSITIONS in shared/contracts.js only
+  // allows assigned->started, never planned->started) and only before it's already started —
+  // reachable here for admin/dispatcher, and from the driver's own Conductor view
+  // (startAssignedRoute()) for the same route.
+  const startAction = (route.truckId && route.truckId !== 'Sin asignar' && route.status === 'assigned')
+    ? `<div class="controls"><button type="button" class="btn-primary" data-start-route="${route.id}">Iniciar ruta</button></div>`
+    : '';
   const completeAction = (route.truckId && route.truckId !== 'Sin asignar' && route.status !== 'completed' && route.status !== 'verified')
     ? `<div class="controls"><button type="button" class="btn-primary" data-complete-route="${route.id}">Marcar como completada</button></div>`
     : '';
@@ -340,9 +359,23 @@ function renderRouteDetail(route) {
   const householdEstimateRow = route.estimatedHouseholds !== undefined
     ? `<p><b>Viviendas estimadas (OSM)</b><span>${route.estimatedHouseholds} · ${route.estimatedMinutesRange ? `${route.estimatedMinutesRange.min}-${route.estimatedMinutesRange.max} min` : 'No disponible'}</span></p>`
     : '';
+  // SW-044: prefers a real measured duration (started_at/completed_at, both set only once
+  // startRouteManually()/completeRouteManually() actually ran) over the existing formula estimate
+  // (shared/impact-center.js's "Uso" tab) — falls back to "estimado" when either timestamp is
+  // missing, same "never invent a real-looking number" bias as the GPS-real vs. simulated badge on
+  // the map (SW-036).
+  const measuredMinutes = routeMeasuredDurationMinutes(route);
+  const durationRow = measuredMinutes !== null
+    ? `<p><b>Duración</b><span>${formatMinutes(measuredMinutes)} · medido</span></p>`
+    : `<p><b>Duración</b><span>${route.estimatedMinutes === '—' ? '—' : `${route.estimatedMinutes} min`} · estimado</span></p>`;
+  // Only real/hydrated routes can have more than one corrida to compare (a demo route is always
+  // "the same object", never a history of separate route_runs) — refreshRouteDurationHistory()
+  // (called from selectRoute()) fills this in asynchronously since it's a network read.
+  const durationHistoryPlaceholder = route.real_id ? `<p id="routeDurationHistory" class="demo">Cargando histórico de corridas…</p>` : '';
   return `<div class="drawer-head"><p class="eyebrow">Detalle de ruta</p><h2>${route.name}</h2>${pill(routeStatus(route))}</div>
-    <div class="detail-grid"><p><b>Unidad asignada</b><span>${route.truckId}</span></p><p><b>Conductor</b><span>${driverName(route.driverId)}</span></p><p><b>Paradas</b><span>${route.covered} completadas · ${route.pending} pendientes</span></p></div>
-    ${assignAction}${completeAction}${reoptimizeAction}
+    <div class="detail-grid"><p><b>Unidad asignada</b><span>${route.truckId}</span></p><p><b>Conductor</b><span>${driverName(route.driverId)}</span></p><p><b>Paradas</b><span>${route.covered} completadas · ${route.pending} pendientes</span></p>${durationRow}</div>
+    ${durationHistoryPlaceholder}
+    ${assignAction}${startAction}${completeAction}${reoptimizeAction}
     <details class="detail-more"><summary>Ver detalles técnicos</summary>
       <div class="detail-grid"><p><b>Sectores</b><span>${route.sectors.join(', ')}</span></p><p><b>Inicio</b><span>${route.started}</span></p><p><b>Programada</b><span>${route.scheduled}</span></p><p><b>Tiempo estimado</b><span>${route.estimatedMinutes} min</span></p><p><b>Distancia demo</b><span>${route.distanceKm} km</span></p>${householdEstimateRow}</div>
     </details>
@@ -602,6 +635,16 @@ function renderCreateRoute() {
     <p id="createRouteTripPreview" class="demo"></p>
   </div>`;
 }
+// SW-044: shown in the driver's own Conductor view so the chofer can start their assigned route
+// themselves, not only from admin/dispatcher's route detail panel (startAction in
+// renderRouteDetail()) — both call the same startRouteManually(), just via the same
+// [data-start-route] attribute/click handler wired once. Same 'assigned'-only guard as
+// renderRouteDetail()'s startAction (ROUTE_TRANSITIONS only allows assigned->started).
+function driverStartRouteControl(truck) {
+  const route = truck?.routeId ? routeById(truck.routeId) : null;
+  if (!route || route.status !== 'assigned') return '';
+  return `<div class="controls"><button type="button" class="btn-primary" data-start-route="${route.id}">Iniciar recorrido</button></div>`;
+}
 function renderDriverMobile() {
   const truck = trucks.find((item) => item.id === driverVehicleId);
   // Defensivo (Codex review PR #54): driverVehicleId puede quedar en null cuando el wizard de
@@ -612,6 +655,7 @@ function renderDriverMobile() {
   return `<div class="mobile" id="driverMobile">
     <select id="driverVehicleSelect" aria-label="Vehículo del conductor">${trucksWithRoute.map((t) => `<option value="${t.id}" ${t.id === driverVehicleId ? 'selected' : ''}>${t.unit}</option>`).join('')}</select>
     <p id="driverRouteInfo">${routeInfoLine}</p>
+    <div id="driverStartRouteControl">${driverStartRouteControl(truck)}</div>
     <p id="driverStopsProgress"></p>
     <div id="driverMap" class="real-map driver-map" role="application" aria-label="Posición y trazo del vehículo (demo)"></div>
     <p class="demo">${simulationNotice} · trazo histórico vía polling cada ${DRIVER_POLL_INTERVAL_MS / 1000}s (sin Realtime, ver docs/TECHNICAL_DEBT_REGISTER.md #14)</p>
@@ -872,6 +916,8 @@ function drawDriverPositions() {
   // own timer, so a driver who stays on one vehicle would otherwise keep seeing a stale percentage.
   const routeInfo = $('#driverRouteInfo');
   if (routeInfo) routeInfo.innerHTML = `${pill(truck.state)} ${routeName(truck.routeId)} · ${truck.progress}% completado`;
+  const startRouteControl = $('#driverStartRouteControl');
+  if (startRouteControl) startRouteControl.innerHTML = driverStartRouteControl(truck);
   if (driverPlannedLayer) driverPlannedLayer.remove();
   driverPlannedLayer = L.polyline(routeGeometry(truck.routeId), { color: '#94a3b8', weight: 4, opacity: .6, dashArray: '6 8' }).addTo(driverMap);
 
@@ -1062,10 +1108,46 @@ function previewRouteReoptimization(routeId) {
 // caps progress at 99 (Math.min(99, ...)), so nothing else ever transitions a route to 'completed';
 // without this, a route could run in the demo forever and never reach Supervisor's verification
 // queue (renderSupervisor()'s pendingVerification list, gated on status === 'completed').
+// SW-044: "Iniciar ruta" — previously nothing in the UI ever called operationsAdapter.startRoute()/
+// realAdapter.startRoute() at all; a route jumped straight from "asignada" a "completada" sin
+// ningún momento de arranque capturado, así que la duración nunca se podía medir (solo estimar por
+// fórmula, ver shared/impact-center.js). Reachable both from the route detail panel (admin/
+// dispatcher, renderRouteDetail() below) and from the driver's own Conductor view
+// (startAssignedRoute(), further down) — either can start it, matching how either can already
+// complete it (completeRouteManually()). Guards the operationsAdapter call by !route.real_id — a
+// gap found while building SW-042: operationsAdapter's own internal demo state never learns about
+// a route hydrated from Supabase, so calling it for one throws "Route not found"; only safe to call
+// for a route this session actually created locally (no real_id yet, or a pure demo route).
+async function startRouteManually(routeId) {
+  const route = routeById(routeId);
+  if (!route) return;
+  if (!route.real_id) operationsAdapter.startRoute(routeId);
+  route.status = 'started';
+  if (!route.started_at) route.started_at = new Date().toISOString();
+  // Only re-opens the route detail drawer if it's already showing this route (admin/dispatcher
+  // clicking "Iniciar ruta" there) — this is also reachable from the driver's own Conductor view
+  // (driverStartRouteControl()), which must NOT get yanked into the operations detail panel just
+  // because the chofer started their own route.
+  if (selectedRouteId === routeId) selectRoute(routeId);
+  const driverTruck = trucks.find((item) => item.id === driverVehicleId);
+  const driverStartControl = $('#driverStartRouteControl');
+  if (driverStartControl && driverTruck?.routeId === routeId) driverStartControl.innerHTML = driverStartRouteControl(driverTruck);
+  $('#routeList').innerHTML = renderRoutes(routes);
+  refreshResumen();
+  if (realAdapter) {
+    const realRouteId = route.real_id ?? routeId;
+    const updated = await mirrorToRealAdapter(realAdapter.startRoute(realRouteId));
+    if (updated?.started_at) route.started_at = updated.started_at; // el timestamp real gana sobre el sello local optimista
+  }
+}
 async function completeRouteManually(routeId) {
   const route = routeById(routeId);
   if (!route) return;
   route.status = 'completed'; route.progress = 100;
+  // SW-044: only stamps if this route was actually started via startRouteManually() above —
+  // completing without starting first stays possible (unchanged from before this hito, e.g.
+  // skipping straight to "Completar"), it just means no measured duration, same as any demo route.
+  if (route.started_at && !route.completed_at) route.completed_at = new Date().toISOString();
   operationsAdapter.completeRoute(routeId);
   const truck = trucks.find((item) => item.routeId === routeId);
   if (truck) { truck.state = 'completed'; truck.progress = 100; }
@@ -1078,7 +1160,8 @@ async function completeRouteManually(routeId) {
   refreshResumen();
   if (realAdapter) {
     const realRouteId = route.real_id ?? routeId;
-    await mirrorToRealAdapter(realAdapter.completeRoute(realRouteId));
+    const updated = await mirrorToRealAdapter(realAdapter.completeRoute(realRouteId));
+    if (updated?.completed_at) route.completed_at = updated.completed_at; // el timestamp real gana sobre el sello local optimista
   }
 }
 // SW-039 audit: Supervisor's "Verificar" button used to only set route.status directly — it never
@@ -1330,7 +1413,29 @@ function markSelection() {
 }
 function closeDetail() { const detail = $('#detail'); detail.classList.add('is-hidden'); detail.setAttribute('aria-hidden', 'true'); detail.innerHTML = ''; selectedTruckId = null; selectedRouteId = null; selectedIncidentId = null; drawMapLayers(); markSelection(); }
 function selectTruck(id) { selectedTruckId = id; selectedRouteId = null; selectedIncidentId = null; const truck = trucks.find((item) => item.id === id); openDetail(renderTruckDetail(truck)); drawMapLayers(); markSelection(); }
-function selectRoute(id) { if (routeReoptimizationPreview?.routeId !== id) routeReoptimizationPreview = null; selectedRouteId = id; selectedTruckId = null; selectedIncidentId = null; const route = routeById(id); openDetail(renderRouteDetail(route)); drawMapLayers(); markSelection(); }
+function selectRoute(id) { if (routeReoptimizationPreview?.routeId !== id) routeReoptimizationPreview = null; selectedRouteId = id; selectedTruckId = null; selectedIncidentId = null; const route = routeById(id); openDetail(renderRouteDetail(route)); drawMapLayers(); markSelection(); refreshRouteDurationHistory(id); }
+// SW-044: fills the #routeDurationHistory placeholder renderRouteDetail() leaves for a real/
+// hydrated route — a network read (listRouteRuns()), so it can't run synchronously inside the
+// render itself like the rest of the panel. Fire-and-forget from selectRoute(); a route switch
+// before this resolves just means the stale fetch's result lands on a #routeDurationHistory that
+// either doesn't exist anymore or belongs to the newly selected route — checked via the routeId
+// still matching selectedRouteId before writing, same staleness guard pattern used elsewhere in
+// this file for async UI updates.
+async function refreshRouteDurationHistory(routeId) {
+  const route = routeById(routeId);
+  if (!route?.real_id || !realAdapter) return;
+  const result = await realAdapter.listRouteRuns();
+  if (selectedRouteId !== routeId) return; // user navigated away while this was in flight
+  const el = document.getElementById('routeDurationHistory');
+  if (!el) return;
+  if (!result.ok) { el.textContent = 'No se pudo cargar el histórico de corridas.'; return; }
+  const durations = result.data
+    .filter((run) => run.route_id === route.real_id && run.started_at && run.completed_at)
+    .map((run) => Math.max(0, Math.round((Date.parse(run.completed_at) - Date.parse(run.started_at)) / 60000)));
+  if (!durations.length) { el.textContent = 'Todavía no hay corridas con duración medida para esta ruta.'; return; }
+  const average = Math.round(durations.reduce((total, minutes) => total + minutes, 0) / durations.length);
+  el.textContent = `${durations.length} corrida(s) medida(s) · promedio ${formatMinutes(average)} · última ${formatMinutes(durations[durations.length - 1])}`;
+}
 function selectIncident(code) { selectedIncidentId = code; selectedTruckId = null; selectedRouteId = null; const incident = incidents.find((item) => item.code === code); openDetail(renderIncidentDetail(incident)); drawMapLayers(); markSelection(); }
 function startSimulation() { if (simulationTimer) return; simulationTimer = setInterval(() => { trucks.filter((truck) => truck.routeId && truck.state !== 'offline' && truck.state !== 'completed').forEach((truck) => { const path = routeGeometry(truck.routeId); simState[truck.id].index = (simState[truck.id].index + 1) % path.length; simState[truck.id].progress = Math.min(99, simState[truck.id].progress + 3); truck.progress = simState[truck.id].progress; truck.updatedAt = 'Ahora (simulación)'; truck.sector = routeById(truck.routeId)?.sector ?? truck.sector; const route = routeById(truck.routeId); if (route) route.progress = truck.progress; }); drawMapLayers(); if (selectedTruckId) selectTruck(selectedTruckId); if (selectedRouteId) selectRoute(selectedRouteId); if (selectedIncidentId) selectIncident(selectedIncidentId); }, 1800 / simulationSpeed); }
 function pauseSimulation() { clearInterval(simulationTimer); simulationTimer = null; }
@@ -1379,6 +1484,8 @@ document.addEventListener('click', (event) => {
   if (assignVehicleButton) { const vehicleId = $('#assignVehicleSelect')?.value; if (vehicleId) assignVehicleToExistingRoute(assignVehicleButton.dataset.assignVehicle, vehicleId); }
   const assignDriverButton = event.target.closest('[data-assign-driver]');
   if (assignDriverButton) { const driverId = $('#assignDriverSelect')?.value; if (driverId) assignDriverToTruck(assignDriverButton.dataset.assignDriver, driverId); }
+  const startRouteButton = event.target.closest('[data-start-route]');
+  if (startRouteButton) startRouteManually(startRouteButton.dataset.startRoute);
   const completeRouteButton = event.target.closest('[data-complete-route]');
   if (completeRouteButton) completeRouteManually(completeRouteButton.dataset.completeRoute);
   const reoptimizeButton = event.target.closest('[data-reoptimize-route]');
@@ -1551,12 +1658,23 @@ async function hydrateRoutes() {
     const stopPoints = stopsResult.ok ? stopsResult.data : [];
     const covered = stopPoints.filter((stop) => stop.status === 'recolectado').length;
 
+    // SW-044: routes.status only ever advances once, from 'planned' to 'assigned' (see
+    // assignToRouteRun() in shared/operations-adapter.js) — every later transition (started,
+    // in_progress, delayed, completed, verified) writes to route_runs.status only, never back to
+    // routes. Reading row.status here (as this did before) left a hydrated already-started/
+    // completed route stuck showing "Asignada" forever after a page reload, which would also have
+    // hidden the new "Iniciar ruta" button behind the wrong condition. run.status wins whenever a
+    // run exists; row.status only matters for the no-run-yet ('planned') case.
     const newRoute = {
-      id: row.id, real_id: row.id, name: row.name, status: row.status ?? 'planned',
+      id: row.id, real_id: row.id, name: row.name, status: run?.status ?? row.status ?? 'planned',
       sectors: ['Sincronizado desde Supabase'], sector: 'Sincronizado desde Supabase',
       truckId: truck ? truck.unit : 'Sin asignar', driverId: driver ? driver.id : null,
       progress: run?.progress ?? 0, scheduled: '—', started: run ? 'Sincronizado' : 'Pendiente', eta: '—',
-      distanceKm: 0, estimatedMinutes: '—', stops: stopPoints.length, covered, pending: stopPoints.length - covered, incidents: []
+      distanceKm: 0, estimatedMinutes: '—', stops: stopPoints.length, covered, pending: stopPoints.length - covered, incidents: [],
+      // SW-044: carries the real timestamps over so a route hydrated already-started/completed
+      // shows a measured duration immediately, instead of looking exactly like a route that never
+      // ran through startRouteManually()/completeRouteManually() this session.
+      started_at: run?.started_at ?? null, completed_at: run?.completed_at ?? null
     };
     routes.push(newRoute);
     initialRouteProgress[row.id] = newRoute.progress;

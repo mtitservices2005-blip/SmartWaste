@@ -97,8 +97,17 @@ export function createDemoOperationsAdapter(seed = { trucks, routes, drivers, in
     findOwnVehicleAssignment: () => ({ ok:false, source:'DEMO_ONLY', error:{ code:'NOT_SUPPORTED_IN_DEMO', message:'Vehicle assignment lookup requires a real backend.' } })
   };
 }
-function updateRoute(state, routeId, patch) { const route = state.routes.find((r) => r.id === routeId); if (!route) throw new Error('Route not found'); Object.assign(route, patch); return clone(route); }
-function transitionRoute(state, routeId, next) { const route = state.routes.find((r) => r.id === routeId); if (!route) throw new Error('Route not found'); if (!canTransitionRoute(route.status, next)) throw new Error(`Rejected route transition ${route.status}->${next}`); route.status = next; return clone(route); }
+// SW-044: stamps started_at/completed_at the first time a route reaches that status — mirrors the
+// real adapter's transitionRouteRun() below, so a demo route's "duración medida" (started_at to
+// completed_at) works the same way a real one's does, off the browser's own clock rather than
+// Supabase's. Never overwrites an existing timestamp (idempotent against a route re-completing via
+// a second call, however that might happen).
+function stampRouteTiming(route, status) {
+  if (status === 'started' && !route.started_at) route.started_at = new Date().toISOString();
+  if (status === 'completed' && !route.completed_at) route.completed_at = new Date().toISOString();
+}
+function updateRoute(state, routeId, patch) { const route = state.routes.find((r) => r.id === routeId); if (!route) throw new Error('Route not found'); Object.assign(route, patch); if (patch.status) stampRouteTiming(route, patch.status); return clone(route); }
+function transitionRoute(state, routeId, next) { const route = state.routes.find((r) => r.id === routeId); if (!route) throw new Error('Route not found'); if (!canTransitionRoute(route.status, next)) throw new Error(`Rejected route transition ${route.status}->${next}`); route.status = next; stampRouteTiming(route, next); return clone(route); }
 
 export function createSupabaseOperationsAdapter(client, { fallback = createDemoOperationsAdapter(), municipality_id = null } = {}) {
   const hasClient = Boolean(client?.from);
@@ -358,7 +367,14 @@ async function transitionRouteRun(client, fallback, municipality_id, routeId, ne
   if (current.error) return fail(current.error.code ?? 'SUPABASE_ERROR', current.error.message, opts);
   if (!current.data) return fail('ROUTE_RUN_NOT_FOUND', 'No route_run found for route; assign it first', opts);
   if (!canTransitionRoute(current.data.status, next)) return fail('INVALID_ROUTE_TRANSITION', `Rejected route transition ${current.data.status}->${next}`, opts);
-  let q = client.from('route_runs').update({ status: next, ...patch }).eq('id', current.data.id);
+  // SW-044: stamps started_at/completed_at (supabase/migrations/202607150012_sw044_route_run_timing.sql)
+  // the first time this route_run reaches that status — never overwrites an already-set timestamp
+  // (e.g. a route re-completing through updateProgress(100) after completeRoute() already ran).
+  // Ordered before ...patch so an explicit patch value (none of today's callers pass one) would win.
+  const timingPatch = {};
+  if (next === 'started' && !current.data.started_at) timingPatch.started_at = new Date().toISOString();
+  if (next === 'completed' && !current.data.completed_at) timingPatch.completed_at = new Date().toISOString();
+  let q = client.from('route_runs').update({ status: next, ...timingPatch, ...patch }).eq('id', current.data.id);
   if (opts.version !== undefined) q = q.eq('version', opts.version);
   const updated = await q.select('*').single();
   if (updated.error) return fail(updated.error.code ?? 'SUPABASE_ERROR', updated.error.message, opts);
