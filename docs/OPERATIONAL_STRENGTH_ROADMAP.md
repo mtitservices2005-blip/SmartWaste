@@ -111,6 +111,27 @@ Esto no estaba en el roadmap original bajo este número, pero **sí resuelve por
 
 ---
 
+## SW-042 — Asignación de chofer a vehículo desde la UI ✅ Hecho (2026-08-19)
+
+**Por qué:** encontrado durante la verificación interactiva de SW-040 (ver esa sección) — no existía ninguna pantalla para vincular un chofer a un vehículo; ese vínculo (`vehicle_assignments`) solo podía crearse escribiendo directamente contra Supabase. En operación real esto bloquea a cualquier despachador que no tenga acceso directo a la base de datos.
+
+**Alcance:**
+1. `shared/operations-adapter.js`: nuevos métodos `listVehicleAssignments()`/`assignDriverToVehicle()` en ambos adaptadores (demo y real). El real hace dos `update()` (terminar cualquier asignación `assigned` previa por vehículo y por chofer — `vehicle_assignments` no tiene constraint único que lo impida) y luego un `insert()`; el demo deriva la misma forma a partir de `truck.driverId`, que ya existía en los datos demo.
+2. `frontend/app.js`: control "Asignar chofer"/"Reasignar chofer" en el panel de detalle del camión (`renderTruckDetail()`), filtrando el selector para ofrecer solo choferes del mismo tipo que el vehículo (reales para un vehículo real, demo para uno demo — un chofer demo no tiene cuenta real que vincular). Mismo patrón dual-write que `assignTruckToRoute()` ya usaba para vehículo↔ruta.
+3. Corrección del bug cosmético relacionado (mismo origen, documentado junto con este hito en `docs/TECHNICAL_DEBT_REGISTER.md` #24): `hydrateVehiclesAndDrivers()` hardcodeaba `driverId: null` en cada vehículo real hidratado sin consultar `vehicle_assignments` — ahora lo resuelve con `listVehicleAssignments()`, así que el panel de detalle refleja el chofer real ya vinculado (p. ej. por `seed-remote.mjs`) en vez de mostrar "Sin asignar" incorrectamente.
+
+**Fuera de alcance:** ninguna pantalla nueva de "gestión de flota" agregada — el control vive en el panel de detalle del camión que ya existía. Historial de reasignaciones (quién tuvo cada vehículo y cuándo) no se expone en la UI, solo queda como filas con `status:'reassigned'` en la tabla.
+
+**Criterios de aceptación:**
+- Un despachador puede asignar y reasignar un chofer a un vehículo (demo o real) sin tocar Supabase directamente.
+- Un vehículo real hidratado desde Supabase muestra su chofer real ya vinculado, si lo tiene.
+
+### Resultado
+
+Verificado con `tests/operations-adapter.test.mjs` (extendido: demo adapter — asignar, reasignar limpia al chofer del vehículo anterior, throw en vehículo inexistente; adaptador real con cliente simulado — `listVehicleAssignments()` y `assignDriverToVehicle()` incluyendo las 2 llamadas de `update()` antes del `insert()`, y el camino de fallback sin cliente) y `node --check` sobre los 2 archivos JS tocados. No requirió ninguna migración nueva — la política RLS `tenant_insert_staff`/`tenant_update_staff` ya cubre `vehicle_assignments` desde `sw014_auth_rls_policies.sql`. Pendiente de verificación interactiva en staging real por el Project Owner (mismo patrón que otros hitos: el sandbox de esta sesión no tiene salida de red hacia Supabase/Vercel).
+
+---
+
 ## Resumen de secuencia y dependencias
 
 | Hito | Estado | Depende de | Severidad de lo que resuelve | Esfuerzo relativo |
@@ -121,8 +142,6 @@ Esto no estaba en el roadmap original bajo este número, pero **sí resuelve por
 | SW-039 | Propuesto | SW-038 (progress consistente antes de exponerlo en UI real) | Media | Medio |
 | SW-040 | ✅ Hecho (2026-08-19) | SW-036, SW-037, SW-038, SW-039 | — (habilitador) | Medio, con gate de seguridad |
 | SW-041 | Propuesto | SW-037 (wizard ya construido), SW-040 | — (no técnico + ajuste de datos) | Bajo técnico, alto en coordinación con el ayuntamiento |
-| SW-042 (candidato, no confirmado) | Identificado durante la verificación de SW-040 | SW-040 | Media — sin esto, un despachador no puede operar sin editar la base de datos a mano | Bajo-medio |
-
-SW-042 (nombre propuesto: "asignación de chofer a vehículo desde la UI") no está confirmado ni tiene alcance detallado todavía — es solo el gap real encontrado durante la verificación interactiva de SW-040 (ver esa sección arriba y `docs/TECHNICAL_DEBT_REGISTER.md` #24), señalado aquí para que no se pierda antes de la próxima planificación con el Project Owner.
+| SW-042 | ✅ Hecho (2026-08-19) | SW-040 | Media — sin esto, un despachador no podía operar sin editar la base de datos a mano | Bajo-medio |
 
 No se propone trabajar dos de estos hitos en paralelo en la misma rama (regla 2) — y, en la práctica, ya está pasando entre sesiones/herramientas distintas sobre el mismo repo (ver nota de coordinación al inicio); antes de arrancar SW-038 hay que confirmar con quien esté en Claude Code qué rama/hito real está tomando ese número para no repetir el choque de SW-037. SW-040 y SW-041 en particular requieren autorización explícita del Project Owner antes de tocar cualquier entorno remoto o dato real de un municipio, consistente con la regla 6 (no afirmar integraciones reales sin evidencia) y la regla 10 (esperar autorización antes de commit/push/PR).
