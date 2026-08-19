@@ -2,7 +2,7 @@ import { demoNotice, simulationNotice, pilotMunicipality, trucks, routes, sector
 import { operationsAdapter, resolveOperationsAdapter } from '../shared/operations-adapter.js';
 import { DeviceSimulator, createDemoPositionHistory, createTelemetryIngestionAdapter } from '../shared/telemetry-simulator.js';
 import { validateEvidenceFile } from '../shared/channel-contracts.js';
-import { createDemoFolio, findSectorService, findIncidentStatus } from '../shared/citizen-portal.js';
+import { createDemoFolio, findSectorService, findIncidentStatus, submitCitizenReport } from '../shared/citizen-portal.js';
 import { generateRouteStopPoints, deriveStopStatus, haversineMeters, splitIntoTrips } from '../shared/route-engine.js';
 import { fetchRoadRoute } from '../shared/osrm-routing.js';
 import { fetchBuildingCount, estimateCollectionMinutes } from '../shared/overpass-buildings.js';
@@ -637,7 +637,7 @@ function renderRoutes(items) { return items.map((route) => `<article class="row 
 function renderSupervisor() {
   const pendingVerification = routes.filter((route) => route.status === 'completed');
   const openIncidents = incidents.filter((incident) => incident.status !== 'Cerrada');
-  return `<section id="supervisor" class="section card"><h2>Panel de supervisor</h2><p class="demo">${demoNotice} · Verificación de rutas completadas y gestión de incidencias. Acciones de esta vista son demo local (no escriben contra Supabase todavía).</p><div class="panel-grid">
+  return `<section id="supervisor" class="section card"><h2>Panel de supervisor</h2><p class="demo">${demoNotice} · Verificación de rutas completadas y gestión de incidencias. "Verificar" ruta escribe contra Supabase cuando hay backend real conectado; "Marcar resuelta" una incidencia sigue siendo solo demo local.</p><div class="panel-grid">
     <div><h3>Rutas pendientes de verificación</h3>${pendingVerification.length ? pendingVerification.map((route) => `<article class="row"><div><strong>${route.name}</strong><br>${route.sectors.join(' · ')} · ${route.progress}% completado</div><div>${pill('completed')}<button class="btn-primary" data-verify-route="${route.id}">Verificar</button></div></article>`).join('') : '<p>No hay rutas completadas pendientes de verificación.</p>'}</div>
     <div><h3>Incidencias abiertas</h3>${openIncidents.length ? openIncidents.map((incident) => `<article class="row"><div><strong>${incident.type}</strong><br>${incident.sector} · ${incident.priority}</div><div>${pill('open')}<button class="btn-primary" data-resolve-incident="${incident.code}">Marcar resuelta</button></div></article>`).join('') : '<p>Sin incidencias abiertas.</p>'}</div>
   </div></section>`;
@@ -1012,6 +1012,19 @@ async function completeRouteManually(routeId) {
     await mirrorToRealAdapter(realAdapter.completeRoute(realRouteId));
   }
 }
+// SW-039 audit: Supervisor's "Verificar" button used to only set route.status directly — it never
+// even called the demo adapter's own verifyRoute(), let alone mirrored to a real backend, unlike
+// every other route-status transition in this file (assignTruckToRoute()/completeRouteManually()
+// above). Follows the exact same demo-then-mirror pattern as completeRouteManually().
+async function verifyRouteManually(routeId) {
+  const route = routeById(routeId);
+  if (!route) return;
+  route.status = 'verified';
+  operationsAdapter.verifyRoute(routeId);
+  refreshSupervisor();
+  refreshResumen();
+  if (realAdapter) await mirrorToRealAdapter(realAdapter.verifyRoute(route.real_id ?? routeId));
+}
 
 function initCreateRouteMap() {
   loadLeaflet().then((L) => {
@@ -1287,7 +1300,7 @@ document.addEventListener('click', (event) => {
   const routeButton = event.target.closest('[data-route]'); if (routeButton?.dataset.route) { selectRoute(routeButton.dataset.route); goToMapTab(); }
   const incidentButton = event.target.closest('[data-incident]'); if (incidentButton) { selectIncident(incidentButton.dataset.incident); goToMapTab(); }
   const verifyButton = event.target.closest('[data-verify-route]');
-  if (verifyButton) { const route = routeById(verifyButton.dataset.verifyRoute); if (route) { route.status = 'verified'; refreshSupervisor(); refreshResumen(); } }
+  if (verifyButton) verifyRouteManually(verifyButton.dataset.verifyRoute);
   const assignVehicleButton = event.target.closest('[data-assign-vehicle]');
   if (assignVehicleButton) { const vehicleId = $('#assignVehicleSelect')?.value; if (vehicleId) assignVehicleToExistingRoute(assignVehicleButton.dataset.assignVehicle, vehicleId); }
   const completeRouteButton = event.target.closest('[data-complete-route]');
@@ -1322,9 +1335,45 @@ $('#search').addEventListener('input', (event) => { const term = event.target.va
 $('#sectorFilter').addEventListener('change', (event) => { $('#routeList').innerHTML = renderRoutes(routes.filter((route) => !event.target.value || route.sectors.includes(event.target.value))); });
 $('#citizenSector').addEventListener('change', (event) => { const service = findSectorService(event.target.value); $('#pickupResult').textContent = service ? `${service.pickupDay} · Estado: ${service.status}` : 'Sector demo no encontrado'; });
 $('#citizenSector').dispatchEvent(new Event('change'));
-$('#incidentForm').addEventListener('submit', (event) => { event.preventDefault(); $('#folio').textContent = `Folio generado: ${createDemoFolio(citizenFolioSequence)} (demo · sin upload real)`; citizenFolioSequence += 1; });
+// SW-039: real submission when a municipality-specific deployment is configured
+// (SMARTWASTE_SUPABASE_CONFIG.municipality_id — see frontend/auth-gate.js's readSupabaseConfig()),
+// demo folio otherwise (rule 5 — never breaks the approved demo when no real backend is set).
+// `sector` isn't sent in real mode: the dropdown's options come from shared/demo-data.js's
+// hardcoded sectors, whose ids don't correspond to real Supabase sectors rows — sending one would
+// violate citizen_reports.sector_id's foreign key. citizen_reports.sector_id is nullable, so a real
+// report is simply created without one for now; hydrating real sector data into this dropdown is a
+// separate, not-yet-built piece of work (SW-035 hydrates vehicles/drivers/routes, never sectors).
+$('#incidentForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const config = readSupabaseConfig();
+  const client = getAuthClient();
+  const folioEl = $('#folio');
+  if (client && config?.municipality_id) {
+    if (folioEl) folioEl.textContent = 'Enviando reporte…';
+    const form = event.target;
+    const evidenceFile = $('#evidence')?.files?.[0] || null;
+    const result = await submitCitizenReport(client, {
+      municipality_id: config.municipality_id,
+      type: form.type.value,
+      description: form.description.value,
+      evidenceFile
+    });
+    if (folioEl) folioEl.textContent = result.ok ? `Folio generado: ${result.folio} (reporte real)` : `No se pudo enviar el reporte: ${result.error.message}`;
+    if (result.ok) form.reset();
+    return;
+  }
+  if (folioEl) folioEl.textContent = `Folio generado: ${createDemoFolio(citizenFolioSequence)} (demo · sin upload real)`;
+  citizenFolioSequence += 1;
+});
 document.querySelectorAll('#fuelPrice,#fuelEfficiency,#operatingDays,#hourlyCost').forEach((input) => input.addEventListener('input', () => { const assumptions = { ...defaultImpactAssumptions, fuelPrice: Number($('#fuelPrice').value), fuelEfficiency: Number($('#fuelEfficiency').value), operatingDays: Number($('#operatingDays').value), hourlyCost: Number($('#hourlyCost').value) }; $('#impactEconomics').innerHTML = renderImpactEconomics(calculateImpactMetrics(assumptions)); }));
-$('#evidence').addEventListener('change', (event) => { const file = event.target.files?.[0]; const result = validateEvidenceFile(file); $('#evidencePreview').textContent = result.ok ? `${file?.name ?? 'Sin archivo'} · ${result.reason}` : `Evidencia rechazada: ${result.reason}`; });
+// SW-039: the upload itself only happens on submit (submitCitizenReport, above) — this handler
+// only validates + previews, so the note here just needs to say what will happen next.
+$('#evidence').addEventListener('change', (event) => {
+  const file = event.target.files?.[0];
+  const result = validateEvidenceFile(file);
+  const uploadNote = (getAuthClient() && readSupabaseConfig()?.municipality_id) ? 'se sube al enviar el formulario' : 'sin upload real (modo demo)';
+  $('#evidencePreview').textContent = result.ok ? `${file?.name ?? 'Sin archivo'} · ${result.reason === 'no_file' ? 'sin archivo' : uploadNote}` : `Evidencia rechazada: ${result.reason}`;
+});
 $('#driverVehicleSelect').addEventListener('change', (event) => {
   driverVehicleId = event.target.value;
   drawDriverPositions(); // also refreshes #driverRouteInfo for the newly selected vehicle
