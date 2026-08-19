@@ -45,6 +45,16 @@ const routePosition = (truck) => truck.position ?? routeGeometry(truck.routeId)[
 const routeMeasuredDurationMinutes = (route) => (route.started_at && route.completed_at)
   ? Math.max(0, Math.round((Date.parse(route.completed_at) - Date.parse(route.started_at)) / 60000))
   : null;
+// SW-045: real GPS-derived distance for a completed run (route.real_distance_meters, stamped by
+// transitionRouteRun() in shared/operations-adapter.js) — falls back to null (never a fake value)
+// when there was no GPS trail to measure, same "medido vs. estimado" bias as duration above.
+const routeMeasuredDistanceKm = (route) => route.real_distance_meters != null ? Math.round(route.real_distance_meters / 100) / 10 : null;
+// Reuses the same fuel-efficiency assumption already configurable in Impacto y Ahorros ·
+// Economía (shared/impact-center.js's defaultImpactAssumptions) rather than inventing a second,
+// disconnected one — consumption itself is always an estimate (no fuel is actually measured
+// anywhere in this system), whether the distance it's based on is real or estimated.
+const estimateFuelLiters = (distanceKm, efficiencyKmPerLiter = defaultImpactAssumptions.fuelEfficiency) =>
+  efficiencyKmPerLiter > 0 ? Math.round((distanceKm / efficiencyKmPerLiter) * 10) / 10 : null;
 const formatMinutes = (minutes) => {
   if (minutes === null || minutes === undefined) return '—';
   const hours = Math.floor(minutes / 60);
@@ -394,12 +404,22 @@ function renderRouteDetail(route) {
   const durationRow = measuredMinutes !== null
     ? `<p><b>Duración</b><span>${formatMinutes(measuredMinutes)} · medido</span></p>`
     : `<p><b>Duración</b><span>${route.estimatedMinutes === '—' ? '—' : `${route.estimatedMinutes} min`} · estimado</span></p>`;
+  // SW-045: same medido/estimado split as duración, plus a consumo estimado derived from whichever
+  // distance is showing (real when measured, the drawn trace's length otherwise) — consumo itself
+  // is never "medido" (nothing tracks actual fuel loaded), so it's always labeled as an estimate.
+  const measuredDistanceKm = routeMeasuredDistanceKm(route);
+  const displayDistanceKm = measuredDistanceKm ?? route.distanceKm ?? null;
+  const distanceRow = measuredDistanceKm !== null
+    ? `<p><b>Distancia</b><span>${measuredDistanceKm} km · medido</span></p>`
+    : `<p><b>Distancia</b><span>${route.distanceKm != null ? `${route.distanceKm} km` : '—'} · estimado</span></p>`;
+  const estimatedFuelLiters = displayDistanceKm != null ? estimateFuelLiters(displayDistanceKm) : null;
+  const fuelRow = `<p><b>Consumo estimado</b><span>${estimatedFuelLiters != null ? `${estimatedFuelLiters} L` : '—'}</span></p>`;
   // Only real/hydrated routes can have more than one corrida to compare (a demo route is always
   // "the same object", never a history of separate route_runs) — refreshRouteDurationHistory()
   // (called from selectRoute()) fills this in asynchronously since it's a network read.
   const durationHistoryPlaceholder = route.real_id ? `<p id="routeDurationHistory" class="demo">Cargando histórico de corridas…</p>` : '';
   return `<div class="drawer-head"><p class="eyebrow">Detalle de ruta</p><h2>${route.name}</h2>${pill(routeStatus(route))}</div>
-    <div class="detail-grid"><p><b>Unidad asignada</b><span>${route.truckId}</span></p><p><b>Conductor</b><span>${driverName(route.driverId)}</span></p><p><b>Paradas</b><span>${route.covered} completadas · ${route.pending} pendientes</span></p>${durationRow}</div>
+    <div class="detail-grid"><p><b>Unidad asignada</b><span>${route.truckId}</span></p><p><b>Conductor</b><span>${driverName(route.driverId)}</span></p><p><b>Paradas</b><span>${route.covered} completadas · ${route.pending} pendientes</span></p>${durationRow}${distanceRow}${fuelRow}</div>
     ${durationHistoryPlaceholder}
     ${assignAction}${startAction}${completeAction}${reoptimizeAction}
     <details class="detail-more"><summary>Ver detalles técnicos</summary>
@@ -1236,6 +1256,10 @@ async function completeRouteManually(routeId) {
     const realRouteId = route.real_id ?? routeId;
     const updated = await mirrorToRealAdapter(realAdapter.completeRoute(realRouteId));
     if (updated?.completed_at) route.completed_at = updated.completed_at; // el timestamp real gana sobre el sello local optimista
+    // SW-045: distance_meters solo llega si hubo suficiente rastro de GPS real durante la corrida —
+    // ausente para una ruta demo o una real sin GPS activo, y ahí se sigue mostrando la distancia
+    // estimada del trazo dibujado (route.distanceKm), sin cambios.
+    if (updated?.distance_meters != null) route.real_distance_meters = updated.distance_meters;
     // Bug real encontrado en staging: refreshRouteDurationHistory() (disparado desde selectRoute()
     // más arriba) corría ANTES de que esta escritura terminara, así que la consulta de histórico
     // llegaba a Supabase antes de que completed_at existiera — mostraba "medido" en la fila de
@@ -1509,12 +1533,18 @@ async function refreshRouteDurationHistory(routeId) {
   const el = document.getElementById('routeDurationHistory');
   if (!el) return;
   if (!result.ok) { el.textContent = 'No se pudo cargar el histórico de corridas.'; return; }
-  const durations = result.data
-    .filter((run) => run.route_id === route.real_id && run.started_at && run.completed_at)
-    .map((run) => Math.max(0, Math.round((Date.parse(run.completed_at) - Date.parse(run.started_at)) / 60000)));
-  if (!durations.length) { el.textContent = 'Todavía no hay corridas con duración medida para esta ruta.'; return; }
+  const runsForRoute = result.data.filter((run) => run.route_id === route.real_id && run.started_at && run.completed_at);
+  if (!runsForRoute.length) { el.textContent = 'Todavía no hay corridas con duración medida para esta ruta.'; return; }
+  const durations = runsForRoute.map((run) => Math.max(0, Math.round((Date.parse(run.completed_at) - Date.parse(run.started_at)) / 60000)));
   const average = Math.round(durations.reduce((total, minutes) => total + minutes, 0) / durations.length);
-  el.textContent = `${durations.length} corrida(s) medida(s) · promedio ${formatMinutes(average)} · última ${formatMinutes(durations[durations.length - 1])}`;
+  const durationText = `${runsForRoute.length} corrida(s) medida(s) · promedio ${formatMinutes(average)} · última ${formatMinutes(durations[durations.length - 1])}`;
+  // SW-045: distancia real solo existe para las corridas que sí tuvieron GPS activo — puede ser un
+  // subconjunto de runsForRoute (por eso se filtra aparte, no se asume que todas la tengan).
+  const distances = runsForRoute.filter((run) => run.distance_meters != null).map((run) => Math.round(run.distance_meters / 100) / 10);
+  const distanceText = distances.length
+    ? ` · distancia real: ${distances.length} corrida(s) · promedio ${Math.round((distances.reduce((total, km) => total + km, 0) / distances.length) * 10) / 10} km · última ${distances[distances.length - 1]} km`
+    : '';
+  el.textContent = durationText + distanceText;
 }
 function selectIncident(code) { selectedIncidentId = code; selectedTruckId = null; selectedRouteId = null; const incident = incidents.find((item) => item.code === code); openDetail(renderIncidentDetail(incident)); drawMapLayers(); markSelection(); }
 function startSimulation() { if (simulationTimer) return; simulationTimer = setInterval(() => { trucks.filter((truck) => truck.routeId && truck.state !== 'offline' && truck.state !== 'completed').forEach((truck) => { const path = routeGeometry(truck.routeId); simState[truck.id].index = (simState[truck.id].index + 1) % path.length; simState[truck.id].progress = Math.min(99, simState[truck.id].progress + 3); truck.progress = simState[truck.id].progress; truck.updatedAt = 'Ahora (simulación)'; truck.sector = routeById(truck.routeId)?.sector ?? truck.sector; const route = routeById(truck.routeId); if (route) route.progress = truck.progress; }); drawMapLayers(); if (selectedTruckId) selectTruck(selectedTruckId); if (selectedRouteId) selectRoute(selectedRouteId); if (selectedIncidentId) selectIncident(selectedIncidentId); }, 1800 / simulationSpeed); }
@@ -1770,7 +1800,10 @@ async function hydrateRoutes() {
       // SW-044: carries the real timestamps over so a route hydrated already-started/completed
       // shows a measured duration immediately, instead of looking exactly like a route that never
       // ran through startRouteManually()/completeRouteManually() this session.
-      started_at: run?.started_at ?? null, completed_at: run?.completed_at ?? null
+      started_at: run?.started_at ?? null, completed_at: run?.completed_at ?? null,
+      // SW-045: real GPS-derived distance for this run, if one was computed (transitionRouteRun()
+      // in shared/operations-adapter.js, only on completion, only when there was a GPS trail).
+      real_distance_meters: run?.distance_meters ?? null
     };
     routes.push(newRoute);
     initialRouteProgress[row.id] = newRoute.progress;

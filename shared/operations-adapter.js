@@ -1,6 +1,6 @@
 import { trucks, routes, drivers, incidents, routePaths } from './demo-data.js';
 import { canTransitionRoute } from './contracts.js';
-import { deriveStopStatus } from './route-engine.js';
+import { deriveStopStatus, haversineMeters } from './route-engine.js';
 
 // This adapter (createSupabaseOperationsAdapter, below) is the single entry point for operating
 // on routes/route_runs/vehicle_assignments — see docs/CORE_READINESS_REVIEW.md. When MT Workflow
@@ -374,6 +374,21 @@ async function transitionRouteRun(client, fallback, municipality_id, routeId, ne
   const timingPatch = {};
   if (next === 'started' && !current.data.started_at) timingPatch.started_at = new Date().toISOString();
   if (next === 'completed' && !current.data.completed_at) timingPatch.completed_at = new Date().toISOString();
+  // SW-045: sums the real GPS trail (vehicle_positions, already collected whenever the driver
+  // shared their location — SW-036) into an actual distance for this run, the same "measured, not
+  // estimated" upgrade SW-044 did for duration. Best-effort: any failure here (query error, fewer
+  // than 2 points to measure a distance between) just leaves distance_meters unstamped — the UI
+  // falls back to the route's drawn/estimated distance, same as it always has. Never blocks the
+  // completion itself; this runs after started_at/completed_at are already decided above.
+  if (next === 'completed' && !current.data.distance_meters && current.data.vehicle_id && current.data.started_at) {
+    const positionsResult = await client.from('vehicle_positions').select('latitude,longitude,captured_at')
+      .eq('vehicle_id', current.data.vehicle_id).neq('source', 'simulator').gte('captured_at', current.data.started_at).order('captured_at', { ascending: true });
+    if (!positionsResult.error && positionsResult.data?.length >= 2) {
+      const points = positionsResult.data.map((row) => [row.latitude, row.longitude]);
+      const distanceMeters = points.slice(1).reduce((total, point, index) => total + haversineMeters(points[index], point), 0);
+      timingPatch.distance_meters = Math.round(distanceMeters);
+    }
+  }
   let q = client.from('route_runs').update({ status: next, ...timingPatch, ...patch }).eq('id', current.data.id);
   if (opts.version !== undefined) q = q.eq('version', opts.version);
   const updated = await q.select('*').single();

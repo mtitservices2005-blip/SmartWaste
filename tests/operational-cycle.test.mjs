@@ -84,6 +84,10 @@ assert.equal(completed.data.progress, 100, 'completing a route must set progress
 // (frontend/app.js's routeMeasuredDurationMinutes()) is completed_at - started_at.
 assert.ok(completed.data.completed_at, 'completed_at must be stamped on the completed transition');
 assert.ok(Date.parse(completed.data.completed_at) >= Date.parse(started.data.started_at), 'completed_at must not be before started_at');
+// SW-045: this scenario never ingests any vehicle_positions, so there's no GPS trail to measure a
+// distance from — must complete successfully anyway, with distance_meters left null (falls back to
+// the route's estimated distance in the UI) rather than erroring or inventing a value.
+assert.equal(completed.data.distance_meters, null, 'no GPS trail was recorded in this scenario, so distance_meters must stay unmeasured');
 
 // 6. Driver reports an incident tied to their own route_run (driver_insert_own_incident policy).
 const incident = await driverAdapter.registerIncident({ route_run_id: routeRunCheck.data.id, vehicle_id: scenario.vehicleA.id, type: 'missed_pickup', description: 'Contenedor bloqueado' });
