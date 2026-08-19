@@ -158,6 +158,13 @@ Verificado con `tests/operations-adapter.test.mjs` (extendido: demo adapter — 
 
 Verificado con `tests/operational-cycle.test.mjs` (extendido: `started_at`/`completed_at` deben persistir y `completed_at >= started_at`, contra Supabase local real — no ejecutable en este sandbox sin Docker, mismo límite de siempre) y `tests/operations-adapter.test.mjs` (extendido: demo adapter estampa y no pisa los timestamps; adaptador real con cliente simulado cubre `transitionRouteRun()` estampando en `started`/`completed` y NO estampando cuando el timestamp ya existe). `node --check` sobre los archivos JS tocados y verificación del pipeline de build de Vercel (grafo de imports). Verificación visual en navegador pendiente del Project Owner en staging — este sandbox no tiene salida de red hacia el CDN de Leaflet.
 
+### Revisión tras pruebas en staging (mismo día)
+
+La verificación interactiva del Project Owner en staging confirmó los pasos básicos ("Iniciar ruta" → "Marcar como completada" → duración medida), pero encontró dos ajustes reales:
+
+1. **Decisión de producto confirmada:** el flujo principal debe ser 100% del chofer — "Iniciar recorrido" arranca la ruta **y** prende el GPS real en un solo toque; "Finalizar recorrido" la completa **y** apaga el GPS. Admin/dispatcher conservan sus propios botones (`renderRouteDetail()`) como respaldo para una emergencia (chofer sin señal, celular sin batería), pero esos nunca tocan el GPS de otra persona — atributos `[data-driver-start-route]`/`[data-driver-complete-route]` separados de los `[data-start-route]`/`[data-complete-route]` de admin, cada uno con su propio handler (`driverStartRoute()`/`driverCompleteRoute()` vs. `startRouteManually()`/`completeRouteManually()` directamente).
+2. **Bug real encontrado:** la fila "Duración" mostraba "medido" (dato local optimista) mientras el histórico de corridas debajo mostraba "todavía no hay corridas medidas" al mismo tiempo — condición de carrera entre la consulta del histórico (disparada apenas se abre el detalle) y la escritura real de `completed_at` en Supabase, que todavía no había terminado. Corregido repitiendo la consulta del histórico después de que la escritura real se confirma.
+
 ---
 
 ## Resumen de secuencia y dependencias

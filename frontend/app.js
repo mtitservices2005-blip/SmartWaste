@@ -635,15 +635,20 @@ function renderCreateRoute() {
     <p id="createRouteTripPreview" class="demo"></p>
   </div>`;
 }
-// SW-044: shown in the driver's own Conductor view so the chofer can start their assigned route
-// themselves, not only from admin/dispatcher's route detail panel (startAction in
-// renderRouteDetail()) — both call the same startRouteManually(), just via the same
-// [data-start-route] attribute/click handler wired once. Same 'assigned'-only guard as
-// renderRouteDetail()'s startAction (ROUTE_TRANSITIONS only allows assigned->started).
-function driverStartRouteControl(truck) {
+// SW-044 (revisión tras pruebas en staging): el flujo principal es 100% del chofer — "Iniciar
+// recorrido" arranca la ruta Y prende el GPS real en un solo toque; "Finalizar recorrido" la
+// completa Y apaga el GPS. Admin/dispatcher conservan sus propios botones en
+// renderRouteDetail() (startAction/completeAction) como respaldo para una emergencia (chofer sin
+// señal, celular sin batería) — esos NUNCA deben tocar el GPS de otra persona, por eso son
+// atributos [data-driver-*] separados con sus propios handlers (driverStartRoute()/
+// driverCompleteRoute() más abajo), no los mismos [data-start-route]/[data-complete-route] que usa
+// el panel de admin.
+function driverRouteLifecycleControl(truck) {
   const route = truck?.routeId ? routeById(truck.routeId) : null;
-  if (!route || route.status !== 'assigned') return '';
-  return `<div class="controls"><button type="button" class="btn-primary" data-start-route="${route.id}">Iniciar recorrido</button></div>`;
+  if (!route) return '';
+  if (route.status === 'assigned') return `<div class="controls"><button type="button" class="btn-primary" data-driver-start-route="${route.id}">Iniciar recorrido</button></div>`;
+  if (['started', 'in_progress', 'delayed'].includes(route.status)) return `<div class="controls"><button type="button" class="btn-primary" data-driver-complete-route="${route.id}">Finalizar recorrido</button></div>`;
+  return '';
 }
 function renderDriverMobile() {
   const truck = trucks.find((item) => item.id === driverVehicleId);
@@ -655,7 +660,7 @@ function renderDriverMobile() {
   return `<div class="mobile" id="driverMobile">
     <select id="driverVehicleSelect" aria-label="Vehículo del conductor">${trucksWithRoute.map((t) => `<option value="${t.id}" ${t.id === driverVehicleId ? 'selected' : ''}>${t.unit}</option>`).join('')}</select>
     <p id="driverRouteInfo">${routeInfoLine}</p>
-    <div id="driverStartRouteControl">${driverStartRouteControl(truck)}</div>
+    <div id="driverRouteLifecycleControl">${driverRouteLifecycleControl(truck)}</div>
     <p id="driverStopsProgress"></p>
     <div id="driverMap" class="real-map driver-map" role="application" aria-label="Posición y trazo del vehículo (demo)"></div>
     <p class="demo">${simulationNotice} · trazo histórico vía polling cada ${DRIVER_POLL_INTERVAL_MS / 1000}s (sin Realtime, ver docs/TECHNICAL_DEBT_REGISTER.md #14)</p>
@@ -916,8 +921,8 @@ function drawDriverPositions() {
   // own timer, so a driver who stays on one vehicle would otherwise keep seeing a stale percentage.
   const routeInfo = $('#driverRouteInfo');
   if (routeInfo) routeInfo.innerHTML = `${pill(truck.state)} ${routeName(truck.routeId)} · ${truck.progress}% completado`;
-  const startRouteControl = $('#driverStartRouteControl');
-  if (startRouteControl) startRouteControl.innerHTML = driverStartRouteControl(truck);
+  const startRouteControl = $('#driverRouteLifecycleControl');
+  if (startRouteControl) startRouteControl.innerHTML = driverRouteLifecycleControl(truck);
   if (driverPlannedLayer) driverPlannedLayer.remove();
   driverPlannedLayer = L.polyline(routeGeometry(truck.routeId), { color: '#94a3b8', weight: 4, opacity: .6, dashArray: '6 8' }).addTo(driverMap);
 
@@ -1126,12 +1131,12 @@ async function startRouteManually(routeId) {
   if (!route.started_at) route.started_at = new Date().toISOString();
   // Only re-opens the route detail drawer if it's already showing this route (admin/dispatcher
   // clicking "Iniciar ruta" there) — this is also reachable from the driver's own Conductor view
-  // (driverStartRouteControl()), which must NOT get yanked into the operations detail panel just
-  // because the chofer started their own route.
+  // (driverRouteLifecycleControl(), via driverStartRoute() below), which must NOT get yanked into
+  // the operations detail panel just because the chofer started their own route.
   if (selectedRouteId === routeId) selectRoute(routeId);
   const driverTruck = trucks.find((item) => item.id === driverVehicleId);
-  const driverStartControl = $('#driverStartRouteControl');
-  if (driverStartControl && driverTruck?.routeId === routeId) driverStartControl.innerHTML = driverStartRouteControl(driverTruck);
+  const driverStartControl = $('#driverRouteLifecycleControl');
+  if (driverStartControl && driverTruck?.routeId === routeId) driverStartControl.innerHTML = driverRouteLifecycleControl(driverTruck);
   $('#routeList').innerHTML = renderRoutes(routes);
   refreshResumen();
   if (realAdapter) {
@@ -1139,6 +1144,20 @@ async function startRouteManually(routeId) {
     const updated = await mirrorToRealAdapter(realAdapter.startRoute(realRouteId));
     if (updated?.started_at) route.started_at = updated.started_at; // el timestamp real gana sobre el sello local optimista
   }
+}
+// SW-044 (revisión tras pruebas en staging): ties the driver's own route lifecycle buttons
+// (driverRouteLifecycleControl()) to their GPS sharing automatically — one tap to start the route
+// AND start broadcasting position, one tap to finish AND stop. Confirmed with the Project Owner as
+// the primary workflow. Deliberately NOT reused by admin/dispatcher's plain [data-start-route]/
+// [data-complete-route] buttons in renderRouteDetail() — those are a GPS-free backup path and must
+// never toggle another person's (the driver's) GPS sharing state.
+async function driverStartRoute(routeId) {
+  await startRouteManually(routeId);
+  await startDriverGps();
+}
+async function driverCompleteRoute(routeId) {
+  await completeRouteManually(routeId);
+  stopDriverGps();
 }
 async function completeRouteManually(routeId) {
   const route = routeById(routeId);
@@ -1151,7 +1170,13 @@ async function completeRouteManually(routeId) {
   operationsAdapter.completeRoute(routeId);
   const truck = trucks.find((item) => item.routeId === routeId);
   if (truck) { truck.state = 'completed'; truck.progress = 100; }
-  selectRoute(routeId);
+  // SW-044: same guard as startRouteManually() — this is now also reachable from the driver's own
+  // Conductor view (driverCompleteRoute() below), which must not get yanked into the operations
+  // detail panel just because the chofer finished their own route.
+  if (selectedRouteId === routeId) selectRoute(routeId);
+  const driverTruck = trucks.find((item) => item.id === driverVehicleId);
+  const driverLifecycleControl = $('#driverRouteLifecycleControl');
+  if (driverLifecycleControl && driverTruck?.routeId === routeId) driverLifecycleControl.innerHTML = driverRouteLifecycleControl(driverTruck);
   $('#routeList').innerHTML = renderRoutes(routes);
   // Supervisor's "pendientes de verificación" queue is only re-rendered on demand (same as the
   // existing verify/resolve-incident handlers do) — without this it stays stale showing whatever
@@ -1162,6 +1187,12 @@ async function completeRouteManually(routeId) {
     const realRouteId = route.real_id ?? routeId;
     const updated = await mirrorToRealAdapter(realAdapter.completeRoute(realRouteId));
     if (updated?.completed_at) route.completed_at = updated.completed_at; // el timestamp real gana sobre el sello local optimista
+    // Bug real encontrado en staging: refreshRouteDurationHistory() (disparado desde selectRoute()
+    // más arriba) corría ANTES de que esta escritura terminara, así que la consulta de histórico
+    // llegaba a Supabase antes de que completed_at existiera — mostraba "medido" en la fila de
+    // duración (dato local optimista) pero "sin corridas medidas" en el histórico (leído de la base
+    // vieja) al mismo tiempo. Repetir la consulta acá, ya con la escritura confirmada, corrige eso.
+    if (selectedRouteId === routeId) refreshRouteDurationHistory(routeId);
   }
 }
 // SW-039 audit: Supervisor's "Verificar" button used to only set route.status directly — it never
@@ -1488,6 +1519,10 @@ document.addEventListener('click', (event) => {
   if (startRouteButton) startRouteManually(startRouteButton.dataset.startRoute);
   const completeRouteButton = event.target.closest('[data-complete-route]');
   if (completeRouteButton) completeRouteManually(completeRouteButton.dataset.completeRoute);
+  const driverStartRouteButton = event.target.closest('[data-driver-start-route]');
+  if (driverStartRouteButton) driverStartRoute(driverStartRouteButton.dataset.driverStartRoute);
+  const driverCompleteRouteButton = event.target.closest('[data-driver-complete-route]');
+  if (driverCompleteRouteButton) driverCompleteRoute(driverCompleteRouteButton.dataset.driverCompleteRoute);
   const reoptimizeButton = event.target.closest('[data-reoptimize-route]');
   if (reoptimizeButton) previewRouteReoptimization(reoptimizeButton.dataset.reoptimizeRoute);
   const resolveButton = event.target.closest('[data-resolve-incident]');
