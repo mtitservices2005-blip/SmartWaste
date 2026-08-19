@@ -107,6 +107,28 @@ function applyOpsViewVisibility(visibleViews, views = OPS_SUBVIEW_ROLES) {
   });
 }
 
+// Inserted into the (static, HTML-authored) topbar once a session actually resolves — never shown
+// for the anonymous/"skip to public" path, since there's no session to close. A full page reload
+// after signOut() is deliberate: app.js holds a lot of module-level mutable state (trucks/routes
+// arrays, simState, driverSimulators, hydration flags...) that a real teardown would have to reset
+// by hand; reloading is the same "start clean" guarantee login-as-a-different-user needs anyway.
+function renderLogoutButton(client) {
+  if (document.getElementById('authLogout')) return;
+  const topbar = document.querySelector('.topbar');
+  if (!topbar) return;
+  const button = document.createElement('button');
+  button.id = 'authLogout';
+  button.type = 'button';
+  button.className = 'auth-logout';
+  button.textContent = 'Cerrar sesión';
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    await client.auth.signOut();
+    window.location.reload();
+  });
+  topbar.append(button);
+}
+
 function renderOverlay() {
   const overlay = document.createElement('div');
   overlay.id = 'authOverlay';
@@ -134,7 +156,11 @@ export async function initAuthGate() {
   const config = readSupabaseConfig();
   if (!config) return null;
 
-  const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2.45.0');
+  // Vendored locally (frontend/vendor/supabase-js.mjs, built from node_modules via esbuild — see
+  // frontend/vendor/README.md) instead of a runtime esm.sh import: a real staging test found that
+  // esm.sh being unreachable from the visitor's network (corporate firewall, etc.) silently killed
+  // the whole auth gate — no login overlay, no error shown, just the raw demo dashboard unfiltered.
+  const { createClient } = await import('./vendor/supabase-js.mjs');
   const client = createClient(config.url, config.anonKey);
   authClient = client;
   const identity = createIdentityProvider(client);
@@ -144,6 +170,7 @@ export async function initAuthGate() {
       const ctx = await identity.resolveContext();
       applySectionVisibility(pickVisibleSections(ctx.role));
       applyOpsViewVisibility(pickVisibleOpsViews(ctx.role));
+      renderLogoutButton(client);
       return ctx;
     } catch {
       return null;
