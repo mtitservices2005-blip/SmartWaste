@@ -17,6 +17,13 @@ const app = $('#app');
 const driverName = (id) => drivers.find((driver) => driver.id === id)?.name ?? 'Sin asignar';
 const routeById = (id) => routes.find((route) => route.id === id);
 const routeName = (id) => routeById(id)?.name ?? 'Sin ruta asignada';
+// SW-044 fix: truck.routeId never got cleared once a route finished, so a vehicle stayed "busy"
+// (excluded from every "vehículos disponibles" select) forever after its first route ever —
+// blocking real fleet reuse, found while testing the new "Iniciar/Finalizar recorrido" flow with a
+// real vehicle in staging. Keeps truck.routeId set for display purposes (routeName(), "Ver ruta
+// completa", the map) instead of nulling it out — a truck only counts as available again once its
+// current route actually reached a terminal state.
+const isTruckAvailable = (truck) => !truck.routeId || ['completed', 'verified'].includes(routeById(truck.routeId)?.status);
 const label = (state) => stateLabels[state] ?? state;
 const routePosition = (truck) => truck.position ?? routeGeometry(truck.routeId)[truck.positionIndex ?? 0] ?? pilotMunicipality.center;
 // SW-044: only returns a value once both timestamps exist (see startRouteManually()/
@@ -323,7 +330,7 @@ function renderRouteDetail(route) {
   // time before this, via "Crear ruta"'s own select), and marking a route completed (the simulation
   // tick caps progress at 99 — see startSimulation() — so nothing ever pushed a route into
   // Supervisor's "pendientes de verificación" queue without this).
-  const availableTrucks = trucks.filter((truck) => !truck.routeId);
+  const availableTrucks = trucks.filter(isTruckAvailable);
   const assignAction = (!route.truckId || route.truckId === 'Sin asignar')
     ? (availableTrucks.length
       ? `<div class="controls"><select id="assignVehicleSelect">${availableTrucks.map((truck) => `<option value="${truck.id}">${truck.unit}</option>`).join('')}</select><button type="button" class="btn-primary" data-assign-vehicle="${route.id}">Asignar vehículo</button></div>`
@@ -463,7 +470,7 @@ function renderFleetManagement() {
 }
 function refreshFleetSelects() {
   const createRouteVehicleSelect = $('#createRouteVehicle');
-  if (createRouteVehicleSelect) createRouteVehicleSelect.innerHTML = `<option value="">Sin vehículo asignado (asignar después)</option>${trucks.filter((truck) => !truck.routeId).map((truck) => `<option value="${truck.id}">${truck.unit}</option>`).join('')}`;
+  if (createRouteVehicleSelect) createRouteVehicleSelect.innerHTML = `<option value="">Sin vehículo asignado (asignar después)</option>${trucks.filter(isTruckAvailable).map((truck) => `<option value="${truck.id}">${truck.unit}</option>`).join('')}`;
   const vehicleList = $('#vehicleList');
   if (vehicleList) vehicleList.innerHTML = renderVehicleList();
   const driverList = $('#driverList');
@@ -623,7 +630,7 @@ async function createDriverAccount(driverId) {
 // supabase/README.md), so there's nothing here to restrict by role client-side; the restriction is
 // real once this UI is pointed at Supabase.
 function renderCreateRoute() {
-  const availableTrucks = trucks.filter((truck) => !truck.routeId);
+  const availableTrucks = trucks.filter(isTruckAvailable);
   return `<div class="card" id="createRoute">
     <h3>Crear ruta</h3>
     <p class="demo">${demoNotice} · Clic en el mapa para agregar puntos al trazo, en orden. Al finalizar se intenta ajustar el trazo a calles reales (OSRM); si no es posible, se usa línea recta entre los puntos. Opcionalmente, puedes optimizar el orden de las paradas (excepto la primera) para minimizar la distancia recorrida antes de ajustar a calles.</p>
@@ -1394,7 +1401,7 @@ async function finishCreateRoute() {
   drawnRoutePoints = [];
   redrawCreateRouteTrace();
   if (nameInput) nameInput.value = '';
-  if (vehicleSelect) vehicleSelect.innerHTML = `<option value="">Sin vehículo asignado (asignar después)</option>${trucks.filter((item) => !item.routeId).map((item) => `<option value="${item.id}">${item.unit}</option>`).join('')}`;
+  if (vehicleSelect) vehicleSelect.innerHTML = `<option value="">Sin vehículo asignado (asignar después)</option>${trucks.filter(isTruckAvailable).map((item) => `<option value="${item.id}">${item.unit}</option>`).join('')}`;
   $('#routeList').innerHTML = renderRoutes(routes);
   refreshResumen();
   refreshFleetSelects(); // SW-043: picks up the just-created route in routeFocusSelect()'s dropdown
