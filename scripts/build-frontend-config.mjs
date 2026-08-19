@@ -33,11 +33,11 @@ function stripPreviousConfigBlock(html) {
   return html.slice(0, startIndex) + html.slice(afterEnd).replace(/^\n/, '');
 }
 
-function writeSupabaseConfigIntoIndexHtml({ url, anonKey, municipality_id }) {
+function writeSupabaseConfigIntoIndexHtml({ url, anonKey, municipality_id, hideDemo }) {
   const html = readFileSync(INDEX_HTML_PATH, 'utf8');
   const configBlock = `${CONFIG_START}
   <script>
-    window.SMARTWASTE_SUPABASE_CONFIG = ${JSON.stringify({ url, anonKey, municipality_id: municipality_id || null })};
+    window.SMARTWASTE_SUPABASE_CONFIG = ${JSON.stringify({ url, anonKey, municipality_id: municipality_id || null, hideDemo: Boolean(hideDemo) })};
   </script>
   ${CONFIG_END}
 `;
@@ -71,6 +71,11 @@ const anonKey = process.env.SUPABASE_ANON_KEY;
 if (!url || !anonKey) {
   console.warn('\n⚠️  SUPABASE_URL/SUPABASE_ANON_KEY no configuradas — dist/ queda en modo demo puro (sin backend real). Configuralas en las variables de entorno del hosting si esta build es para staging real.\n');
 } else {
-  writeSupabaseConfigIntoIndexHtml({ url, anonKey, municipality_id: process.env.SUPABASE_MUNICIPALITY_ID });
-  console.log(`\ndist/index.html generado con SMARTWASTE_SUPABASE_CONFIG apuntando a ${url}${process.env.SUPABASE_MUNICIPALITY_ID ? ` (municipality_id: ${process.env.SUPABASE_MUNICIPALITY_ID})` : ' (sin municipality_id — el portal ciudadano seguirá en modo demo)'}.\n`);
+  // SW-044: opt-in, deployment-level — hides the bundled demo trucks/routes/drivers/incidents
+  // permanently on this deployment (frontend/app.js), even once a municipality has real data of
+  // its own. Absent/false changes nothing (rule 5 — every deployment without this set keeps
+  // showing the demo exactly as before).
+  const hideDemo = process.env.SUPABASE_HIDE_DEMO === 'true';
+  writeSupabaseConfigIntoIndexHtml({ url, anonKey, municipality_id: process.env.SUPABASE_MUNICIPALITY_ID, hideDemo });
+  console.log(`\ndist/index.html generado con SMARTWASTE_SUPABASE_CONFIG apuntando a ${url}${process.env.SUPABASE_MUNICIPALITY_ID ? ` (municipality_id: ${process.env.SUPABASE_MUNICIPALITY_ID})` : ' (sin municipality_id — el portal ciudadano seguirá en modo demo)'}${hideDemo ? ' · datos demo ocultos (SUPABASE_HIDE_DEMO=true)' : ''}.\n`);
 }

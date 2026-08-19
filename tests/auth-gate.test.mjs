@@ -56,11 +56,16 @@ assert.equal(readSupabaseConfig({}), null);
 assert.equal(readSupabaseConfig({ SMARTWASTE_SUPABASE_CONFIG: { url: 'http://x' } }), null);
 assert.deepEqual(
   readSupabaseConfig({ SMARTWASTE_SUPABASE_CONFIG: { url: 'http://x', anonKey: 'k' } }),
-  { url: 'http://x', anonKey: 'k', municipality_id: null }
+  { url: 'http://x', anonKey: 'k', municipality_id: null, hideDemo: false }
 );
 assert.deepEqual(
   readSupabaseConfig({ SMARTWASTE_SUPABASE_CONFIG: { url: 'http://x', anonKey: 'k', municipality_id: 'muni-1' } }),
-  { url: 'http://x', anonKey: 'k', municipality_id: 'muni-1' }
+  { url: 'http://x', anonKey: 'k', municipality_id: 'muni-1', hideDemo: false }
+);
+// SW-044: deployment-level opt-out of ever showing the bundled demo data.
+assert.deepEqual(
+  readSupabaseConfig({ SMARTWASTE_SUPABASE_CONFIG: { url: 'http://x', anonKey: 'k', hideDemo: true } }),
+  { url: 'http://x', anonKey: 'k', municipality_id: null, hideDemo: true }
 );
 
 // SECTION_ROLES itself: ciudadania must stay public (regression guard against accidentally gating

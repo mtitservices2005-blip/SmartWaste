@@ -132,6 +132,55 @@ Verificado con `tests/operations-adapter.test.mjs` (extendido: demo adapter — 
 
 ---
 
+## SW-043 — Selector de ruta en el mapa + seguir al camión ✅ Hecho (2026-08-19)
+
+**Por qué:** dos brechas de UX encontradas al probar SW-042 en staging — el combobox junto al botón "Iniciar" (arriba del mapa de Operaciones) estaba poblado con vehículos pero nunca conectado a nada, y el mapa no seguía al camión cuando se enfocaba una sola ruta (se reajustaba a los límites estáticos del trazo completo en cada redibujo).
+
+**Resultado:** el combobox se repropuso como selector de rutas — elegir una llama a `selectRoute()`, mismo efecto que clickear su fila/trazo, con sincronización en ambas direcciones. `drawMapLayers()` solo hace `fitBounds()` una vez al enfocar una ruta por primera vez; en cada redibujo posterior (incluido el polling de GPS real) hace `panTo()` a la posición actual del camión, manteniéndolo centrado. Sin migración — solo `frontend/app.js`. PR #60, verificado interactivamente en staging por el Project Owner.
+
+---
+
+## SW-044 — "Iniciar ruta" + duración real medida ✅ Hecho (2026-08-19)
+
+**Por qué:** al revisar el ciclo operativo completo tras SW-042/043, se confirmó un hueco real — nada en la interfaz llamaba nunca a `startRoute()` (existía en ambos adaptadores desde antes, sin conectar). Una ruta pasaba directo de "asignada" a "completada" sin ningún momento de arranque capturado, así que su duración solo se podía **estimar** por fórmula (`shared/impact-center.js`, pestaña "Uso"), nunca medir de verdad. Sin un timestamp real de inicio tampoco tenía sentido construir nada de duración medida ni histórico entre corridas.
+
+**Alcance:**
+1. Migración: `route_runs.started_at`/`completed_at` (`supabase/migrations/202607150012_sw044_route_run_timing.sql`) — sin backfill inventado para filas previas a la migración (quedan `null`, tratadas como "no medido", nunca se les asigna un timestamp falso).
+2. `shared/operations-adapter.js`: `transitionRouteRun()` (real) y `transitionRoute()`/`updateRoute()` (demo) sellan `started_at`/`completed_at` la primera vez que se alcanza ese estado — idempotente, nunca pisa un timestamp ya existente.
+3. Botón "Iniciar ruta" en el detalle de ruta (admin/dispatcher) y "Iniciar recorrido" en la vista Conductor (el propio chofer) — ambos disparan la misma `startRouteManually()`, mismo patrón dual-write (local + espejo a Supabase) que el resto de las transiciones de ruta. Solo visible con vehículo asignado y antes de haber arrancado (`ROUTE_TRANSITIONS` en `shared/contracts.js` solo permite `assigned→started`).
+4. Duración medida vs. estimada en el detalle de ruta: cuando existen ambos timestamps, muestra `completed_at - started_at` marcado "medido"; si no, cae a la estimación por fórmula existente marcada "estimado" — mismo criterio de "nunca inventar un dato real" que la insignia GPS real/simulado del mapa (SW-036).
+5. Histórico entre corridas: para una ruta real, al abrir su detalle se calcula de forma asíncrona (vía `listRouteRuns()`, ya existente) cuántas corridas completadas tienen duración medida, con su promedio y la última — sin tabla nueva, `route_runs` ya modela una fila por corrida.
+6. Bug preexistente corregido en el camino, necesario para que esto funcione tras un reload: `hydrateRoutes()` tomaba `status` de `routes` (que solo avanza una vez, de "planned" a "assigned", y nunca más) en vez de `route_runs.status` (el que sí refleja started/in_progress/completed/verified) — una ruta real recargada quedaba mostrando "Asignada" para siempre, lo que además habría escondido el botón "Iniciar ruta" detrás de la condición equivocada.
+
+**Fuera de alcance (confirmado explícitamente con el Project Owner):** tiempo promedio entre paradas medido (requiere correlacionar GPS real con cada parada individual — más ambicioso, evaluado como posible extensión futura de este mismo hito). Calendario de rutas (confirmado que no hace falta por ahora — cada ruta es la misma corrida semanal salvo excepción).
+
+### Resultado
+
+Verificado con `tests/operational-cycle.test.mjs` (extendido: `started_at`/`completed_at` deben persistir y `completed_at >= started_at`, contra Supabase local real — no ejecutable en este sandbox sin Docker, mismo límite de siempre) y `tests/operations-adapter.test.mjs` (extendido: demo adapter estampa y no pisa los timestamps; adaptador real con cliente simulado cubre `transitionRouteRun()` estampando en `started`/`completed` y NO estampando cuando el timestamp ya existe). `node --check` sobre los archivos JS tocados y verificación del pipeline de build de Vercel (grafo de imports). Verificación visual en navegador pendiente del Project Owner en staging — este sandbox no tiene salida de red hacia el CDN de Leaflet.
+
+### Revisión tras pruebas en staging (mismo día)
+
+La verificación interactiva del Project Owner en staging confirmó los pasos básicos ("Iniciar ruta" → "Marcar como completada" → duración medida), pero encontró dos ajustes reales:
+
+1. **Decisión de producto confirmada:** el flujo principal debe ser 100% del chofer — "Iniciar recorrido" arranca la ruta **y** prende el GPS real en un solo toque; "Finalizar recorrido" la completa **y** apaga el GPS. Admin/dispatcher conservan sus propios botones (`renderRouteDetail()`) como respaldo para una emergencia (chofer sin señal, celular sin batería), pero esos nunca tocan el GPS de otra persona — atributos `[data-driver-start-route]`/`[data-driver-complete-route]` separados de los `[data-start-route]`/`[data-complete-route]` de admin, cada uno con su propio handler (`driverStartRoute()`/`driverCompleteRoute()` vs. `startRouteManually()`/`completeRouteManually()` directamente).
+2. **Bug real encontrado:** la fila "Duración" mostraba "medido" (dato local optimista) mientras el histórico de corridas debajo mostraba "todavía no hay corridas medidas" al mismo tiempo — condición de carrera entre la consulta del histórico (disparada apenas se abre el detalle) y la escritura real de `completed_at` en Supabase, que todavía no había terminado. Corregido repitiendo la consulta del histórico después de que la escritura real se confirma.
+
+### Cierre — verificación interactiva completa en staging (2026-08-19)
+
+La sesión de verificación en staging terminó destapando una cadena larga de bugs reales preexistentes (ninguno introducido por este hito, todos expuestos por ser la primera vez que se ejercitaba el ciclo completo con un vehículo real, reasignado varias veces, en un navegador real) — todos documentados con su hallazgo/causa/fix en `docs/TECHNICAL_DEBT_REGISTER.md` ítems **#27 a #31**:
+
+- #27: un vehículo quedaba "ocupado" para siempre después de su primera ruta (`truck.routeId` nunca se liberaba).
+- #28: `assignTruckToRoute()` explotaba en silencio para una ruta real hidratada tras un reload ("Asignar vehículo" no hacía nada, sin error visible).
+- #29: `hydrateRoutes()` le asignaba a un vehículo la primera ruta con la que se cruzaba en vez de la más reciente (una ruta vieja completada "ganaba" para siempre sobre una nueva).
+- #30: la Edge Function `create-driver-account` nunca manejó CORS — nunca se había invocado desde un navegador real en un dominio propio.
+- #31: la mezcla demo+real dificultaba probar — se agregó `SUPABASE_HIDE_DEMO` (opt-in por despliegue, no cambia el comportamiento por defecto), lo que a su vez destapó dos crashes de módulo completo por asumir que `trucks`/`routes` nunca están vacíos (`trucks[0].id` sin verificar, y `driverVehicleId` nunca se sincronizaba con el primer vehículo real cuando arrancaba en `null`).
+
+**Resultado final verificado en staging por el Project Owner:** ciclo completo funcionando de punta a punta — crear ruta → asignar vehículo real → reasignar sin quedar "atascado" → el chofer inicia el recorrido (arranca la ruta y el GPS real en un solo toque) → se mueve en el mapa con seguimiento en vivo → finaliza (cierra la ruta y apaga el GPS) → duración real medida visible en el detalle, con histórico entre corridas. Con `SUPABASE_HIDE_DEMO=true`, un municipio real ya no muestra ningún dato demo, sin importar cuántos datos reales acumule.
+
+SW-044 queda cerrado. Pendiente de que el Project Owner mergee el PR #61 (varios commits, todos en la misma rama `feature/sw044-route-start-duration` — se mantuvieron juntos porque cada fix era un prerrequisito directo para poder seguir verificando el mismo hito, no hitos separados).
+
+---
+
 ## Resumen de secuencia y dependencias
 
 | Hito | Estado | Depende de | Severidad de lo que resuelve | Esfuerzo relativo |
@@ -143,5 +192,7 @@ Verificado con `tests/operations-adapter.test.mjs` (extendido: demo adapter — 
 | SW-040 | ✅ Hecho (2026-08-19) | SW-036, SW-037, SW-038, SW-039 | — (habilitador) | Medio, con gate de seguridad |
 | SW-041 | Propuesto | SW-037 (wizard ya construido), SW-040 | — (no técnico + ajuste de datos) | Bajo técnico, alto en coordinación con el ayuntamiento |
 | SW-042 | ✅ Hecho (2026-08-19) | SW-040 | Media — sin esto, un despachador no podía operar sin editar la base de datos a mano | Bajo-medio |
+| SW-043 | ✅ Hecho (2026-08-19) | SW-042 | Baja — UX del mapa | Bajo |
+| SW-044 | ✅ Hecho (2026-08-19) | SW-042, SW-043 | Media — sin duración medida, las estadísticas de uso quedan siempre estimadas | Medio |
 
 No se propone trabajar dos de estos hitos en paralelo en la misma rama (regla 2) — y, en la práctica, ya está pasando entre sesiones/herramientas distintas sobre el mismo repo (ver nota de coordinación al inicio); antes de arrancar SW-038 hay que confirmar con quien esté en Claude Code qué rama/hito real está tomando ese número para no repetir el choque de SW-037. SW-040 y SW-041 en particular requieren autorización explícita del Project Owner antes de tocar cualquier entorno remoto o dato real de un municipio, consistente con la regla 6 (no afirmar integraciones reales sin evidencia) y la regla 10 (esperar autorización antes de commit/push/PR).

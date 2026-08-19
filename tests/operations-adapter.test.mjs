@@ -13,12 +13,32 @@ assert(adapter.listVehicles().length > 0);
 const route = adapter.createRoute({ id:'route-test', name:'Test', sectors:[], sector:'Centro urbano' });
 assert.equal(route.status, 'planned');
 assert.equal(adapter.assignVehicle('route-test','truck-01').status, 'assigned');
-assert.equal(adapter.startRoute('route-test').status, 'started');
+const startedDemo = adapter.startRoute('route-test');
+assert.equal(startedDemo.status, 'started');
+// SW-044: the demo adapter must stamp started_at/completed_at too (off the browser's own clock),
+// not just the real adapter — routeMeasuredDurationMinutes() (frontend/app.js) needs both to show
+// a measured duration regardless of which adapter is active.
+assert.ok(startedDemo.started_at, 'demo startRoute() must stamp started_at');
 assert.equal(adapter.updateProgress('route-test', 50).status, 'in_progress');
 assert.equal(adapter.markDelayed('route-test').status, 'delayed');
-assert.equal(adapter.completeRoute('route-test').status, 'completed');
+const completedDemo = adapter.completeRoute('route-test');
+assert.equal(completedDemo.status, 'completed');
+assert.ok(completedDemo.completed_at, 'demo completeRoute() must stamp completed_at');
+assert.equal(completedDemo.started_at, startedDemo.started_at, 'started_at must survive later transitions unchanged');
 assert.equal(adapter.verifyRoute('route-test').status, 'verified');
 assert(adapter.listPositions().every((p) => p.municipality_id));
+
+// Idempotent stamping: completeRoute() (unlike startRoute(), which is guarded by
+// canTransitionRoute() and can't legally run twice on the same route) uses updateRoute()
+// internally with no transition check, so calling it again on an already-completed route is a
+// realistic path (e.g. a duplicated click) — must not shift completed_at forward.
+const timingRoute = adapter.createRoute({ id: 'route-timing-test', name: 'Timing test', sectors: [], sector: 'Centro urbano' });
+adapter.assignVehicle(timingRoute.id, 'truck-02');
+const firstComplete = adapter.completeRoute(timingRoute.id);
+assert.ok(firstComplete.completed_at);
+await new Promise((resolve) => setTimeout(resolve, 5));
+const secondComplete = adapter.completeRoute(timingRoute.id);
+assert.equal(secondComplete.completed_at, firstComplete.completed_at, 'completed_at must not change on a repeated completeRoute() call');
 
 // SW-025: saveRouteStops/listRouteStops persistence via the demo adapter, using a real
 // (route-engine-generated) point sequence, not hand-written fixture points.
@@ -199,5 +219,49 @@ const noClientAssignResult = await createSupabaseOperationsAdapter(null).assignD
 assert.equal(noClientAssignResult.ok, true);
 assert.equal(noClientAssignResult.source, 'DEMO_FALLBACK');
 assert.equal(noClientAssignResult.data.driverId, 'drv-01');
+
+// SW-044: transitionRouteRun() (the shared engine behind startRoute()/completeRoute()/etc. on the
+// real adapter) stamps started_at/completed_at on the corresponding transition, and must not
+// overwrite either if the route_run already has one (e.g. completing again via updateProgress(100)
+// after completeRoute() already ran). Fake client mimics the exact chain transitionRouteRun() calls:
+// select().eq().order().limit().maybeSingle() to read the current row, then
+// update().eq()[.eq()].select().single() to write it.
+function makeRouteRunFakeClient(currentRun) {
+  let updatePatch = null;
+  const client = {
+    from: (table) => {
+      assert.equal(table, 'route_runs');
+      return {
+        select: () => ({ eq: () => ({ order: () => ({ limit: () => ({ maybeSingle: async () => ({ data: currentRun, error: null }) }) }) }) }),
+        update: (patch) => {
+          updatePatch = patch;
+          return { eq: () => ({ select: () => ({ single: async () => ({ data: { ...currentRun, ...patch }, error: null }) }) }) };
+        }
+      };
+    }
+  };
+  return { client, getUpdatePatch: () => updatePatch };
+}
+
+const { client: startRunClient, getUpdatePatch: getStartPatch } = makeRouteRunFakeClient({ id: 'run-1', route_id: 'route-x', status: 'assigned', started_at: null, completed_at: null });
+const realStartResult = await createSupabaseOperationsAdapter(startRunClient).startRoute('route-x');
+assert.equal(realStartResult.ok, true);
+assert.ok(getStartPatch().started_at, 'must stamp started_at on the started transition');
+assert.equal(realStartResult.data.status, 'started');
+
+// Already has started_at (shouldn't normally happen mid-'assigned', but the guard is unconditional
+// on the column, not the status) — must not be included in the update patch, i.e. not overwritten.
+const { client: alreadyStartedClient, getUpdatePatch: getAlreadyStartedPatch } = makeRouteRunFakeClient({ id: 'run-2', route_id: 'route-x', status: 'assigned', started_at: '2020-01-01T00:00:00Z', completed_at: null });
+await createSupabaseOperationsAdapter(alreadyStartedClient).startRoute('route-x');
+assert.equal(getAlreadyStartedPatch().started_at, undefined, 'must not overwrite an existing started_at');
+
+const { client: completeRunClient, getUpdatePatch: getCompletePatch } = makeRouteRunFakeClient({ id: 'run-3', route_id: 'route-x', status: 'in_progress', started_at: '2020-01-01T00:00:00Z', completed_at: null });
+const realCompleteResult = await createSupabaseOperationsAdapter(completeRunClient).completeRoute('route-x');
+assert.equal(realCompleteResult.ok, true);
+assert.ok(getCompletePatch().completed_at, 'must stamp completed_at on the completed transition');
+
+const { client: alreadyCompletedClient, getUpdatePatch: getAlreadyCompletedPatch } = makeRouteRunFakeClient({ id: 'run-4', route_id: 'route-x', status: 'delayed', started_at: '2020-01-01T00:00:00Z', completed_at: '2020-01-01T01:00:00Z' });
+await createSupabaseOperationsAdapter(alreadyCompletedClient).completeRoute('route-x');
+assert.equal(getAlreadyCompletedPatch().completed_at, undefined, 'must not overwrite an existing completed_at');
 
 console.log('operations-adapter ok');

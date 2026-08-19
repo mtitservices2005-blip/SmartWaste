@@ -24,11 +24,24 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 
 const STAFF_ROLES = ['municipal_admin', 'dispatcher'];
 
+// SW-044 (encontrado en staging): esta función nunca manejó CORS — nunca se había probado desde un
+// navegador real en un dominio propio, solo contra local (ver nota histórica arriba). El cliente
+// del navegador manda un preflight OPTIONS antes del POST real (Authorization/apikey son headers
+// "no simples"); sin estos headers en TODAS las respuestas — incluida la del preflight — el
+// navegador bloquea la llamada entera y supabase-js la reporta como "Failed to send a request to
+// the Edge Function", sin que el código de la función llegue a correr en absoluto (coincide con los
+// logs: "booted" seguido de "shutdown"/EarlyDrop, sin ningún log propio de la función en el medio).
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type'
+};
+
 function json(body: unknown, status: number) {
-  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+  return new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 }
 
 Deno.serve(async (req: Request) => {
+  if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders });
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
 
   const authHeader = req.headers.get('Authorization');

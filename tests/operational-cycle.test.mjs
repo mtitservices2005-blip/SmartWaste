@@ -60,6 +60,10 @@ assert.equal(assignmentCheck.data.status, 'assigned');
 const started = await driverAdapter.startRoute(routeId);
 assert.equal(started.ok, true, `startRoute failed: ${JSON.stringify(started.error)}`);
 assert.equal(started.data.status, 'started');
+// SW-044: started_at (supabase/migrations/202607150012_sw044_route_run_timing.sql) is what makes a
+// route's duration measurable instead of only estimated — must actually persist, not be silently
+// discarded like route_runs.progress used to be (item 4 above).
+assert.ok(started.data.started_at, 'started_at must be stamped on the started transition');
 
 // 4. Driver reports progress.
 const progressed = await driverAdapter.updateProgress(routeId, 50);
@@ -76,6 +80,10 @@ assert.equal(completed.data.status, 'completed');
 // Codex review on PR #33: completing a run must force progress to 100 regardless of the last
 // updateProgress() value, matching the demo adapter's completeRoute() semantics.
 assert.equal(completed.data.progress, 100, 'completing a route must set progress to 100');
+// SW-044: completed_at must persist too, and must not be before started_at — the measured duration
+// (frontend/app.js's routeMeasuredDurationMinutes()) is completed_at - started_at.
+assert.ok(completed.data.completed_at, 'completed_at must be stamped on the completed transition');
+assert.ok(Date.parse(completed.data.completed_at) >= Date.parse(started.data.started_at), 'completed_at must not be before started_at');
 
 // 6. Driver reports an incident tied to their own route_run (driver_insert_own_incident policy).
 const incident = await driverAdapter.registerIncident({ route_run_id: routeRunCheck.data.id, vehicle_id: scenario.vehicleA.id, type: 'missed_pickup', description: 'Contenedor bloqueado' });
