@@ -134,7 +134,13 @@ const driverSimulators = Object.fromEntries(trucksWithRoute.map((truck) => {
   simulator.index = truck.positionIndex ?? 0; // start the trail aligned with the truck's current demo progress
   return [truck.id, simulator];
 }));
-let driverVehicleId = trucksWithRoute[0]?.id ?? trucks[0].id;
+// SW-044: trucks[0] used to be safe to assume (the 5 bundled demo trucks always existed at module
+// init) — with SUPABASE_HIDE_DEMO=true (or a real municipality genuinely starting empty), trucks
+// can now be [] at this exact point, and trucks[0].id threw synchronously, killing the whole
+// module's evaluation before anything downstream (the click listeners, the initial render) ever
+// ran — same failure shape as the earlier esm.sh/missing-shared/ bugs (SW-040): no login, no
+// buttons, nothing but the static topbar, no visible error.
+let driverVehicleId = trucksWithRoute[0]?.id ?? trucks[0]?.id ?? null;
 let driverMap;
 let driverMapReady = false;
 let driverPlannedLayer = null;
