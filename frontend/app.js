@@ -562,7 +562,7 @@ function renderOnboardingVehicleStep() {
 }
 function renderOnboardingDriverStep() {
   return `<p class="demo">Vehículo registrado: <b>${onboardingVehicle.unit}</b></p>
-    <div class="controls"><input id="onboardDriverName" placeholder="Nombre del chofer"><input id="onboardDriverPhone" placeholder="Teléfono"></div>
+    <div class="controls"><input id="onboardDriverName" placeholder="Nombre del chofer"><input id="onboardDriverPhone" placeholder="Teléfono"><input id="onboardDriverEmail" type="email" placeholder="Correo (para cuenta de acceso, opcional)"></div>
     <p id="onboardDriverStatus" class="demo"></p>
     <div class="controls"><button type="button" class="btn-primary" data-onboard="driver">Siguiente: primera ruta</button></div>`;
 }
@@ -580,11 +580,14 @@ async function onboardVehicleStep() {
   if (overlay) overlay.outerHTML = renderOnboardingOverlay();
 }
 async function onboardDriverStep() {
-  const nameInput = $('#onboardDriverName'); const phoneInput = $('#onboardDriverPhone'); const status = $('#onboardDriverStatus');
+  const nameInput = $('#onboardDriverName'); const phoneInput = $('#onboardDriverPhone'); const emailInput = $('#onboardDriverEmail'); const status = $('#onboardDriverStatus');
   const name = nameInput?.value.trim();
   if (!name) { if (status) status.textContent = 'Ingresa un nombre para el chofer.'; return; }
   if (status) status.textContent = 'Registrando chofer…';
-  onboardingDriver = await createDriver({ name, phone: phoneInput?.value.trim() ?? '' }, status);
+  // SW-044: el paso de chofer del wizard no tenía campo de email — sin él, "Crear cuenta de
+  // acceso" (renderDriverList(), requiere driver.email) nunca aparecía para un chofer dado de alta
+  // acá, a diferencia del formulario normal de Flota (createDriverFromForm()) que sí lo pide.
+  onboardingDriver = await createDriver({ name, phone: phoneInput?.value.trim() ?? '', email: emailInput?.value.trim() || undefined }, status);
   finishOnboardingHandoff();
 }
 // Cierra el wizard y entrega el control al flujo de "Crear ruta" que ya existe (mismo mapa/OSRM/
