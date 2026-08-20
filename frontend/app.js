@@ -9,6 +9,7 @@ import { fetchBuildingCount, estimateCollectionMinutes } from '../shared/overpas
 import { optimizeWaypointOrder } from '../shared/route-optimizer.js';
 import { positionFromGeolocationEvent, shouldSendPosition } from '../shared/browser-geolocation.js';
 import { suggestReoptimizedOrder } from '../shared/route-reoptimizer.js';
+import { summarizeRouteRunsByRoute, summarizeRouteRunsByDriver } from '../shared/route-run-stats.js';
 import { IMPACT_DEMO_NOTICE, IMPACT_SCENARIO_NOTICE, defaultImpactAssumptions, metricReadiness, calculateImpactMetrics } from '../shared/impact-center.js';
 import { initAuthGate, readSupabaseConfig, getAuthClient } from './auth-gate.js';
 
@@ -449,14 +450,55 @@ function renderIncidenciasPanel() {
   return `<h2>Incidencias</h2><p class="demo">${demoNotice}</p>
     <div class="list">${incidents.map((incident) => `<button class="row selectable${incident.code === selectedIncidentId ? ' selected' : ''}" data-incident="${incident.code}"><span>${incident.type}<br>${incident.sector}</span>${pill('open')}</button>`).join('')}</div>`;
 }
+// SW-047: eficiencia por ruta/chofer, agregada sobre corridas medidas reales (route_runs con GPS
+// real, SW-044/045) — solo tiene sentido con backend real conectado (la demo no tiene route_runs
+// persistidos), mismo criterio que refreshRouteDurationHistory(). El panel se rellena de forma
+// asíncrona (refreshEfficiencyDashboard()) al abrir la pestaña, no al construir este HTML estático.
+function renderEstadisticasPanel() {
+  return `<h2>Estadísticas</h2><p class="demo">${demoNotice} · Eficiencia por ruta y chofer, calculada sobre corridas con duración/distancia medida real.</p>
+    <h3>Por ruta</h3><div id="statsByRoute" class="list"><p class="demo">Cargando…</p></div>
+    <h3>Por chofer</h3><div id="statsByDriver" class="list"><p class="demo">Cargando…</p></div>`;
+}
+async function refreshEfficiencyDashboard() {
+  const byRouteEl = document.getElementById('statsByRoute');
+  const byDriverEl = document.getElementById('statsByDriver');
+  if (!byRouteEl || !byDriverEl) return;
+  if (!realAdapter) {
+    const message = '<p class="demo">Requiere un backend real conectado — la demo no acumula corridas persistidas.</p>';
+    byRouteEl.innerHTML = message;
+    byDriverEl.innerHTML = message;
+    return;
+  }
+  const result = await realAdapter.listRouteRuns();
+  if (currentOpsView() !== 'estadisticas') return; // el usuario navegó a otra pestaña mientras esto estaba en vuelo
+  if (!result.ok) {
+    byRouteEl.innerHTML = '<p class="demo">No se pudo cargar el histórico de corridas.</p>';
+    byDriverEl.innerHTML = '<p class="demo">No se pudo cargar el histórico de corridas.</p>';
+    return;
+  }
+  const byRoute = summarizeRouteRunsByRoute(result.data);
+  const byDriver = summarizeRouteRunsByDriver(result.data);
+  byRouteEl.innerHTML = byRoute.length
+    ? byRoute.map((stat) => {
+        const route = routes.find((r) => r.real_id === stat.routeId);
+        return `<div class="row"><span>${route?.name ?? 'Ruta eliminada'}<br><small>${stat.runsCount} corrida(s)</small></span><span>${formatMinutes(stat.avgDurationMinutes)} prom. · última ${formatMinutes(stat.lastDurationMinutes)}${stat.avgDistanceKm != null ? ` · ${stat.avgDistanceKm} km prom.` : ''}</span></div>`;
+      }).join('')
+    : '<p class="demo">Todavía no hay corridas con duración medida.</p>';
+  byDriverEl.innerHTML = byDriver.length
+    ? byDriver.map((stat) => {
+        const driver = drivers.find((d) => d.real_id === stat.driverId);
+        return `<div class="row"><span>${driver?.name ?? 'Chofer eliminado'}<br><small>${stat.runsCount} corrida(s)</small></span><span>${formatMinutes(stat.avgDurationMinutes)} prom. · última ${formatMinutes(stat.lastDurationMinutes)}${stat.avgDistanceKm != null ? ` · ${stat.avgDistanceKm} km prom.` : ''}</span></div>`;
+      }).join('')
+    : '<p class="demo">Todavía no hay corridas con duración medida.</p>';
+}
 // Fase 3 UX (auditoría SW-020): "Municipal" hacía 5 cosas a la vez en un solo scroll (buscar rutas/
 // vehículos/incidencias, gestionar flota, crear rutas), y el mapa vivía en su propia pestaña de
 // nivel superior aparte. Agrupa Mapa/Rutas/Flota/Incidencias bajo un único espacio "Operaciones"
 // con sub-vistas locales (hash propio #operaciones/<vista>, no rompe deep-links existentes) —
 // mismas funciones/estado que antes (renderRoutes(), renderVehicleList(), renderFleetManagement(),
 // renderCreateRoute() sin cambios), solo reorganizado en paneles separados.
-const OPS_VIEWS = ['mapa', 'rutas', 'flota', 'incidencias'];
-const OPS_VIEW_LABELS = { mapa: 'Mapa', rutas: 'Rutas', flota: 'Flota', incidencias: 'Incidencias' };
+const OPS_VIEWS = ['mapa', 'rutas', 'flota', 'incidencias', 'estadisticas'];
+const OPS_VIEW_LABELS = { mapa: 'Mapa', rutas: 'Rutas', flota: 'Flota', incidencias: 'Incidencias', estadisticas: 'Estadísticas' };
 function renderOperations() {
   return `<section id="operaciones" class="section">
     <div class="ops-nav" role="tablist" aria-label="Vistas de Operaciones">${OPS_VIEWS.map((view) => `<button type="button" class="ops-tab" data-ops-nav="${view}" role="tab">${OPS_VIEW_LABELS[view]}</button>`).join('')}</div>
@@ -464,6 +506,7 @@ function renderOperations() {
     <div class="ops-panel card" data-ops-view="rutas">${renderRutasPanel()}</div>
     <div class="ops-panel card" data-ops-view="flota">${renderFlotaPanel()}</div>
     <div class="ops-panel card" data-ops-view="incidencias">${renderIncidenciasPanel()}</div>
+    <div class="ops-panel card" data-ops-view="estadisticas">${renderEstadisticasPanel()}</div>
   </section>`;
 }
 function renderVehicleList() { return trucks.map((truck) => `<button class="row selectable${truck.id === selectedTruckId ? ' selected' : ''}" data-truck="${truck.id}"><span>${truckIcon(truck)} ${truck.unit}<br>${driverName(truck.driverId)}</span>${pill(truck.state)}</button>`).join(''); }
@@ -1348,6 +1391,7 @@ function showOpsView(view) {
   // size until told to recalculate.
   if (view === 'mapa' && mapReady) requestAnimationFrame(() => map.invalidateSize());
   if (view === 'rutas' && createRouteMapReady) requestAnimationFrame(() => createRouteMap.invalidateSize());
+  if (view === 'estadisticas') refreshEfficiencyDashboard();
 }
 function showSection(id) {
   Array.from(app.children).forEach((section) => section.classList.toggle('hidden', section.id !== id));
