@@ -241,6 +241,24 @@ Verificado con `tests/operational-cycle.test.mjs` (extendido: sin ingesta de GPS
 
 ---
 
+## SW-049 — Flujo guiado "Poner en marcha" (opción E, opt-in) ✅ Hecho (2026-08-20)
+
+**Por qué:** el Project Owner pidió construir la opción E que SW-048 había dejado como mejora futura — pero como una preferencia opcional del operador, no como el comportamiento por defecto (que sigue siendo el paso a paso de SW-048).
+
+**Alcance:**
+1. Nueva pestaña de nivel superior **Configuración** (`#configuracion`), visible para `municipal_admin`/`dispatcher` (mismos roles que ya pueden asignar vehículos/choferes) vía `frontend/auth-gate.js`'s `SECTION_ROLES`. Contiene un solo checkbox: "Activar flujo guiado 'Poner en marcha'".
+2. La preferencia (`guidedAssignmentEnabled`) se guarda en `localStorage` del navegador — **no** en Supabase ni en ninguna tabla — porque es una preferencia de operador/equipo, no un dato del municipio. Apagada por defecto: sin tocar Configuración, el comportamiento es idéntico a SW-048.
+3. Con la preferencia activa, `renderRouteDetail()` reemplaza los controles paso a paso (asignar vehículo → asignar chofer, por separado) por un solo formulario (`renderGuidedPutInMotion()`) que muestra únicamente los campos que realmente faltan (según `routeReadinessStage()`, SW-048), con un solo botón "Poner en marcha".
+4. `putRouteInMotion()` encadena, reutilizando las funciones existentes sin duplicar lógica de transición: `assignVehicleToExistingRoute()` → `assignDriverToTruck()` → `startRouteManually()`, saltando cualquier paso que ya no haga falta (p. ej. si el vehículo ya estaba asignado, arranca directo en el chofer).
+
+**Fuera de alcance:** ningún cambio de esquema — es orquestación del lado del cliente sobre funciones ya existentes.
+
+### Resultado
+
+`tests/auth-gate.test.mjs` extendido: `configuracion` visible para `dispatcher`/`municipal_admin`, no para `supervisor`/`driver`/`mt_superadmin`. `node --check` sobre los archivos tocados + suite completa sin regresiones. La orquestación (`putRouteInMotion`) vive en `frontend/app.js`, sin test unitario directo (mismo límite que el resto de este archivo — no tiene suite propia, solo verificación interactiva) — pendiente de verificación en staging por el Project Owner.
+
+---
+
 ## SW-050 — Persistencia real del email de chofer + reenvío de invitación (no propuesto por este documento) ✅ Hecho (2026-08-20)
 
 **Por qué:** encontrado en vivo durante pruebas de staging — el Project Owner creó un chofer con email, pero el botón "Crear cuenta de acceso" nunca apareció. Causa raíz: `drivers` en Supabase nunca tuvo columna `email` — el correo solo vivía en la memoria de la pestaña del navegador que creó el chofer (`createDriverFromForm()`), así que con solo recargar la página (o pasar tiempo y volver) se perdía para siempre, sin ninguna forma de recuperarlo. Además, el enlace de invitación que devuelve `create-driver-account` se muestra una sola vez en pantalla — si no se copiaba ahí mismo, tampoco había forma de regenerarlo sin entrar al panel de Supabase a mano.

@@ -15,18 +15,19 @@ assert.deepEqual(pickVisibleSections(null).sort(), ['ciudadania']);
 // OPS_SUBVIEW_ROLES below covers the finer-grained access that used to live at this level).
 assert.deepEqual(pickVisibleSections('driver').sort(), ['ciudadania', 'conductor', 'operaciones', 'resumen']);
 
-// Dispatcher: same as driver — dispatcher also lacks reports.read (shared/auth-context.js
-// PERMISSIONS.dispatcher).
-assert.deepEqual(pickVisibleSections('dispatcher').sort(), ['ciudadania', 'conductor', 'operaciones', 'resumen']);
+// Dispatcher: same as driver plus 'configuracion' (SW-049 — dispatcher is who actually assigns
+// vehicles/choferes to routes, so the guided-flow toggle is theirs to set) — dispatcher also lacks
+// reports.read (shared/auth-context.js PERMISSIONS.dispatcher).
+assert.deepEqual(pickVisibleSections('dispatcher').sort(), ['ciudadania', 'conductor', 'configuracion', 'operaciones', 'resumen']);
 
 // Supervisor gets its own dedicated view (route verification + incident management, matching
 // PERMISSIONS.supervisor's routes.verify/incidents.manage) instead of the generic municipal panel —
 // and no 'conductor' either, matching what it could see before this section existed on its own.
 assert.deepEqual(pickVisibleSections('supervisor').sort(), ['ciudadania', 'impacto', 'operaciones', 'resumen', 'supervisor']);
 
-// municipal_admin: generic municipal panel + impact center + the driver view, not the master
-// admin panel.
-assert.deepEqual(pickVisibleSections('municipal_admin').sort(), ['ciudadania', 'conductor', 'impacto', 'operaciones', 'resumen']);
+// municipal_admin: generic municipal panel + impact center + the driver view + 'configuracion'
+// (SW-049, also an assigner role), not the master admin panel.
+assert.deepEqual(pickVisibleSections('municipal_admin').sort(), ['ciudadania', 'conductor', 'configuracion', 'impacto', 'operaciones', 'resumen']);
 
 // Platform superadmin: only the master admin panel (platform-scoped, not a single municipality's
 // operations) plus the always-public citizen portal.
