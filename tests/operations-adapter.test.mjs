@@ -322,4 +322,24 @@ const noVehicleResult = await createSupabaseOperationsAdapter(noVehicleClient).c
 assert.equal(noVehicleResult.ok, true);
 assert.equal(getNoVehiclePatch().distance_meters, undefined);
 
+// SW-050: createDriver() must forward email through to the drivers insert unchanged — before
+// supabase/migrations/202607150014_sw050_driver_email.sql added the column, this field had nowhere
+// to persist, and a driver's "Crear cuenta de acceso" button silently stopped being reachable the
+// moment the page reloaded (drivers.email now hydrates it back, same as any other real field).
+function makeFakeCreateDriverClient() {
+  let insertedRow = null;
+  const client = {
+    from: (table) => {
+      assert.equal(table, 'drivers');
+      return { insert: (row) => { insertedRow = row; return { select: () => ({ single: async () => ({ data: { id: 'driver-new', ...row }, error: null }) }) }; } };
+    }
+  };
+  return { client, getInsertedRow: () => insertedRow };
+}
+const { client: createDriverClient, getInsertedRow } = makeFakeCreateDriverClient();
+const createDriverResult = await createSupabaseOperationsAdapter(createDriverClient, { municipality_id: 'muni-1' }).createDriver({ display_name: 'Chofer Nuevo', email: 'chofer@example.com' });
+assert.equal(createDriverResult.ok, true);
+assert.equal(getInsertedRow().email, 'chofer@example.com', 'email must reach the real drivers insert, not be silently dropped');
+assert.equal(createDriverResult.data.email, 'chofer@example.com');
+
 console.log('operations-adapter ok');

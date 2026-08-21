@@ -199,6 +199,21 @@ Verificado con `tests/operational-cycle.test.mjs` (extendido: sin ingesta de GPS
 
 ---
 
+## SW-050 — Persistencia real del email de chofer + reenvío de invitación (no propuesto por este documento) ✅ Hecho (2026-08-20)
+
+**Por qué:** encontrado en vivo durante pruebas de staging — el Project Owner creó un chofer con email, pero el botón "Crear cuenta de acceso" nunca apareció. Causa raíz: `drivers` en Supabase nunca tuvo columna `email` — el correo solo vivía en la memoria de la pestaña del navegador que creó el chofer (`createDriverFromForm()`), así que con solo recargar la página (o pasar tiempo y volver) se perdía para siempre, sin ninguna forma de recuperarlo. Además, el enlace de invitación que devuelve `create-driver-account` se muestra una sola vez en pantalla — si no se copiaba ahí mismo, tampoco había forma de regenerarlo sin entrar al panel de Supabase a mano.
+
+**Alcance (confirmado con el Project Owner vía las 2 preguntas de scoping):**
+1. **Migración** `supabase/migrations/202607150014_sw050_driver_email.sql`: agrega `drivers.email` (nullable, sin backfill — no hay forma de saber el email de choferes ya creados antes de este hito).
+2. `createDriver()` (`frontend/app.js`) ahora reenvía `email` en el insert real (antes solo mandaba `display_name`); `hydrateVehiclesAndDrivers()` lo lee de vuelta (`row.email`) al hidratar — el botón "Crear cuenta de acceso" ya no depende de que la pestaña original siga abierta.
+3. **Nueva función** `supabase/functions/resend-driver-invite`: para un chofer que YA tiene cuenta (`profile_id` seteado) pero perdió el enlace, genera uno nuevo (`type: 'recovery'`, funciona tanto si el chofer nunca completó la invitación original como si sí) — resuelve el email desde `auth.users` server-side, sin depender de nada guardado en el navegador. Mismo modelo de autorización que `create-driver-account` (JWT del que llama, verificado contra `memberships` del municipio del chofer). Botón nuevo "Reenviar invitación" en Flota, visible para cualquier chofer con cuenta ya creada.
+
+### Resultado
+
+`tests/operations-adapter.test.mjs` (extendido, cliente simulado): `createDriver()` reenvía `email` al insert real sin descartarlo. `node --check` sobre los archivos tocados + suite completa sin regresiones. `resend-driver-invite` (función Deno nueva) no tiene test unitario en Node — mismo criterio que `create-driver-account`, se verifica interactivamente en staging, pendiente del Project Owner. Migración pendiente de aplicar en staging (`supabase db push`) antes de poder probarla ahí.
+
+---
+
 ## Resumen de secuencia y dependencias
 
 | Hito | Estado | Depende de | Severidad de lo que resuelve | Esfuerzo relativo |
