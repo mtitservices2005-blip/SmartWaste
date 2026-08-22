@@ -1177,7 +1177,22 @@ async function assignTruckToRoute(route, truck) {
   // startRouteManually()/completeRouteManually() already do.
   if (!route.real_id) operationsAdapter.assignVehicle(route.id, truck.id);
   route.truckId = truck.unit;
-  if (route.status === 'planned') route.status = 'assigned';
+  // SW-052: real routes repeat 2-3x/week with the same vehicle — the backend already opens a
+  // brand-new route_run when one gets (re)assigned after the previous one finished
+  // (findOrCreateActiveRouteRun, shared/operations-adapter.js), but this local route object only
+  // ever advanced status forward (planned->assigned) and never reset when reassigning a vehicle to
+  // an already-completed/verified route. Left alone, the UI kept showing the OLD corrida's
+  // status/timing forever — no "Iniciar ruta" button, stale medido duration/distance — even though
+  // a fresh route_run was correctly waiting server-side. Clearing these local fields is what makes
+  // this read as a new corrida instead of a permanently "done" route.
+  const isRepeat = route.status === 'completed' || route.status === 'verified';
+  if (route.status === 'planned' || isRepeat) route.status = 'assigned';
+  if (isRepeat) {
+    route.started_at = undefined;
+    route.completed_at = undefined;
+    route.real_distance_meters = undefined;
+    route.progress = 0;
+  }
   truck.routeId = route.id; truck.state = 'active'; truck.positionIndex = 0; truck.progress = 0; truck.sector = route.sector ?? truck.sector; truck.updatedAt = 'Recién asignado';
   simState[truck.id] = { index: 0, progress: 0 };
   registerDriverSimulator(truck);
