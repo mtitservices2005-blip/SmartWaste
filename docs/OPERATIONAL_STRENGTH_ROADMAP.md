@@ -199,6 +199,21 @@ Verificado con `tests/operational-cycle.test.mjs` (extendido: sin ingesta de GPS
 
 ---
 
+## SW-051 — Pantalla de "definir contraseña" para enlaces de invitación/recovery (no propuesto por este documento) ✅ Hecho (2026-08-20)
+
+**Por qué:** encontrado en vivo mientras se probaba SW-050 en staging — el Project Owner abrió el enlace de invitación de un chofer y quedó logueado directamente, sin que nada le pidiera definir una contraseña. Causa raíz: un enlace de invitación (`create-driver-account`) o recovery (`resend-driver-invite`) autentica al navegador vía tokens en el hash de la URL (`detectSessionInUrl`, comportamiento por defecto de supabase-js), pero `frontend/auth-gate.js` solo tenía el formulario de login normal (email+contraseña) — nunca detectaba ni manejaba este tipo de redirección. El chofer quedaba con una sesión válida pero sin ninguna contraseña propia, dependiendo para siempre de que le regeneren un enlace nuevo cada vez que necesite entrar.
+
+**Alcance:**
+1. `isPasswordSetupRedirect(hash)` (nuevo, puro): detecta `type=invite`/`type=recovery` en el hash de la URL — Supabase lo agrega junto a los tokens de sesión en ambos flujos.
+2. `initAuthGate()`: si la URL actual es una de estas redirecciones, muestra una pantalla "Definí tu contraseña" (mismas clases CSS `auth-overlay`/`auth-card`/`auth-error` que el login normal, sin CSS nuevo) antes de continuar con el flujo habitual de resolución de sesión. Al confirmar, llama `client.auth.updateUser({password})` sobre la sesión temporal ya establecida por `detectSessionInUrl`, y limpia el hash de la URL para que una recarga no vuelva a mostrar esta pantalla.
+3. De ahí en adelante, el chofer entra con email + la contraseña que definió, como cualquier otro rol — ya no depende de que le regeneren un enlace cada vez.
+
+### Resultado
+
+`tests/auth-gate.test.mjs` (extendido): `isPasswordSetupRedirect()` reconoce `type=invite`/`type=recovery`, ignora otros tipos (`signup`) y hashes normales de navegación interna (`#operaciones/rutas`), y no falla con hash vacío/`null`. `node --check` sobre los archivos tocados + suite completa sin regresiones. El flujo interactivo completo (abrir el link, definir contraseña, loguearse después con esa contraseña) queda pendiente de verificación en staging por el Project Owner — no ejecutable en este sandbox sin navegador ni Supabase real.
+
+---
+
 ## Resumen de secuencia y dependencias
 
 | Hito | Estado | Depende de | Severidad de lo que resuelve | Esfuerzo relativo |

@@ -3,7 +3,7 @@
 // Supabase sign-in — those need a browser + local Supabase and are out of scope for a Node test;
 // see docs/LOGIN_GATING_VERIFICATION_BRIEF.md for the interactive verification this still needs.
 import assert from 'node:assert/strict';
-import { pickVisibleSections, pickVisibleOpsViews, readSupabaseConfig, SECTION_ROLES, OPS_SUBVIEW_ROLES } from '../frontend/auth-gate.js';
+import { pickVisibleSections, pickVisibleOpsViews, readSupabaseConfig, SECTION_ROLES, OPS_SUBVIEW_ROLES, isPasswordSetupRedirect } from '../frontend/auth-gate.js';
 
 // Anonymous / no session: only the public citizen portal is visible.
 assert.deepEqual(pickVisibleSections(null).sort(), ['ciudadania']);
@@ -71,5 +71,16 @@ assert.deepEqual(
 // SECTION_ROLES itself: ciudadania must stay public (regression guard against accidentally gating
 // the anonymous citizen-report flow SW-020 specifically enabled).
 assert.equal(SECTION_ROLES.ciudadania, null);
+
+// SW-051: isPasswordSetupRedirect() — an invite (create-driver-account) or recovery
+// (resend-driver-invite) link redirects with `type=invite`/`type=recovery` in the URL hash
+// alongside the tokens detectSessionInUrl consumes; anything else (a normal page load, or a
+// session-refresh hash with a different/no type) must not show the set-password screen.
+assert.equal(isPasswordSetupRedirect('#access_token=abc&type=invite&refresh_token=xyz'), true);
+assert.equal(isPasswordSetupRedirect('#access_token=abc&type=recovery&refresh_token=xyz'), true);
+assert.equal(isPasswordSetupRedirect('#access_token=abc&type=signup'), false, 'only invite/recovery need a password set');
+assert.equal(isPasswordSetupRedirect(''), false);
+assert.equal(isPasswordSetupRedirect(null), false);
+assert.equal(isPasswordSetupRedirect('#operaciones/rutas'), false, 'a normal in-app hash link must never trigger this');
 
 console.log('auth-gate ok');

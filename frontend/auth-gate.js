@@ -71,6 +71,19 @@ export function readSupabaseConfig(win = typeof window !== 'undefined' ? window 
   return { url: config.url, anonKey: config.anonKey, municipality_id: config.municipality_id ?? null, hideDemo: Boolean(config.hideDemo) };
 }
 
+// SW-051: an invite (create-driver-account) or recovery (resend-driver-invite) link authenticates
+// the browser via tokens Supabase puts in the URL hash (picked up automatically by
+// detectSessionInUrl, the supabase-js default) — but this app never gave the driver anywhere to
+// actually set a password, so the only way back in was always asking for a fresh link. Supabase
+// tags this redirect with `type=invite`/`type=recovery` in that same hash; checked directly here
+// (pure, no DOM) rather than waiting on session-detection timing, since the hash itself is present
+// synchronously regardless of whether that async detection has finished.
+export function isPasswordSetupRedirect(hash) {
+  if (!hash) return false;
+  const params = new URLSearchParams(hash.replace(/^#/, ''));
+  return params.get('type') === 'invite' || params.get('type') === 'recovery';
+}
+
 // SW-032: the client initAuthGate() creates below is what carries the signed-in session (JWT) —
 // features added later that need to call an Edge Function as the logged-in user (e.g. the "Crear
 // cuenta de acceso" button) reuse this exact client instead of standing up a second one, so there
@@ -151,6 +164,47 @@ function renderOverlay() {
   return overlay;
 }
 
+function renderSetPasswordOverlay() {
+  const overlay = document.createElement('div');
+  overlay.id = 'authOverlay';
+  overlay.className = 'auth-overlay';
+  overlay.innerHTML = `
+    <form id="setPasswordForm" class="auth-card">
+      <h2>SmartWaste — definí tu contraseña</h2>
+      <p class="demo">Es la primera vez que entrás con este enlace. Elegí una contraseña para poder volver a entrar después sin depender de un enlace nuevo cada vez.</p>
+      <label>Nueva contraseña<input type="password" name="password" required minlength="8" autocomplete="new-password"></label>
+      <label>Confirmar contraseña<input type="password" name="passwordConfirm" required minlength="8" autocomplete="new-password"></label>
+      <button type="submit">Guardar contraseña</button>
+      <p id="setPasswordError" class="auth-error" role="alert"></p>
+    </form>`;
+  document.body.append(overlay);
+  return overlay;
+}
+
+// SW-051: called before the normal login-or-resolve flow when isPasswordSetupRedirect() says the
+// URL is an invite/recovery redirect. client.auth.updateUser() works here because
+// detectSessionInUrl already turned the hash's tokens into a real (if temporary) session — this
+// just gives that session a permanent password. Clears the hash afterward so a reload of the same
+// URL doesn't show this screen again once the driver already has a password.
+async function handleSetPasswordRedirect(client) {
+  const overlay = renderSetPasswordOverlay();
+  await new Promise((resolve) => {
+    overlay.querySelector('#setPasswordForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const errorEl = overlay.querySelector('#setPasswordError');
+      errorEl.textContent = '';
+      const formData = new FormData(event.target);
+      const password = formData.get('password');
+      if (password !== formData.get('passwordConfirm')) { errorEl.textContent = 'Las contraseñas no coinciden.'; return; }
+      const { error } = await client.auth.updateUser({ password });
+      if (error) { errorEl.textContent = `No se pudo guardar la contraseña: ${error.message}`; return; }
+      overlay.remove();
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+      resolve();
+    });
+  });
+}
+
 /**
  * Activates the login + role gate. No-ops entirely (see file header) if
  * window.SMARTWASTE_SUPABASE_CONFIG isn't set. Returns the resolved session context, or null if
@@ -168,6 +222,8 @@ export async function initAuthGate() {
   const client = createClient(config.url, config.anonKey);
   authClient = client;
   const identity = createIdentityProvider(client);
+
+  if (isPasswordSetupRedirect(window.location.hash)) await handleSetPasswordRedirect(client);
 
   async function tryResolve() {
     try {
