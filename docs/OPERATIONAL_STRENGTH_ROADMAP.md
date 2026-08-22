@@ -195,7 +195,29 @@ SW-044 queda cerrado. Pendiente de que el Project Owner mergee el PR #61 (varios
 
 ### Resultado
 
-Verificado con `tests/operational-cycle.test.mjs` (extendido: sin ingesta de GPS en ese escenario, `distance_meters` debe quedar `null`, nunca inventado — no ejecutable en este sandbox sin Docker) y `tests/operations-adapter.test.mjs` (extendido, cliente simulado: distancia se computa y sella con ≥2 posiciones reales, no se sella con menos de 2, se salta la consulta por completo si no hay `vehicle_id` en la corrida). `node --check` sobre los archivos tocados y verificación del grafo de imports del build de Vercel. Verificación interactiva en staging pendiente del Project Owner.
+Verificado con `tests/operational-cycle.test.mjs` (extendido: sin ingesta de GPS en ese escenario, `distance_meters` debe quedar `null`, nunca inventado — no ejecutable en este sandbox sin Docker) y `tests/operations-adapter.test.mjs` (extendido, cliente simulado: distancia se computa y sella con ≥2 posiciones reales, no se sella con menos de 2, se salta la consulta por completo si no hay `vehicle_id` en la corrida). `node --check` sobre los archivos tocados y verificación del grafo de imports del build de Vercel. Verificación interactiva en staging confirmada por el Project Owner.
+
+---
+
+## SW-046 — Ícono de camión real en el mapa (no propuesto por este documento)
+
+**Estado:** ✅ Hecho (2026-08-20), mergeado. Reemplaza el marcador circular/genérico de cada camión en el mapa de Operaciones por una silueta de camión (SVG inline, `fill="currentColor"`), coloreada según el estado del vehículo, sin caja/fondo alrededor (ajuste pedido explícitamente por el Project Owner tras ver la primera versión con caja). No estaba en este roadmap — surgió de un pedido directo del Project Owner recordando una solicitud visual pendiente de una sesión anterior.
+
+---
+
+## SW-047 — Dashboard de eficiencia por ruta y por chofer ✅ Hecho (2026-08-20)
+
+**Por qué:** con duración y distancia real ya medidas por corrida desde SW-044/045, esos datos solo se veían uno por uno en el detalle de cada ruta ("histórico entre corridas"). No había forma de comparar rutas entre sí a lo largo del tiempo, ni ver el rendimiento agregado de un chofer.
+
+**Alcance:**
+1. `shared/route-run-stats.js` (nuevo, puro, sin red/DOM): `summarizeRouteRunsByRoute()`/`summarizeRouteRunsByDriver()` agregan `route_runs` medidos (con `started_at`/`completed_at`) en promedio/última duración y distancia, agrupando por `route_id`/`driver_id`. Generaliza la misma matemática que `refreshRouteDurationHistory()` (SW-044) ya usaba para una sola ruta, sin tocar esa función.
+2. `frontend/app.js`: nueva pestaña "Estadísticas" en Operaciones (`OPS_VIEWS`), con dos listas — por ruta y por chofer — pobladas de forma asíncrona (`refreshEfficiencyDashboard()`) al abrir la pestaña, vía `realAdapter.listRouteRuns()` y join contra los arrays locales `routes`/`drivers` (por `real_id`) para mostrar nombres. Requiere backend real conectado (la demo no persiste `route_runs`) — mismo criterio que el histórico por ruta; sin backend real muestra un aviso en vez de datos vacíos/engañosos.
+
+**Fuera de alcance:** ningún cambio de esquema (toda la data ya existía en `route_runs` desde SW-044/045); no se persiste ningún agregado — se recalcula en cada apertura de la pestaña.
+
+### Resultado
+
+`tests/route-run-stats.test.mjs` (nuevo, puro, sin red): agrupación correcta por ruta/chofer, corridas sin `completed_at` excluidas, corridas sin `distance_meters` no inventan un promedio, corridas sin `driver_id` excluidas del agrupamiento por chofer, casos vacíos. `node --check` sobre los archivos tocados + suite completa sin regresiones (mismos tests dependientes de Docker de siempre). Verificación interactiva en staging pendiente del Project Owner.
 
 ---
 
@@ -225,13 +247,15 @@ Verificado con `tests/operational-cycle.test.mjs` (extendido: sin ingesta de GPS
 |---|---|---|---|---|
 | SW-036 | ✅ Hecho (PR #51/#52) | SW-020 (ya cerrado) | Alta | Alto (causa no determinística) |
 | SW-037 | 🔄 En curso en paralelo (PR #54, `feature/sw037-ux-cleanup`) | SW-020 (ya cerrado) | — (UX + onboarding) | Medio |
-| SW-038 | Propuesto | SW-020 (ya cerrado) | Alta | Medio |
-| SW-039 | Propuesto | SW-038 (progress consistente antes de exponerlo en UI real) | Media | Medio |
+| SW-038 | ✅ Hecho (PR #56) | SW-020 (ya cerrado) | Alta | Medio |
+| SW-039 | ✅ Hecho (PR #57) | SW-038 | Media | Medio |
 | SW-040 | ✅ Hecho (2026-08-19) | SW-036, SW-037, SW-038, SW-039 | — (habilitador) | Medio, con gate de seguridad |
 | SW-041 | Propuesto | SW-037 (wizard ya construido), SW-040 | — (no técnico + ajuste de datos) | Bajo técnico, alto en coordinación con el ayuntamiento |
 | SW-042 | ✅ Hecho (2026-08-19) | SW-040 | Media — sin esto, un despachador no podía operar sin editar la base de datos a mano | Bajo-medio |
 | SW-043 | ✅ Hecho (2026-08-19) | SW-042 | Baja — UX del mapa | Bajo |
 | SW-044 | ✅ Hecho (2026-08-19) | SW-042, SW-043 | Media — sin duración medida, las estadísticas de uso quedan siempre estimadas | Medio |
 | SW-045 | ✅ Hecho (2026-08-19) | SW-044 | Media — mismo problema que SW-044 pero para distancia/consumo | Medio |
+| SW-046 | ✅ Hecho (2026-08-20) | — (visual, no propuesto por este documento) | Baja — UX del mapa | Bajo |
+| SW-047 | ✅ Hecho (2026-08-20) | SW-044, SW-045 | Media — sin esto, comparar rutas/choferes entre sí requería mirar el detalle uno por uno | Bajo-medio |
 
 No se propone trabajar dos de estos hitos en paralelo en la misma rama (regla 2) — y, en la práctica, ya está pasando entre sesiones/herramientas distintas sobre el mismo repo (ver nota de coordinación al inicio); antes de arrancar SW-038 hay que confirmar con quien esté en Claude Code qué rama/hito real está tomando ese número para no repetir el choque de SW-037. SW-040 y SW-041 en particular requieren autorización explícita del Project Owner antes de tocar cualquier entorno remoto o dato real de un municipio, consistente con la regla 6 (no afirmar integraciones reales sin evidencia) y la regla 10 (esperar autorización antes de commit/push/PR).
