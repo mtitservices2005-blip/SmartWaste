@@ -206,11 +206,17 @@ Verificado con `tests/operational-cycle.test.mjs` (extendido: sin ingesta de GPS
 **Alcance (confirmado con el Project Owner vía las 2 preguntas de scoping):**
 1. **Migración** `supabase/migrations/202607150014_sw050_driver_email.sql`: agrega `drivers.email` (nullable, sin backfill — no hay forma de saber el email de choferes ya creados antes de este hito).
 2. `createDriver()` (`frontend/app.js`) ahora reenvía `email` en el insert real (antes solo mandaba `display_name`); `hydrateVehiclesAndDrivers()` lo lee de vuelta (`row.email`) al hidratar — el botón "Crear cuenta de acceso" ya no depende de que la pestaña original siga abierta.
-3. **Nueva función** `supabase/functions/resend-driver-invite`: para un chofer que YA tiene cuenta (`profile_id` seteado) pero perdió el enlace, genera uno nuevo (`type: 'recovery'`, funciona tanto si el chofer nunca completó la invitación original como si sí) — resuelve el email desde `auth.users` server-side, sin depender de nada guardado en el navegador. Mismo modelo de autorización que `create-driver-account` (JWT del que llama, verificado contra `memberships` del municipio del chofer). Botón nuevo "Reenviar invitación" en Flota, visible para cualquier chofer con cuenta ya creada.
+3. **Nueva función** `supabase/functions/resend-driver-invite`: para un chofer que YA tiene cuenta (`profile_id` seteado), le restablece la contraseña.
+
+**Revisión (2026-08-22, tras verificación interactiva en staging):** el enfoque inicial de ambas funciones usaba `auth.admin.generateLink()` (enlaces de invitación/recovery). En staging, esos enlaces fallaban instantáneamente como "invalid or expired" para una cuenta que nunca había completado su invitación original — Supabase rechaza `'recovery'` para una cuenta sin confirmar, y aunque se corrigió a `'invite'`, seguía dependiendo de configuración del lado de Supabase (Site URL, Redirect URLs, formato hash vs. PKCE) fuera del control total de este repo. Se reemplazó por **contraseña temporal directa**, sin ningún enlace de por medio:
+- `create-driver-account` ahora crea la cuenta con `email_confirm:true` y una contraseña temporal generada (`crypto.getRandomValues`), devuelta en la respuesta.
+- `resend-driver-invite` ahora llama `auth.admin.updateUserById(profile_id, {password})` con una contraseña temporal nueva, en vez de generar un enlace.
+- El chofer entra con su email + esa contraseña por el formulario de login normal que ya existe (`frontend/auth-gate.js`) — sin links, sin expiración, sin depender de la configuración de redirect URLs.
+- Esto vuelve innecesaria la pantalla de "definir contraseña" propuesta en un hito aparte (ver nota de coordinación): ese hito quedó sin mergear y puede cerrarse sin aplicar, a criterio del Project Owner.
 
 ### Resultado
 
-`tests/operations-adapter.test.mjs` (extendido, cliente simulado): `createDriver()` reenvía `email` al insert real sin descartarlo. `node --check` sobre los archivos tocados + suite completa sin regresiones. `resend-driver-invite` (función Deno nueva) no tiene test unitario en Node — mismo criterio que `create-driver-account`, se verifica interactivamente en staging, pendiente del Project Owner. Migración pendiente de aplicar en staging (`supabase db push`) antes de poder probarla ahí.
+`tests/operations-adapter.test.mjs` (extendido, cliente simulado): `createDriver()` reenvía `email` al insert real sin descartarlo. `node --check` sobre los archivos tocados + suite completa sin regresiones. Las funciones Edge no tienen test unitario en Node — mismo criterio que el resto de funciones Deno de este repo. Verificación interactiva completa en staging (cuenta creada con contraseña temporal, login exitoso con email+contraseña) pendiente del Project Owner tras esta revisión.
 
 ---
 

@@ -1,7 +1,13 @@
-// SW-050: regenerates a fresh access link for a driver who already has an account
-// (drivers.profile_id set) but lost the one-time invite link create-driver-account returned —
-// that link is only ever shown once in the UI and nothing persists it, so before this there was no
-// way to recover access short of the Project Owner going into the Supabase dashboard by hand.
+// SW-050 (revisión): resets the password for a driver who already has an account
+// (drivers.profile_id set), so a dispatcher can hand them working credentials anytime without
+// depending on the Project Owner going into the Supabase dashboard by hand.
+//
+// This used to generate an invite/recovery link (auth.admin.generateLink) — found unreliable in
+// staging: the link came back "invalid or expired" instantly for an account that never completed
+// its original invite, and getting the redirect right needed provider-side config (Site URL,
+// Redirect URLs, hash vs. PKCE format) this deployment doesn't fully control. A direct password
+// reset sidesteps all of that: the driver logs in with the existing, already-working
+// email+password form (frontend/auth-gate.js), no link or redirect involved.
 //
 // Same authorization model as create-driver-account: the caller's own JWT identifies them, and
 // only a municipal_admin/dispatcher with an active membership in the driver's own municipality may
@@ -17,6 +23,14 @@ const corsHeaders = {
 
 function json(body: unknown, status: number) {
   return new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+}
+
+// Same generator as create-driver-account — kept in sync there rather than shared via an import,
+// since Edge Functions each deploy independently and this is a 3-line pure helper, not worth the
+// cross-function import complexity for.
+function generateTemporaryPassword(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(9));
+  return btoa(String.fromCharCode(...bytes)).replace(/[+/=]/g, '').slice(0, 12);
 }
 
 Deno.serve(async (req: Request) => {
@@ -51,21 +65,9 @@ Deno.serve(async (req: Request) => {
   if (membershipLookup.error) return json({ error: membershipLookup.error.message }, 500);
   if (!membershipLookup.data) return json({ error: 'Caller is not authorized to manage accounts for this municipality' }, 403);
 
-  // The email lives on auth.users (the source of truth), not on the drivers row — reading it back
-  // via admin.getUserById() rather than profiles.email so this still works even for an account
-  // whose profile row was somehow never written.
-  const authUser = await serviceClient.auth.admin.getUserById(driver.profile_id);
-  if (authUser.error || !authUser.data?.user?.email) return json({ error: 'Could not resolve this account\'s email' }, 500);
-  const email = authUser.data.user.email;
+  const temporaryPassword = generateTemporaryPassword();
+  const updateResult = await serviceClient.auth.admin.updateUserById(driver.profile_id, { password: temporaryPassword });
+  if (updateResult.error) return json({ error: updateResult.error.message }, 500);
 
-  // Found in staging: 'recovery' links came back "invalid or expired" instantly for a driver who
-  // never completed their original invite — create-driver-account creates the auth user with
-  // email_confirm:false and no password, and Supabase's 'recovery' flow assumes an already-confirmed
-  // account, rejecting an unconfirmed one outright rather than actually expiring. 'invite' is the
-  // correct type for that state (same type create-driver-account itself uses) and still works on an
-  // account that's already confirmed too, so it's the right choice regardless of confirmation state.
-  const link = await serviceClient.auth.admin.generateLink({ type: 'invite', email }).catch(() => null);
-  if (!link?.data?.properties?.action_link) return json({ error: 'Could not generate a new access link' }, 500);
-
-  return json({ ok: true, invite_action_link: link.data.properties.action_link }, 200);
+  return json({ ok: true, temporary_password: temporaryPassword }, 200);
 });

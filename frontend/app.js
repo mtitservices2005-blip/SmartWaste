@@ -476,12 +476,11 @@ function renderDriverList() {
   return drivers.map((driver) => {
     const canProvision = supabaseConfigured && driver.email && driver.real_id && !driver.profile_id;
     const accountButton = canProvision ? `<button type="button" class="btn-primary" data-fleet-driver-account="${driver.id}">Crear cuenta de acceso</button>` : '';
-    // SW-050: for a driver that already has an account, the one-time invite link shown at creation
-    // is easy to lose (page reload, closed tab) with previously no way to get another — this
-    // regenerates a fresh one anytime, without depending on drivers.email ever being available
-    // client-side (resend-driver-invite reads the email back from auth.users, not from here).
+    // SW-050 (revisión): for a driver that already has an account, resets their password to a new
+    // temporary one shown here on screen — no link/email involved, so nothing to lose or expire;
+    // usable anytime the dispatcher needs to hand the driver working credentials again.
     const resendButton = (supabaseConfigured && driver.real_id && driver.profile_id)
-      ? `<button type="button" data-fleet-driver-resend="${driver.id}">Reenviar invitación</button>`
+      ? `<button type="button" data-fleet-driver-resend="${driver.id}">Restablecer contraseña</button>`
       : '';
     const accountPill = driver.profile_id ? pill('active') : '';
     return `<div class="row"><span>${driver.name}<br>${driver.phone || 'Sin teléfono'}</span>${pill(driver.status === 'Disponible' ? 'active' : 'assigned')}${accountPill}${accountButton}${resendButton}</div>`;
@@ -676,13 +675,16 @@ async function createDriverAccount(driverId) {
   const { data, error } = await client.functions.invoke('create-driver-account', { body: { driver_id: driver.real_id, email: driver.email } });
   if (error) { if (status) status.textContent = `No se pudo crear la cuenta: ${error.message}`; return; }
   driver.profile_id = data.profile_id;
-  if (status) status.textContent = data.invite_action_link ? `Cuenta creada para "${driver.name}". Enlace de invitación: ${data.invite_action_link}` : `Cuenta creada para "${driver.name}".`;
+  // SW-050 (revisión): create-driver-account now returns a temporary_password (set directly via
+  // auth.admin.createUser, email_confirm:true) instead of an invite link — Supabase's invite/
+  // recovery links proved unreliable in staging (instant "invalid or expired", redirect config
+  // dependent). The driver logs in with this password through the existing email+password form.
+  if (status) status.textContent = data.temporary_password ? `Cuenta creada para "${driver.name}". Contraseña temporal: ${data.temporary_password} — compartísela al chofer para que inicie sesión con su email y esta contraseña.` : `Cuenta creada para "${driver.name}".`;
   refreshFleetSelects();
 }
-// SW-050: calls the supabase/functions/resend-driver-invite Edge Function for a driver who already
-// has an account (driver.profile_id set) but lost the one-time link create-driver-account showed —
-// resolves the email from auth.users server-side, so it works regardless of whether this browser
-// tab still remembers driver.email.
+// SW-050 (revisión): calls the supabase/functions/resend-driver-invite Edge Function for a driver
+// who already has an account (driver.profile_id set) — resets their password to a fresh temporary
+// one shown here, instead of the earlier invite-link approach (same reliability issues as above).
 async function resendDriverInvite(driverId) {
   const status = $('#fleetDriverStatus');
   const client = getAuthClient();
@@ -690,10 +692,10 @@ async function resendDriverInvite(driverId) {
   const driver = drivers.find((item) => item.id === driverId);
   if (!driver) return;
   if (!driver.real_id) return;
-  if (status) status.textContent = `Generando un nuevo enlace de acceso para "${driver.name}"...`;
+  if (status) status.textContent = `Restableciendo la contraseña de "${driver.name}"...`;
   const { data, error } = await client.functions.invoke('resend-driver-invite', { body: { driver_id: driver.real_id } });
-  if (error) { if (status) status.textContent = `No se pudo generar el enlace: ${error.message}`; return; }
-  if (status) status.textContent = `Nuevo enlace para "${driver.name}": ${data.invite_action_link}`;
+  if (error) { if (status) status.textContent = `No se pudo restablecer la contraseña: ${error.message}`; return; }
+  if (status) status.textContent = `Nueva contraseña temporal para "${driver.name}": ${data.temporary_password} — compartísela para que inicie sesión con su email y esta contraseña.`;
 }
 // SW-027: municipal_admin/supervisor/dispatcher only in real Supabase (RLS: tenant_insert_staff on
 // routes and, per 202607150009_sw027_route_paths.sql, on route_paths too — same 3 roles as
