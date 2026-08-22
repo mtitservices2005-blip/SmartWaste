@@ -23,6 +23,10 @@ export const SECTION_ROLES = {
   conductor: ['municipal_admin', 'dispatcher', 'driver'],
   impacto: ['municipal_admin', 'supervisor'],
   master: ['mt_superadmin'],
+  // SW-049: operator-level preference (flujo guiado "Poner en marcha"), same audience as who can
+  // actually assign vehicles/choferes to routes (OPS_SUBVIEW_ROLES.rutas/flota below) — supervisor
+  // and driver never assign, so they don't need this toggle.
+  configuracion: ['municipal_admin', 'dispatcher'],
   ciudadania: null
 };
 

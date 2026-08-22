@@ -64,6 +64,17 @@ const formatMinutes = (minutes) => {
 };
 let selectedTruckId = null;
 let selectedRouteId = null;
+// SW-049: browser-local operator preference, read once at module init — never blocks rendering if
+// localStorage is unavailable (private browsing, sandboxed iframe), same "never break on a missing
+// nice-to-have" bias as the rest of this file.
+function readGuidedAssignmentPreference() {
+  try { return localStorage.getItem('smartwaste.guidedAssignment') === 'true'; } catch { return false; }
+}
+function setGuidedAssignmentPreference(enabled) {
+  guidedAssignmentEnabled = enabled;
+  try { localStorage.setItem('smartwaste.guidedAssignment', enabled ? 'true' : 'false'); } catch { /* private browsing etc. — preference just won't survive reload */ }
+}
+let guidedAssignmentEnabled = readGuidedAssignmentPreference();
 // Roadmap item 4 ("reoptimización dinámica" — suggestion only, docs/TECHNICAL_DEBT_REGISTER.md
 // #21): holds the last computed reoptimization suggestion for one route at a time. Cleared when a
 // different route is selected (see selectRoute()) so a stale suggestion never bleeds into another
@@ -382,6 +393,15 @@ function renderRouteDetail(route) {
   // the UX gap that made assigning a driver a separate trip to another tab — reuses the exact same
   // function/handler (data-assign-driver, #assignDriverSelect), no new wiring needed.
   const driverAssignAction = (assignedTruck && !assignedTruck.driverId) ? driverAssignmentControl(assignedTruck) : '';
+  const readinessStage = routeReadinessStage(route, assignedTruck);
+  // SW-049 (opción E, confirmada con el Project Owner tras la reingeniería SW-048): un operador que
+  // activó el flujo guiado en Configuración ve un solo formulario + un solo botón que encadena
+  // asignar vehículo, asignar chofer e iniciar — en vez de los controles paso a paso de arriba.
+  // Apagado por defecto (guidedAssignmentEnabled parte en false): sin tocar Configuración, esta
+  // rama nunca se activa y el comportamiento es idéntico a SW-048.
+  const guidedAction = (guidedAssignmentEnabled && readinessStage && readinessStage !== 'ready')
+    ? renderGuidedPutInMotion(route, assignedTruck, readinessStage)
+    : '';
   // SW-044: only offered once a vehicle is assigned (ROUTE_TRANSITIONS in shared/contracts.js only
   // allows assigned->started, never planned->started) and only before it's already started —
   // reachable here for admin/dispatcher, and from the driver's own Conductor view
@@ -435,11 +455,10 @@ function renderRouteDetail(route) {
   // "the same object", never a history of separate route_runs) — refreshRouteDurationHistory()
   // (called from selectRoute()) fills this in asynchronously since it's a network read.
   const durationHistoryPlaceholder = route.real_id ? `<p id="routeDurationHistory" class="demo">Cargando histórico de corridas…</p>` : '';
-  const readinessStage = routeReadinessStage(route, assignedTruck);
   return `<div class="drawer-head"><p class="eyebrow">Detalle de ruta</p><h2>${route.name}</h2>${pill(readinessStage ?? routeStatus(route))}</div>
     <div class="detail-grid"><p><b>Unidad asignada</b><span>${assignedTruck ? `<button type="button" class="row-link" data-truck="${assignedTruck.id}">${route.truckId}</button>` : route.truckId}</span></p><p><b>Conductor</b><span>${driverName(assignedTruck?.driverId)}</span></p><p><b>Paradas</b><span>${route.covered} completadas · ${route.pending} pendientes</span></p>${durationRow}${distanceRow}${fuelRow}</div>
     ${durationHistoryPlaceholder}
-    ${assignAction}${driverAssignAction}${startAction}${completeAction}${reoptimizeAction}
+    ${guidedAction || `${assignAction}${driverAssignAction}`}${startAction}${completeAction}${reoptimizeAction}
     <details class="detail-more"><summary>Ver detalles técnicos</summary>
       <div class="detail-grid"><p><b>Sectores</b><span>${route.sectors.join(', ')}</span></p><p><b>Inicio</b><span>${route.started}</span></p><p><b>Programada</b><span>${route.scheduled}</span></p><p><b>Tiempo estimado</b><span>${route.estimatedMinutes} min</span></p><p><b>Distancia demo</b><span>${route.distanceKm} km</span></p>${householdEstimateRow}</div>
     </details>
@@ -877,7 +896,17 @@ function renderBeforeAfter(m){return `<div class="comparison-table">${m.beforeAf
 
 function renderMaster() { return `<section id="master" class="section card"><h2>Master Admin MT IT Services</h2><p class="demo">${demoNotice}</p><div class="panel-grid">${municipalities.map((m) => `<article class="card"><h3>${m.name}</h3><p>Plan: ${m.plan}</p><p>Camiones: ${m.trucks} · Rutas: ${m.routes} · Usuarios: ${m.users}</p>${pill(m.status.toLowerCase().includes('operativo') ? 'active' : 'assigned')}<button class="btn-primary" data-onboarding="${m.id}">Onboarding demo</button><p class="demo" data-onboarding-status="${m.id}"></p></article>`).join('')}</div><h3>Arquitectura futura</h3><p>${pilotMunicipality.integrationsReady.join(' · ')}</p></section>`; }
 
-app.innerHTML = `${renderSummary()}${renderOperations()}${renderSupervisor()}${renderDriverSection()}${renderCitizen()}${renderImpactCenter()}${renderMaster()}`;
+// SW-049 (roadmap SW-048's opción E, evaluada y confirmada con el Project Owner): preferencia de
+// operador, no un dato del municipio — se guarda en localStorage del navegador, no en Supabase, así
+// que cada despachador la elige para su propio equipo sin afectar a los demás. Apagada por defecto:
+// sin tocar esto, el flujo de asignación de ruta se comporta exactamente igual que en SW-048.
+function renderConfiguracion() {
+  return `<section id="configuracion" class="section card"><h2>Configuración</h2><p class="demo">${demoNotice} · Preferencias de este navegador/operador, no del municipio.</p>
+    <div class="controls"><label><input type="checkbox" id="guidedAssignmentToggle"${guidedAssignmentEnabled ? ' checked' : ''}> Activar flujo guiado "Poner en marcha" en el detalle de ruta</label></div>
+    <p class="demo">Con esta opción activa, el detalle de una ruta sin vehículo o sin chofer muestra un solo formulario y un solo botón para asignar todo lo que falte e iniciarla de una vez, en vez de los pasos separados (asignar vehículo, luego asignar chofer, luego iniciar).</p></section>`;
+}
+
+app.innerHTML = `${renderSummary()}${renderOperations()}${renderSupervisor()}${renderDriverSection()}${renderCitizen()}${renderImpactCenter()}${renderConfiguracion()}${renderMaster()}`;
 
 // initMap() and initDriverMap() both call this at page load, before window.L exists yet — without
 // caching the in-flight promise, the second call would inject a second <script> tag, and whichever
@@ -1128,6 +1157,53 @@ async function assignVehicleToExistingRoute(routeId, vehicleId) {
   // them, same reason completeRouteManually()/the verify/resolve-incident handlers below already
   // re-render #supervisor on demand.
   refreshResumen();
+}
+// SW-049: the guided-mode form shown in renderRouteDetail() when the operator opted in from
+// Configuración. Renders a single form covering whatever's actually missing (vehicle+driver, or
+// just driver) instead of the two separate step-by-step controls (assignAction/driverAssignAction).
+function renderGuidedPutInMotion(route, assignedTruck, stage) {
+  if (stage === 'needs_vehicle') {
+    const availableTrucks = trucks.filter(isTruckAvailable);
+    if (!availableTrucks.length) return '<p class="demo">No hay vehículos disponibles para asignar — <a href="#operaciones/flota" data-scroll-to="fleetManagement">registra uno en Operaciones · Flota</a>.</p>';
+    // Candidate drivers can't be filtered by the chosen vehicle's real_id yet (nothing is chosen
+    // until the operator picks one) — same real-vs-demo kind filter driverAssignmentControl() uses,
+    // applied against the route itself instead of a truck.
+    const candidateDrivers = drivers.filter((driver) => Boolean(driver.real_id) === Boolean(route.real_id));
+    if (!candidateDrivers.length) return '<p class="demo">No hay choferes disponibles para asignar — <a href="#operaciones/flota" data-scroll-to="fleetManagement">registra uno en Operaciones · Flota</a>.</p>';
+    return `<div class="controls"><select id="guidedVehicleSelect">${availableTrucks.map((truck) => `<option value="${truck.id}">${truck.unit}</option>`).join('')}</select><select id="guidedDriverSelect">${candidateDrivers.map((driver) => `<option value="${driver.id}">${driver.name}</option>`).join('')}</select><button type="button" class="btn-primary" data-guided-start="${route.id}">Poner en marcha</button></div>
+      <p class="demo">Modo guiado (Configuración): asigna vehículo, chofer e inicia la ruta en un solo paso.</p>`;
+  }
+  if (stage === 'needs_driver' && assignedTruck) {
+    const candidateDrivers = drivers.filter((driver) => Boolean(driver.real_id) === Boolean(assignedTruck.real_id));
+    if (!candidateDrivers.length) return '<p class="demo">No hay choferes disponibles para asignar.</p>';
+    return `<div class="controls"><select id="guidedDriverSelect">${candidateDrivers.map((driver) => `<option value="${driver.id}">${driver.name}</option>`).join('')}</select><button type="button" class="btn-primary" data-guided-start="${route.id}">Poner en marcha</button></div>
+      <p class="demo">Modo guiado (Configuración): asigna chofer e inicia la ruta en un solo paso.</p>`;
+  }
+  return '';
+}
+// SW-049: reads both selects' values BEFORE any await — each awaited step below (assignVehicleTo
+// ExistingRoute/assignDriverToTruck) re-renders this exact detail panel via selectRoute(), which
+// destroys and rebuilds #guidedVehicleSelect/#guidedDriverSelect with a different candidate list
+// (or removes them entirely once no longer needed) — reading them after the first await would read
+// a stale or missing element instead of the operator's actual choice.
+async function putRouteInMotion(routeId) {
+  const route = routeById(routeId);
+  if (!route) return;
+  const vehicleId = $('#guidedVehicleSelect')?.value ?? null;
+  const driverId = $('#guidedDriverSelect')?.value ?? null;
+  let truck = trucks.find((item) => item.routeId === routeId);
+  if (!truck) {
+    if (!vehicleId) return;
+    await assignVehicleToExistingRoute(routeId, vehicleId);
+    truck = trucks.find((item) => item.routeId === routeId);
+  }
+  if (!truck) return; // assignment failed upstream — nothing left to chain
+  if (!truck.driverId) {
+    if (!driverId) return;
+    await assignDriverToTruck(truck.id, driverId);
+  }
+  const refreshedRoute = routeById(routeId);
+  if (refreshedRoute?.status === 'assigned') await startRouteManually(routeId);
 }
 // Triggered from renderTruckDetail()'s "Asignar chofer"/"Reasignar chofer" action (SW-042). Unlike
 // assignTruckToRoute() above, this never calls operationsAdapter.assignDriverToVehicle() for a
@@ -1616,6 +1692,8 @@ document.addEventListener('click', (event) => {
   if (assignVehicleButton) { const vehicleId = $('#assignVehicleSelect')?.value; if (vehicleId) assignVehicleToExistingRoute(assignVehicleButton.dataset.assignVehicle, vehicleId); }
   const assignDriverButton = event.target.closest('[data-assign-driver]');
   if (assignDriverButton) { const driverId = $('#assignDriverSelect')?.value; if (driverId) assignDriverToTruck(assignDriverButton.dataset.assignDriver, driverId); }
+  const guidedStartButton = event.target.closest('[data-guided-start]');
+  if (guidedStartButton) putRouteInMotion(guidedStartButton.dataset.guidedStart);
   const startRouteButton = event.target.closest('[data-start-route]');
   if (startRouteButton) startRouteManually(startRouteButton.dataset.startRoute);
   const completeRouteButton = event.target.closest('[data-complete-route]');
@@ -1645,6 +1723,9 @@ document.addEventListener('change', (event) => { if (event.target.closest('#impa
 // focuses the map on it exactly like clicking its row/polyline does. goToMapTab() so picking one
 // while on a different Operaciones sub-vista (Rutas, Flota) actually switches to Mapa to show it.
 document.addEventListener('change', (event) => { if (event.target.id === 'simVehicle' && event.target.value) { selectRoute(event.target.value); goToMapTab(); } });
+// SW-049: no re-render needed here beyond the checkbox itself — the next time a route detail is
+// opened/re-rendered, renderRouteDetail() reads the module-level guidedAssignmentEnabled fresh.
+document.addEventListener('change', (event) => { if (event.target.id === 'guidedAssignmentToggle') setGuidedAssignmentPreference(event.target.checked); });
 // UX cleanup (SW-037): "Crear ruta" now lives collapsed behind a <details> ("+ Nueva ruta") instead
 // of always taking up space in the Rutas panel. Its Leaflet map (#createRouteMap) is built once at
 // module init regardless of visibility (see initCreateRouteMap() below), so — same as
