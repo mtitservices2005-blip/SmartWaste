@@ -58,10 +58,13 @@ Deno.serve(async (req: Request) => {
   if (authUser.error || !authUser.data?.user?.email) return json({ error: 'Could not resolve this account\'s email' }, 500);
   const email = authUser.data.user.email;
 
-  // 'recovery' works whether the driver ever completed their original invite or not — unlike
-  // 'invite', which Supabase rejects once an account is already confirmed. Either way the result is
-  // a working link that lets the driver in.
-  const link = await serviceClient.auth.admin.generateLink({ type: 'recovery', email }).catch(() => null);
+  // Found in staging: 'recovery' links came back "invalid or expired" instantly for a driver who
+  // never completed their original invite — create-driver-account creates the auth user with
+  // email_confirm:false and no password, and Supabase's 'recovery' flow assumes an already-confirmed
+  // account, rejecting an unconfirmed one outright rather than actually expiring. 'invite' is the
+  // correct type for that state (same type create-driver-account itself uses) and still works on an
+  // account that's already confirmed too, so it's the right choice regardless of confirmation state.
+  const link = await serviceClient.auth.admin.generateLink({ type: 'invite', email }).catch(() => null);
   if (!link?.data?.properties?.action_link) return json({ error: 'Could not generate a new access link' }, 500);
 
   return json({ ok: true, invite_action_link: link.data.properties.action_link }, 200);
