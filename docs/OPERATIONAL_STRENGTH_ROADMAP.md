@@ -199,6 +199,24 @@ Verificado con `tests/operational-cycle.test.mjs` (extendido: sin ingesta de GPS
 
 ---
 
+## SW-052 — Repetir una ruta ya completada (no propuesto por este documento) ✅ Hecho (2026-08-22)
+
+**Por qué:** encontrado en vivo mientras se verificaba la medición de duración/distancia en staging — el Project Owner señaló que en operación real las rutas se repiten 2-3 veces por semana con el mismo camión, y necesita que cada corrida quede guardada por separado para ver tendencias semanales (justo lo que alimenta el dashboard de eficiencia de SW-047). Al intentar reasignar un vehículo a una ruta ya `completed` para repetirla, la UI se quedaba mostrando la ruta como terminada para siempre — sin botón "Iniciar ruta", con la duración/distancia de la corrida vieja pegada en pantalla.
+
+**Causa raíz:** el backend ya soportaba esto correctamente — `findOrCreateActiveRouteRun()` (`shared/operations-adapter.js`) ya abre un `route_run` nuevo en Supabase cuando el último para esa ruta está en un estado terminal (`completed`/`verified`/`cancelled`). El problema estaba solo en `frontend/app.js`: `assignTruckToRoute()` únicamente reseteaba `route.status` desde `'planned'`, nunca desde `'completed'`/`'verified'` — así que aunque el backend ya tenía la corrida nueva lista, la pantalla local seguía mostrando el estado y los tiempos de la corrida anterior.
+
+**Alcance:**
+1. `assignTruckToRoute()`: al reasignar un vehículo a una ruta `completed`/`verified`, ahora resetea `route.status` a `'assigned'` y limpia `started_at`/`completed_at`/`real_distance_meters`/`progress` locales — el resto del ciclo (iniciar/finalizar recorrido, medición real) funciona exactamente igual que para una ruta nueva, sin duplicar ninguna lógica de transición.
+2. No se tocó `shared/operations-adapter.js` ni ninguna migración — el backend ya estaba listo.
+
+**Fuera de alcance:** `route.covered`/`route.pending` (conteos de paradas) no se resetean — ya eran estáticos y desactualizados desde antes de este hito (limitación preexistente, no introducida ni agravada acá).
+
+### Resultado
+
+`node --check` sobre `frontend/app.js` + suite completa sin regresiones. Esta lógica vive enteramente en `frontend/app.js` (mutación de estado local, no un módulo puro en `shared/`), así que no tiene test unitario en Node — mismo criterio que el resto de la lógica de asignación en este archivo; verificación interactiva en staging pendiente del Project Owner (reasignar el mismo vehículo a una ruta ya completada y confirmar que aparece "Iniciar ruta" de nuevo, con duración/distancia limpias).
+
+---
+
 ## Resumen de secuencia y dependencias
 
 | Hito | Estado | Depende de | Severidad de lo que resuelve | Esfuerzo relativo |
