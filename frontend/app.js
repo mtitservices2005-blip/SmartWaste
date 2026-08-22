@@ -9,6 +9,7 @@ import { fetchBuildingCount, estimateCollectionMinutes } from '../shared/overpas
 import { optimizeWaypointOrder } from '../shared/route-optimizer.js';
 import { positionFromGeolocationEvent, shouldSendPosition } from '../shared/browser-geolocation.js';
 import { suggestReoptimizedOrder } from '../shared/route-reoptimizer.js';
+import { routeReadinessStage, ROUTE_READINESS_LABELS } from '../shared/route-readiness.js';
 import { IMPACT_DEMO_NOTICE, IMPACT_SCENARIO_NOTICE, defaultImpactAssumptions, metricReadiness, calculateImpactMetrics } from '../shared/impact-center.js';
 import { initAuthGate, readSupabaseConfig, getAuthClient } from './auth-gate.js';
 
@@ -37,7 +38,7 @@ const routeName = (id) => routeById(id)?.name ?? 'Sin ruta asignada';
 // completa", the map) instead of nulling it out — a truck only counts as available again once its
 // current route actually reached a terminal state.
 const isTruckAvailable = (truck) => !truck.routeId || ['completed', 'verified'].includes(routeById(truck.routeId)?.status);
-const label = (state) => stateLabels[state] ?? state;
+const label = (state) => ROUTE_READINESS_LABELS[state] ?? stateLabels[state] ?? state;
 const routePosition = (truck) => truck.position ?? routeGeometry(truck.routeId)[truck.positionIndex ?? 0] ?? pilotMunicipality.center;
 // SW-044: only returns a value once both timestamps exist (see startRouteManually()/
 // completeRouteManually()) — a route completed without ever being started, or a demo route that
@@ -368,6 +369,19 @@ function renderRouteDetail(route) {
       ? `<div class="controls"><select id="assignVehicleSelect">${availableTrucks.map((truck) => `<option value="${truck.id}">${truck.unit}</option>`).join('')}</select><button type="button" class="btn-primary" data-assign-vehicle="${route.id}">Asignar vehículo</button></div>`
       : '<p class="demo">No hay vehículos disponibles para asignar — <a href="#operaciones/flota" data-scroll-to="fleetManagement">registra uno en Operaciones · Flota</a>.</p>')
     : '';
+  // SW-048: route.truckId is the assigned truck's *unit label* (a display string, set by
+  // assignTruckToRoute()), not its id — the actual truck object (needed for driverId and for a
+  // link to its own detail panel) is only reachable via the reverse foreign key truck.routeId,
+  // same lookup previewRouteReoptimization() already uses.
+  const assignedTruck = trucks.find((truck) => truck.routeId === route.id);
+  // A driver is assigned to the TRUCK (assignDriverToTruck()), never to the route directly — before
+  // this, this panel showed driverName(route.driverId), a field nothing ever set for a real/created
+  // route (only the 5 bundled demo routes happen to have it pre-seeded), so a real route's
+  // "Conductor" field silently stayed "Sin asignar" forever even after a driver was assigned.
+  // Embedding driverAssignmentControl() (already used in Flota's truck detail) directly here closes
+  // the UX gap that made assigning a driver a separate trip to another tab — reuses the exact same
+  // function/handler (data-assign-driver, #assignDriverSelect), no new wiring needed.
+  const driverAssignAction = (assignedTruck && !assignedTruck.driverId) ? driverAssignmentControl(assignedTruck) : '';
   // SW-044: only offered once a vehicle is assigned (ROUTE_TRANSITIONS in shared/contracts.js only
   // allows assigned->started, never planned->started) and only before it's already started —
   // reachable here for admin/dispatcher, and from the driver's own Conductor view
@@ -421,10 +435,11 @@ function renderRouteDetail(route) {
   // "the same object", never a history of separate route_runs) — refreshRouteDurationHistory()
   // (called from selectRoute()) fills this in asynchronously since it's a network read.
   const durationHistoryPlaceholder = route.real_id ? `<p id="routeDurationHistory" class="demo">Cargando histórico de corridas…</p>` : '';
-  return `<div class="drawer-head"><p class="eyebrow">Detalle de ruta</p><h2>${route.name}</h2>${pill(routeStatus(route))}</div>
-    <div class="detail-grid"><p><b>Unidad asignada</b><span>${route.truckId}</span></p><p><b>Conductor</b><span>${driverName(route.driverId)}</span></p><p><b>Paradas</b><span>${route.covered} completadas · ${route.pending} pendientes</span></p>${durationRow}${distanceRow}${fuelRow}</div>
+  const readinessStage = routeReadinessStage(route, assignedTruck);
+  return `<div class="drawer-head"><p class="eyebrow">Detalle de ruta</p><h2>${route.name}</h2>${pill(readinessStage ?? routeStatus(route))}</div>
+    <div class="detail-grid"><p><b>Unidad asignada</b><span>${assignedTruck ? `<button type="button" class="row-link" data-truck="${assignedTruck.id}">${route.truckId}</button>` : route.truckId}</span></p><p><b>Conductor</b><span>${driverName(assignedTruck?.driverId)}</span></p><p><b>Paradas</b><span>${route.covered} completadas · ${route.pending} pendientes</span></p>${durationRow}${distanceRow}${fuelRow}</div>
     ${durationHistoryPlaceholder}
-    ${assignAction}${startAction}${completeAction}${reoptimizeAction}
+    ${assignAction}${driverAssignAction}${startAction}${completeAction}${reoptimizeAction}
     <details class="detail-more"><summary>Ver detalles técnicos</summary>
       <div class="detail-grid"><p><b>Sectores</b><span>${route.sectors.join(', ')}</span></p><p><b>Inicio</b><span>${route.started}</span></p><p><b>Programada</b><span>${route.scheduled}</span></p><p><b>Tiempo estimado</b><span>${route.estimatedMinutes} min</span></p><p><b>Distancia demo</b><span>${route.distanceKm} km</span></p>${householdEstimateRow}</div>
     </details>
@@ -767,7 +782,7 @@ function stopDriverGps() {
 // solo movido a un lugar de primer nivel, gateado a los mismos roles que ya veían Municipal
 // (municipal_admin/dispatcher/driver — frontend/auth-gate.js's SECTION_ROLES).
 function renderDriverSection() { return `<section id="conductor" class="section card"><h2>Vista móvil conductor</h2><p class="demo">${demoNotice} · Posición y trazo del vehículo asignado.</p>${renderDriverMobile()}</section>`; }
-function renderRoutes(items) { return items.map((route) => `<article class="row selectable${route.id === selectedRouteId ? ' selected' : ''}" data-route="${route.id}"><div><strong>${route.name}</strong><br>${route.sectors.join(' · ')} · ETA ${route.eta}<br>${progress(route.progress)}</div><div>${pill(routeStatus(route))}<br>${route.covered}/${route.stops} paradas</div></article>`).join(''); }
+function renderRoutes(items) { return items.map((route) => `<article class="row selectable${route.id === selectedRouteId ? ' selected' : ''}" data-route="${route.id}"><div><strong>${route.name}</strong><br>${route.sectors.join(' · ')} · ETA ${route.eta}<br>${progress(route.progress)}</div><div>${pill(routeReadinessStage(route, trucks.find((truck) => truck.routeId === route.id)) ?? routeStatus(route))}<br>${route.covered}/${route.stops} paradas</div></article>`).join(''); }
 function renderSupervisor() {
   const pendingVerification = routes.filter((route) => route.status === 'completed');
   const openIncidents = incidents.filter((incident) => incident.status !== 'Cerrada');
@@ -1133,7 +1148,11 @@ async function assignDriverToTruck(vehicleId, driverId) {
   // same constraint shared/operations-adapter.js's assignDriverToVehicle() enforces server-side.
   trucks.forEach((item) => { if (item.driverId === driver.id) item.driverId = null; });
   truck.driverId = driver.id;
-  selectTruck(vehicleId); // re-render the detail panel so it reflects the new assignment immediately
+  // SW-048: this is now also reachable from renderRouteDetail()'s embedded driverAssignAction —
+  // re-render whichever detail panel is actually open (route or truck) instead of always jumping
+  // to the truck's own panel, so assigning a driver from a route's detail keeps the dispatcher on
+  // that route instead of yanking them over to Flota.
+  if (selectedRouteId) selectRoute(selectedRouteId); else selectTruck(vehicleId);
   refreshFleetSelects();
 }
 // Triggered from renderRouteDetail()'s "Reoptimizar ruta" action (roadmap item 4, "reoptimización
