@@ -24,6 +24,17 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 
 const STAFF_ROLES = ['municipal_admin', 'dispatcher'];
 
+// SW-050 (revisión): invite/recovery links (Supabase auth.admin.generateLink) turned out to be
+// unreliable in staging — the OTP-based link was rejected as "invalid or expired" seemingly
+// instantly for an unconfirmed account, and the redirect (Site URL/Redirect URLs config, hash vs.
+// PKCE query-param format) needed provider-side configuration this deployment doesn't control
+// end-to-end. A temporary password sidesteps all of that: the driver logs in with the existing,
+// already-working email+password form (frontend/auth-gate.js), no link/redirect/expiry involved.
+function generateTemporaryPassword(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(9));
+  return btoa(String.fromCharCode(...bytes)).replace(/[+/=]/g, '').slice(0, 12);
+}
+
 // SW-044 (encontrado en staging): esta función nunca manejó CORS — nunca se había probado desde un
 // navegador real en un dominio propio, solo contra local (ver nota histórica arriba). El cliente
 // del navegador manda un preflight OPTIONS antes del POST real (Authorization/apikey son headers
@@ -77,7 +88,8 @@ Deno.serve(async (req: Request) => {
   if (membershipLookup.error) return json({ error: membershipLookup.error.message }, 500);
   if (!membershipLookup.data) return json({ error: 'Caller is not authorized to provision accounts for this municipality' }, 403);
 
-  const createdUser = await serviceClient.auth.admin.createUser({ email, email_confirm: false, user_metadata: { display_name: driver.display_name } });
+  const temporaryPassword = generateTemporaryPassword();
+  const createdUser = await serviceClient.auth.admin.createUser({ email, password: temporaryPassword, email_confirm: true, user_metadata: { display_name: driver.display_name } });
   if (createdUser.error) return json({ error: createdUser.error.message }, 500);
   const newUserId = createdUser.data.user.id;
 
@@ -105,11 +117,5 @@ Deno.serve(async (req: Request) => {
     return json({ error: driverUpdate.error.message }, 500);
   }
 
-  // No password was set (email_confirm:false, no password passed to createUser), so an invite
-  // link is how the driver actually gets in - generateLink() doesn't send anything itself, it just
-  // returns a URL for the admin to hand off (SMS, WhatsApp, in person), avoiding any dependency on
-  // SMTP being configured for this local/demo stack.
-  const inviteLink = await serviceClient.auth.admin.generateLink({ type: 'invite', email }).catch(() => null);
-
-  return json({ ok: true, profile_id: newUserId, invite_action_link: inviteLink?.data?.properties?.action_link ?? null }, 200);
+  return json({ ok: true, profile_id: newUserId, temporary_password: temporaryPassword }, 200);
 });

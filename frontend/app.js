@@ -534,8 +534,14 @@ function renderDriverList() {
   return drivers.map((driver) => {
     const canProvision = supabaseConfigured && driver.email && driver.real_id && !driver.profile_id;
     const accountButton = canProvision ? `<button type="button" class="btn-primary" data-fleet-driver-account="${driver.id}">Crear cuenta de acceso</button>` : '';
+    // SW-050 (revisión): for a driver that already has an account, resets their password to a new
+    // temporary one shown here on screen — no link/email involved, so nothing to lose or expire;
+    // usable anytime the dispatcher needs to hand the driver working credentials again.
+    const resendButton = (supabaseConfigured && driver.real_id && driver.profile_id)
+      ? `<button type="button" data-fleet-driver-resend="${driver.id}">Restablecer contraseña</button>`
+      : '';
     const accountPill = driver.profile_id ? pill('active') : '';
-    return `<div class="row"><span>${driver.name}<br>${driver.phone || 'Sin teléfono'}</span>${pill(driver.status === 'Disponible' ? 'active' : 'assigned')}${accountPill}${accountButton}</div>`;
+    return `<div class="row"><span>${driver.name}<br>${driver.phone || 'Sin teléfono'}</span>${pill(driver.status === 'Disponible' ? 'active' : 'assigned')}${accountPill}${accountButton}${resendButton}</div>`;
   }).join('');
 }
 // SW-031: fixes the original gap — there was no screen anywhere to register a new vehicle or
@@ -619,7 +625,11 @@ async function createDriver({ name, phone = '', email } = {}, status) {
   // The real drivers row gets its own id (a Postgres uuid, never the same as the demo id above) —
   // createDriverAccount() needs THAT id to call the Edge Function against a row that actually
   // exists in Supabase, so it's kept on the demo-shaped object rather than discarded.
-  const realDriver = await mirrorToRealAdapter(realAdapter?.createDriver({ display_name: name }), status);
+  // SW-050: email is now persisted on the real drivers row too (supabase/migrations/
+  // 202607150014_sw050_driver_email.sql) — before this it only lived on `created` above, in this
+  // browser tab's memory, so "Crear cuenta de acceso" silently stopped being possible forever the
+  // moment the page reloaded and re-hydrated this driver from Supabase without an email.
+  const realDriver = await mirrorToRealAdapter(realAdapter?.createDriver({ display_name: name, email }), status);
   if (realDriver) created.real_id = realDriver.id;
   return created;
 }
@@ -723,8 +733,27 @@ async function createDriverAccount(driverId) {
   const { data, error } = await client.functions.invoke('create-driver-account', { body: { driver_id: driver.real_id, email: driver.email } });
   if (error) { if (status) status.textContent = `No se pudo crear la cuenta: ${error.message}`; return; }
   driver.profile_id = data.profile_id;
-  if (status) status.textContent = data.invite_action_link ? `Cuenta creada para "${driver.name}". Enlace de invitación: ${data.invite_action_link}` : `Cuenta creada para "${driver.name}".`;
+  // SW-050 (revisión): create-driver-account now returns a temporary_password (set directly via
+  // auth.admin.createUser, email_confirm:true) instead of an invite link — Supabase's invite/
+  // recovery links proved unreliable in staging (instant "invalid or expired", redirect config
+  // dependent). The driver logs in with this password through the existing email+password form.
+  if (status) status.textContent = data.temporary_password ? `Cuenta creada para "${driver.name}". Contraseña temporal: ${data.temporary_password} — compartísela al chofer para que inicie sesión con su email y esta contraseña.` : `Cuenta creada para "${driver.name}".`;
   refreshFleetSelects();
+}
+// SW-050 (revisión): calls the supabase/functions/resend-driver-invite Edge Function for a driver
+// who already has an account (driver.profile_id set) — resets their password to a fresh temporary
+// one shown here, instead of the earlier invite-link approach (same reliability issues as above).
+async function resendDriverInvite(driverId) {
+  const status = $('#fleetDriverStatus');
+  const client = getAuthClient();
+  if (!client) { if (status) status.textContent = 'No hay sesión de Supabase activa.'; return; }
+  const driver = drivers.find((item) => item.id === driverId);
+  if (!driver) return;
+  if (!driver.real_id) return;
+  if (status) status.textContent = `Restableciendo la contraseña de "${driver.name}"...`;
+  const { data, error } = await client.functions.invoke('resend-driver-invite', { body: { driver_id: driver.real_id } });
+  if (error) { if (status) status.textContent = `No se pudo restablecer la contraseña: ${error.message}`; return; }
+  if (status) status.textContent = `Nueva contraseña temporal para "${driver.name}": ${data.temporary_password} — compartísela para que inicie sesión con su email y esta contraseña.`;
 }
 // SW-027: municipal_admin/supervisor/dispatcher only in real Supabase (RLS: tenant_insert_staff on
 // routes and, per 202607150009_sw027_route_paths.sql, on route_paths too — same 3 roles as
@@ -1648,6 +1677,8 @@ document.addEventListener('click', (event) => {
   if (fleetAction === 'create-driver') createDriverFromForm();
   const driverAccountButton = event.target.closest('[data-fleet-driver-account]');
   if (driverAccountButton) createDriverAccount(driverAccountButton.dataset.fleetDriverAccount);
+  const driverResendButton = event.target.closest('[data-fleet-driver-resend]');
+  if (driverResendButton) resendDriverInvite(driverResendButton.dataset.fleetDriverResend);
   const onboardAction = event.target.closest('[data-onboard]')?.dataset.onboard;
   if (onboardAction === 'vehicle') onboardVehicleStep();
   if (onboardAction === 'driver') onboardDriverStep();
@@ -1787,7 +1818,10 @@ async function hydrateVehiclesAndDrivers() {
     const DRIVER_STATUS_LABELS = { available: 'Disponible', assigned: 'Asignado', off_duty: 'Fuera de turno', suspended: 'Suspendido' };
     driversResult.data.forEach((row) => {
       if (drivers.some((driver) => driver.real_id === row.id)) return;
-      drivers.push({ id: row.id, real_id: row.id, name: row.display_name, phone: '', status: DRIVER_STATUS_LABELS[row.status] ?? row.status, profile_id: row.profile_id ?? null });
+      // SW-050: email now hydrates from the real row (supabase/migrations/
+      // 202607150014_sw050_driver_email.sql) instead of only ever existing in the tab that created
+      // it — this is what keeps "Crear cuenta de acceso" available across a page reload.
+      drivers.push({ id: row.id, real_id: row.id, name: row.display_name, phone: '', email: row.email ?? null, status: DRIVER_STATUS_LABELS[row.status] ?? row.status, profile_id: row.profile_id ?? null });
     });
   }
   // SW-042 (docs/TECHNICAL_DEBT_REGISTER.md #24): the two pushes above always hardcoded
