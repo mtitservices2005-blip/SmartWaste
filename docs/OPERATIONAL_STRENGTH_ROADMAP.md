@@ -221,6 +221,26 @@ Verificado con `tests/operational-cycle.test.mjs` (extendido: sin ingesta de GPS
 
 ---
 
+## SW-048 — Reingeniería de usabilidad: asignación de ruta y estado de preparación (no propuesto por este documento) ✅ Hecho (2026-08-20)
+
+**Por qué:** el Project Owner reportó que el flujo actual para poner una ruta en marcha "no sigue una lógica" — confirmado con auditoría de código: el camino más directo requiere 3-4 cambios de pestaña (Rutas → Mapa para asignar vehículo → Flota para asignar chofer → Mapa/Rutas o Conductor para iniciar), el chofer se asigna al **vehículo** en una pantalla separada sin ningún link de vuelta a la ruta, y no existe un indicador único de "qué falta" — hay que leer 3 campos sueltos (pastilla de status + 2 campos de texto) para inferirlo. Además se confirmó que el modo de seguimiento en pantalla completa (SW-043) es puramente visual — no arranca ni detiene nada — lo cual causó confusión real durante pruebas de SW-047 (el Project Owner pensó que "ver correr" el camión ahí era lo mismo que iniciar la ruta).
+
+**Alcance (subconjunto A+B+C de las 5 opciones evaluadas; D y E quedaron fuera, ver abajo):**
+1. **(A) Asignación de chofer embebida en el detalle de ruta**: `driverAssignmentControl()` (ya existía para el detalle de vehículo en Flota) ahora también se renderiza directamente en `renderRouteDetail()` cuando la ruta tiene un vehículo asignado sin chofer — reutiliza el mismo handler/`select` (`data-assign-driver`, `#assignDriverSelect`), sin wiring nuevo. Elimina el viaje obligatorio a Flota para este paso.
+2. **(B) Badge único de preparación**: `shared/route-readiness.js` (nuevo, puro) — `routeReadinessStage(route, truck)` deriva *Falta vehículo* / *Falta chofer* / *Listo para iniciar* solo durante la ventana `planned`/`assigned`; para cualquier otro estado (en curso, completada, etc.) devuelve `null` y el llamador sigue usando la pastilla de status existente sin cambios — no se inventa un badge donde ya no aplica.
+3. **(C) Link cruzado ruta → vehículo**: el campo "Unidad asignada" del detalle de ruta ahora es un botón (`data-truck`) que reutiliza el manejador delegado ya existente para saltar al detalle del camión — el link inverso (vehículo → "Ver ruta completa") ya existía desde antes y no se tocó.
+4. **Bug real encontrado durante esta reingeniería**: el campo "Conductor" del detalle de ruta leía `route.driverId`, un campo que nada escribe jamás para una ruta real/creada (solo las 5 rutas demo precargadas lo traen de fábrica) — por eso siempre mostraba "Sin asignar" aunque el vehículo sí tuviera chofer. Corregido para derivar el chofer del vehículo realmente asignado (`assignedTruck?.driverId`), la fuente de verdad real desde SW-042.
+
+**Fuera de alcance (confirmado con el Project Owner):**
+- **(D) Aviso en modo pantalla completa** ("esto es solo visualización") — evaluado y descartado, no se ve necesario.
+- **(E) Flujo guiado "Poner en marcha"** (wizard de un solo botón que encadene vehículo→chofer→inicio) — anotado como mejora futura opcional bajo una futura pestaña "Configuración", no se construye todavía.
+
+### Resultado
+
+`tests/route-readiness.test.mjs` (nuevo, puro): las 3 etapas de preparación se derivan correctamente, y todo estado post-arranque (`started`/`in_progress`/`delayed`/`completed`/`verified`/`cancelled`) devuelve `null` sin excepción, incluso sin vehículo asignado (caso de una ruta demo). `node --check` sobre los archivos tocados + suite completa sin regresiones (mismos tests dependientes de Docker de siempre). Verificación interactiva en staging pendiente del Project Owner.
+
+---
+
 ## Resumen de secuencia y dependencias
 
 | Hito | Estado | Depende de | Severidad de lo que resuelve | Esfuerzo relativo |
