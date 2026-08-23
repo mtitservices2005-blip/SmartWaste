@@ -294,6 +294,19 @@ async function assignDriverToVehicle(client, fallback, municipality_id, vehicleI
     if (endDriver.error) return fail(endDriver.error.code ?? 'SUPABASE_ERROR', endDriver.error.message, { correlation_id: opts.correlation_id });
     const inserted = await client.from('vehicle_assignments').insert({ municipality_id, vehicle_id: vehicleId, driver_id: driverId, status: 'assigned' }).select('*').single();
     if (inserted.error) return fail(inserted.error.code ?? 'SUPABASE_ERROR', inserted.error.message, { correlation_id: opts.correlation_id });
+    // SW-056: route_runs.driver_id is what listRouteRuns()-based aggregation
+    // (summarizeRouteRunsByDriver(), shared/route-run-stats.js) actually reads — nothing ever wrote
+    // it before this, so "Por chofer" in Estadísticas (SW-047) stayed empty forever no matter how
+    // many times a driver was assigned via this exact function (vehicle_assignments IS updated
+    // correctly, it's just a different table than the one the stats query reads). Best-effort, same
+    // posture as SW-045's distance computation: stamp the driver onto the vehicle's current active
+    // (non-terminal) route_run, if it has one; any failure here is swallowed in its own try/catch so
+    // it can never turn the vehicle_assignments write that already succeeded above into a reported
+    // failure.
+    try {
+      const activeRun = await scoped(client.from('route_runs').select('id')).eq('vehicle_id', vehicleId).not('status', 'in', '("completed","verified","cancelled")').order('created_at', { ascending: false }).limit(1).maybeSingle();
+      if (activeRun.data) await client.from('route_runs').update({ driver_id: driverId }).eq('id', activeRun.data.id);
+    } catch { /* best-effort, see comment above */ }
     return ok(inserted.data, { correlation_id: opts.correlation_id });
   } catch (error) {
     return fail('ADAPTER_EXCEPTION', error.message, { correlation_id: opts.correlation_id });
@@ -321,7 +334,25 @@ async function assignToRouteRun(client, fallback, municipality_id, routeId, patc
     const routeRun = await findOrCreateActiveRouteRun(client, municipality_id, routeId);
     if (routeRun.error) return fail(routeRun.error.code ?? 'SUPABASE_ERROR', routeRun.error.message, opts);
     if (!routeRun.data) return fail('ROUTE_NOT_FOUND', 'Route not found', opts);
-    const updated = await client.from('route_runs').update({ ...patch, status: 'assigned' }).eq('id', routeRun.data.id).select('*').single();
+    // SW-056: covers the reverse order from the fix in assignDriverToVehicle() above — a vehicle
+    // assigned to a route (this function, via assignVehicle()) that already had a driver paired to
+    // it beforehand. Without this, that driver would only ever land in vehicle_assignments, never
+    // on the route_run the stats query actually reads. Best-effort/never blocks the assignment
+    // itself; only fills driver_id when the caller didn't already pass one explicitly.
+    // route_run_id IS NULL restricts this to the persistent vehicle<->driver pairing: once this
+    // function runs once for a vehicle, it also leaves behind a route_run_id-tagged 'assigned' row
+    // below (line ~358) that is never flipped to 'reassigned', so on a repeat run the lookup would
+    // otherwise match both rows and maybeSingle() would silently fail (multiple rows found).
+    let driverPatch = {};
+    if (patch.vehicle_id && !patch.driver_id) {
+      try {
+        let assignmentQuery = client.from('vehicle_assignments').select('driver_id').eq('vehicle_id', patch.vehicle_id).eq('status', 'assigned').is('route_run_id', null);
+        if (municipality_id) assignmentQuery = assignmentQuery.eq('municipality_id', municipality_id);
+        const currentAssignment = await assignmentQuery.maybeSingle();
+        if (currentAssignment.data?.driver_id) driverPatch = { driver_id: currentAssignment.data.driver_id };
+      } catch { /* best-effort, see comment above */ }
+    }
+    const updated = await client.from('route_runs').update({ ...patch, ...driverPatch, status: 'assigned' }).eq('id', routeRun.data.id).select('*').single();
     if (updated.error) return fail(updated.error.code ?? 'SUPABASE_ERROR', updated.error.message, opts);
     const vehicle_id = patch.vehicle_id ?? updated.data.vehicle_id;
     const driver_id = patch.driver_id ?? updated.data.driver_id;
