@@ -333,6 +333,24 @@ Verificado con `tests/operational-cycle.test.mjs` (extendido: sin ingesta de GPS
 
 ---
 
+## SW-056 — Vincular `route_runs.driver_id` a la asignación real del chofer (no propuesto por este documento) ✅ Hecho (2026-08-23)
+
+**Por qué:** el Project Owner reportó que Estadísticas "Por chofer" siempre aparece vacía, aunque "Por ruta" ya funciona desde el fix de SW-055.
+
+**Causa raíz:** existen dos tablas paralelas y hasta ahora desconectadas para vincular chofer y vehículo. `vehicle_assignments` (chofer↔vehículo) sí se escribe siempre, vía `assignDriverToVehicle()`, y de ahí lee la UI el campo "Conductor" de cada camión. `route_runs.driver_id` (chofer↔corrida específica) existe en el esquema desde el principio, pero ningún camino de código lo escribía nunca — `summarizeRouteRunsByDriver()` (`shared/route-run-stats.js`) filtra explícitamente por esa columna, así que "Por chofer" quedaba vacío sin importar cuántas veces se asignara un chofer desde la UI.
+
+**Alcance (solo `shared/operations-adapter.js`, ambos best-effort — nunca rompen la operación principal si fallan):**
+1. `assignDriverToVehicle()`: después de insertar la fila en `vehicle_assignments`, busca la corrida activa (no terminal) del vehículo en `route_runs` y le escribe `driver_id` — cubre el caso "chofer asignado al vehículo mientras la ruta ya está en curso".
+2. `assignToRouteRun()` (usado por `assignVehicle()`): si se asigna un vehículo a una corrida y no viene un `driver_id` explícito en el patch, busca si ese vehículo ya tiene un chofer emparejado en `vehicle_assignments` (`status = 'assigned'`) y lo hereda automáticamente — cubre el caso "vehículo con chofer ya asignado, se pone en una ruta nueva".
+
+**Fuera de alcance:** el concepto de "Equipos" (chofer+vehículo como una sola unidad persistente) — mismo motivo que en SW-054, requiere esquema nuevo.
+
+### Resultado
+
+`node --check` sobre `shared/operations-adapter.js` + suite completa sin regresiones (extendidos `tests/operations-adapter.test.mjs` con 4 casos nuevos: con/sin corrida activa para el fix 1, con/sin chofer para heredar en el fix 2). Verificación interactiva en staging pendiente del Project Owner: reasignar un chofer a un vehículo que ya tiene una ruta en curso, o asignar un vehículo con chofer ya emparejado a una ruta nueva, y confirmar que Estadísticas "Por chofer" deja de estar vacía.
+
+---
+
 ## Resumen de secuencia y dependencias
 
 | Hito | Estado | Depende de | Severidad de lo que resuelve | Esfuerzo relativo |

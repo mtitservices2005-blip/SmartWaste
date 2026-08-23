@@ -185,15 +185,27 @@ assert.equal(assignmentsListResult.data[0].vehicle_id, 'veh-1');
 // server-side — see shared/operations-adapter.js) before inserting the new link. Fake client
 // records every update/insert call so the test can assert both ends ran before the insert, and
 // that the insert carries municipality_id/vehicle_id/driver_id/status correctly.
-function makeAssignDriverFakeClient() {
+// SW-056: assignDriverToVehicle() now also best-effort patches route_runs.driver_id on the
+// vehicle's active run after the vehicle_assignments insert — routeRunsResponse lets each test case
+// control whether an active run "exists" ({data:{id:...}}) or not ({data:null}), and routeRunUpdates
+// records any route_runs.update() calls so tests can assert whether the patch happened.
+function makeAssignDriverFakeClient(routeRunsResponse = { data: null, error: null }) {
   const calls = [];
+  const routeRunUpdates = [];
   // scoped() (municipality_id set in this test) adds one extra leading .eq('municipality_id', ...)
   // in front of the update()'s own .eq('vehicle_id'|'driver_id', ...).eq('status', 'assigned')
   // chain — this chainable stub just resolves on any .eq() call count, mirroring
   // makeChainableQuery() above.
   const chainableUpdate = { eq: () => chainableUpdate, then: (resolve) => resolve({ data: null, error: null }) };
+  const routeRunSelectQuery = { eq: () => routeRunSelectQuery, not: () => routeRunSelectQuery, order: () => routeRunSelectQuery, limit: () => routeRunSelectQuery, maybeSingle: async () => routeRunsResponse };
   const client = {
     from: (table) => {
+      if (table === 'route_runs') {
+        return {
+          select: () => routeRunSelectQuery,
+          update: (patch) => { routeRunUpdates.push(patch); return { eq: async () => ({ data: null, error: null }) }; }
+        };
+      }
       assert.equal(table, 'vehicle_assignments');
       return {
         update: (patch) => { calls.push({ op: 'update', patch }); return chainableUpdate; },
@@ -201,7 +213,7 @@ function makeAssignDriverFakeClient() {
       };
     }
   };
-  return { client, calls };
+  return { client, calls, routeRunUpdates };
 }
 const { client: assignDriverClient, calls: assignDriverCalls } = makeAssignDriverFakeClient();
 const assignDriverResult = await createSupabaseOperationsAdapter(assignDriverClient, { municipality_id: 'mun-a' }).assignDriverToVehicle('veh-1', 'drv-1');
@@ -213,6 +225,21 @@ assert.equal(assignDriverCalls[0].patch.status, 'reassigned');
 assert.equal(assignDriverCalls[1].op, 'update');
 assert.equal(assignDriverCalls[2].op, 'insert');
 assert.deepEqual(assignDriverCalls[2].row, { municipality_id: 'mun-a', vehicle_id: 'veh-1', driver_id: 'drv-1', status: 'assigned' });
+
+// SW-056: with an active (non-terminal) route_run on that vehicle, assignDriverToVehicle() must
+// patch its driver_id too — this is what makes summarizeRouteRunsByDriver() (SW-047 Estadísticas)
+// have anything to read; before this fix nothing ever wrote route_runs.driver_id at all.
+const { client: withActiveRunClient, routeRunUpdates: withActiveRunUpdates } = makeAssignDriverFakeClient({ data: { id: 'run-active-1' }, error: null });
+const withActiveRunResult = await createSupabaseOperationsAdapter(withActiveRunClient, { municipality_id: 'mun-a' }).assignDriverToVehicle('veh-1', 'drv-1');
+assert.equal(withActiveRunResult.ok, true, 'the route_runs best-effort patch must never fail the vehicle_assignments write itself');
+assert.equal(withActiveRunUpdates.length, 1, 'must patch the active run once');
+assert.deepEqual(withActiveRunUpdates[0], { driver_id: 'drv-1' });
+
+// No active route_run on the vehicle: nothing to patch, still succeeds.
+const { client: noActiveRunClient, routeRunUpdates: noActiveRunUpdates } = makeAssignDriverFakeClient({ data: null, error: null });
+const noActiveRunResult = await createSupabaseOperationsAdapter(noActiveRunClient, { municipality_id: 'mun-a' }).assignDriverToVehicle('veh-1', 'drv-1');
+assert.equal(noActiveRunResult.ok, true);
+assert.equal(noActiveRunUpdates.length, 0, 'nothing to patch when the vehicle has no active run');
 
 // No client (demo fallback): falls back to the demo adapter's own assignDriverToVehicle().
 const noClientAssignResult = await createSupabaseOperationsAdapter(null).assignDriverToVehicle('truck-05', 'drv-01');
@@ -341,5 +368,58 @@ const createDriverResult = await createSupabaseOperationsAdapter(createDriverCli
 assert.equal(createDriverResult.ok, true);
 assert.equal(getInsertedRow().email, 'chofer@example.com', 'email must reach the real drivers insert, not be silently dropped');
 assert.equal(createDriverResult.data.email, 'chofer@example.com');
+
+// SW-056: assignVehicle() (assignToRouteRun() under the hood) must inherit a driver already paired
+// to the vehicle (via a prior assignDriverToVehicle() call, i.e. an existing 'assigned' row in
+// vehicle_assignments) onto the route_run it's creating/updating — the reverse order from the
+// route_runs.driver_id fix above (driver assigned to vehicle BEFORE the vehicle is ever put on a
+// route). Fake client covers the full assignVehicle() call chain: an existing active route_run,
+// an existing vehicle_assignments row carrying the driver, no prior vehicle_assignments row keyed
+// by route_run_id yet (so it inserts), and the routes table update.
+function makeAssignVehicleFakeClient({ existingDriverId }) {
+  const routeRunsUpdatePatches = [];
+  const vehicleAssignmentInserts = [];
+  let selectCallCount = 0;
+  const client = {
+    from: (table) => {
+      if (table === 'route_runs') {
+        const existingRunQuery = { not: () => existingRunQuery, order: () => existingRunQuery, limit: () => existingRunQuery, eq: () => existingRunQuery, maybeSingle: async () => ({ data: { id: 'run-1', municipality_id: 'mun-a' }, error: null }) };
+        return {
+          select: () => existingRunQuery,
+          update: (patch) => {
+            routeRunsUpdatePatches.push(patch);
+            return { eq: () => ({ select: () => ({ single: async () => ({ data: { id: 'run-1', municipality_id: 'mun-a', ...patch }, error: null }) }) }) };
+          }
+        };
+      }
+      if (table === 'vehicle_assignments') {
+        const driverLookupQuery = { eq: () => driverLookupQuery, maybeSingle: async () => ({ data: existingDriverId ? { driver_id: existingDriverId } : null, error: null }) };
+        const existingByRunQuery = { eq: () => existingByRunQuery, maybeSingle: async () => ({ data: null, error: null }) };
+        return {
+          select: () => { selectCallCount += 1; return selectCallCount === 1 ? driverLookupQuery : existingByRunQuery; },
+          insert: (row) => { vehicleAssignmentInserts.push(row); return { select: () => ({ single: async () => ({ data: { id: 'assignment-new', ...row }, error: null }) }) }; }
+        };
+      }
+      if (table === 'routes') {
+        const routeQuery = { eq: () => routeQuery, select: () => ({ maybeSingle: async () => ({ data: { id: 'route-1', status: 'assigned' }, error: null }) }) };
+        return { update: () => routeQuery };
+      }
+      throw new Error(`unexpected table ${table}`);
+    }
+  };
+  return { client, routeRunsUpdatePatches, vehicleAssignmentInserts };
+}
+const { client: inheritDriverClient, routeRunsUpdatePatches: inheritDriverPatches, vehicleAssignmentInserts: inheritDriverInserts } = makeAssignVehicleFakeClient({ existingDriverId: 'drv-existing' });
+const inheritDriverResult = await createSupabaseOperationsAdapter(inheritDriverClient, { municipality_id: 'mun-a' }).assignVehicle('route-1', 'veh-1');
+assert.equal(inheritDriverResult.ok, true);
+assert.equal(inheritDriverPatches[0].driver_id, 'drv-existing', 'route_runs update must inherit the vehicle\'s already-paired driver');
+assert.equal(inheritDriverInserts[0].driver_id, 'drv-existing', 'the vehicle_assignments row this creates must carry the inherited driver too');
+
+// No driver currently paired to the vehicle: nothing to inherit, assignment still succeeds without
+// inventing a driver_id.
+const { client: noDriverToInheritClient, routeRunsUpdatePatches: noInheritPatches } = makeAssignVehicleFakeClient({ existingDriverId: null });
+const noInheritResult = await createSupabaseOperationsAdapter(noDriverToInheritClient, { municipality_id: 'mun-a' }).assignVehicle('route-1', 'veh-1');
+assert.equal(noInheritResult.ok, true);
+assert.equal(noInheritPatches[0].driver_id, undefined, 'must not invent a driver_id when the vehicle has none assigned');
 
 console.log('operations-adapter ok');
