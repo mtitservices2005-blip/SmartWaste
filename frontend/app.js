@@ -1465,7 +1465,14 @@ async function completeRouteManually(routeId) {
   // completing without starting first stays possible (unchanged from before this hito, e.g.
   // skipping straight to "Completar"), it just means no measured duration, same as any demo route.
   if (route.started_at && !route.completed_at) route.completed_at = new Date().toISOString();
-  operationsAdapter.completeRoute(routeId);
+  // SW-055 (encontrado en vivo verificando el toast de esta misma ruta): faltaba el mismo guard que
+  // ya tienen startRouteManually()/assignTruckToRoute() — operationsAdapter (el clon demo, que nunca
+  // aprende sobre una ruta real hidratada) tiraba "Route not found" sin capturar, matando el resto de
+  // esta función en silencio para CUALQUIER ruta real: nunca llegaba a escribir en Supabase, nunca
+  // mostraba el aviso nuevo. El dato local (route.completed_at arriba) sí quedaba puesto, por eso la
+  // pantalla mostraba "medido" aunque el servidor nunca se enterara — la causa real detrás de lo que
+  // SW-053 solo corrigió a medias.
+  if (!route.real_id) operationsAdapter.completeRoute(routeId);
   const truck = trucks.find((item) => item.routeId === routeId);
   if (truck) { truck.state = 'completed'; truck.progress = 100; }
   // SW-055: found repeatedly in staging — completing a route silently frees its vehicle
@@ -1510,10 +1517,14 @@ async function verifyRouteManually(routeId) {
   const route = routeById(routeId);
   if (!route) return;
   route.status = 'verified';
-  operationsAdapter.verifyRoute(routeId);
+  // SW-055: same missing guard just found/fixed in completeRouteManually() — operationsAdapter (demo
+  // clone) throws "Route not found" uncaught for any real/hydrated route, silently killing the rest
+  // of this function (refreshSupervisor/refreshResumen/the real mirror write below never ran).
+  if (!route.real_id) operationsAdapter.verifyRoute(routeId);
   refreshSupervisor();
   refreshResumen();
   if (realAdapter) await mirrorToRealAdapter(realAdapter.verifyRoute(route.real_id ?? routeId));
+  showToast(`Ruta "${route.name}" verificada.`);
 }
 
 function initCreateRouteMap() {
