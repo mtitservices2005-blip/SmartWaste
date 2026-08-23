@@ -379,6 +379,7 @@ assert.equal(createDriverResult.data.email, 'chofer@example.com');
 function makeAssignVehicleFakeClient({ existingDriverId }) {
   const routeRunsUpdatePatches = [];
   const vehicleAssignmentInserts = [];
+  const isCalls = [];
   let selectCallCount = 0;
   const client = {
     from: (table) => {
@@ -393,7 +394,11 @@ function makeAssignVehicleFakeClient({ existingDriverId }) {
         };
       }
       if (table === 'vehicle_assignments') {
-        const driverLookupQuery = { eq: () => driverLookupQuery, maybeSingle: async () => ({ data: existingDriverId ? { driver_id: existingDriverId } : null, error: null }) };
+        const driverLookupQuery = {
+          eq: () => driverLookupQuery,
+          is: (column, value) => { isCalls.push([column, value]); return driverLookupQuery; },
+          maybeSingle: async () => ({ data: existingDriverId ? { driver_id: existingDriverId } : null, error: null })
+        };
         const existingByRunQuery = { eq: () => existingByRunQuery, maybeSingle: async () => ({ data: null, error: null }) };
         return {
           select: () => { selectCallCount += 1; return selectCallCount === 1 ? driverLookupQuery : existingByRunQuery; },
@@ -407,13 +412,18 @@ function makeAssignVehicleFakeClient({ existingDriverId }) {
       throw new Error(`unexpected table ${table}`);
     }
   };
-  return { client, routeRunsUpdatePatches, vehicleAssignmentInserts };
+  return { client, routeRunsUpdatePatches, vehicleAssignmentInserts, isCalls };
 }
-const { client: inheritDriverClient, routeRunsUpdatePatches: inheritDriverPatches, vehicleAssignmentInserts: inheritDriverInserts } = makeAssignVehicleFakeClient({ existingDriverId: 'drv-existing' });
+const { client: inheritDriverClient, routeRunsUpdatePatches: inheritDriverPatches, vehicleAssignmentInserts: inheritDriverInserts, isCalls: inheritDriverIsCalls } = makeAssignVehicleFakeClient({ existingDriverId: 'drv-existing' });
 const inheritDriverResult = await createSupabaseOperationsAdapter(inheritDriverClient, { municipality_id: 'mun-a' }).assignVehicle('route-1', 'veh-1');
 assert.equal(inheritDriverResult.ok, true);
 assert.equal(inheritDriverPatches[0].driver_id, 'drv-existing', 'route_runs update must inherit the vehicle\'s already-paired driver');
 assert.equal(inheritDriverInserts[0].driver_id, 'drv-existing', 'the vehicle_assignments row this creates must carry the inherited driver too');
+// Codex review (PR #73): without this filter, a vehicle on its second+ run matches both its
+// persistent pairing row (route_run_id IS NULL) and the route_run_id-tagged row this same function
+// left behind on the previous run, so maybeSingle() would find multiple rows and the driverPatch
+// silently stays empty via the outer catch. Guard that the filter is actually applied.
+assert.deepEqual(inheritDriverIsCalls[0], ['route_run_id', null], 'driver lookup must be restricted to the persistent pairing (route_run_id IS NULL)');
 
 // No driver currently paired to the vehicle: nothing to inherit, assignment still succeeds without
 // inventing a driver_id.

@@ -339,10 +339,14 @@ async function assignToRouteRun(client, fallback, municipality_id, routeId, patc
     // it beforehand. Without this, that driver would only ever land in vehicle_assignments, never
     // on the route_run the stats query actually reads. Best-effort/never blocks the assignment
     // itself; only fills driver_id when the caller didn't already pass one explicitly.
+    // route_run_id IS NULL restricts this to the persistent vehicle<->driver pairing: once this
+    // function runs once for a vehicle, it also leaves behind a route_run_id-tagged 'assigned' row
+    // below (line ~358) that is never flipped to 'reassigned', so on a repeat run the lookup would
+    // otherwise match both rows and maybeSingle() would silently fail (multiple rows found).
     let driverPatch = {};
     if (patch.vehicle_id && !patch.driver_id) {
       try {
-        let assignmentQuery = client.from('vehicle_assignments').select('driver_id').eq('vehicle_id', patch.vehicle_id).eq('status', 'assigned');
+        let assignmentQuery = client.from('vehicle_assignments').select('driver_id').eq('vehicle_id', patch.vehicle_id).eq('status', 'assigned').is('route_run_id', null);
         if (municipality_id) assignmentQuery = assignmentQuery.eq('municipality_id', municipality_id);
         const currentAssignment = await assignmentQuery.maybeSingle();
         if (currentAssignment.data?.driver_id) driverPatch = { driver_id: currentAssignment.data.driver_id };
