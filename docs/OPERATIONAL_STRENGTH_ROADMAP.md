@@ -298,6 +298,23 @@ Verificado con `tests/operational-cycle.test.mjs` (extendido: sin ingesta de GPS
 
 ---
 
+## SW-054 — Reorganización visual de Mapa/Rutas/Flotilla (no propuesto por este documento) ✅ Hecho (2026-08-23)
+
+**Por qué:** el Project Owner reportó, tras varias sesiones de uso real, que estas 3 sub-vistas de Operaciones se sentían saturadas y desordenadas — auditoría de código confirmó cada queja puntual antes de tocar nada.
+
+**Alcance (solo reordenar/reestilizar, sin cambios de esquema):**
+1. **Mapa** (`renderMapPanel()`): eliminadas las 8 tarjetas KPI (`operationalKpis()`, función borrada por quedar sin otro uso) que se apilaban antes del mapa, duplicando números que ya viven en Resumen. El panel queda: selector de ruta → botón "Iniciar ruta" (nuevo, `mapStartAction()`, solo visible cuando la ruta seleccionada está lista para iniciar — reutiliza el manejador `data-start-route` existente) → mapa.
+2. **Rutas** (`renderRutasPanel()`): "+ Nueva ruta" se movió arriba de la lista (antes era lo último del panel, colapsado, después de toda la lista — "muy difícil de encontrar"). El buscador/filtro de sector pasó de la clase `.controls` genérica a una propia `.search-bar`, para no heredar la alineación pensada para formularios. Cada fila de ruta (`renderRoutes()`) ahora lleva un borde izquierdo coloreado según su estado (mismos colores que ya usan los `pill()`), en una lista más compacta (`.list.compact`).
+3. **Flota → Flotilla**: renombrada (solo la etiqueta visible — el id interno `flota`/`#operaciones/flota` no cambió, ningún link se rompe). `renderFleetManagement()` quedó solo con los 2 formularios de alta; las listas de vehículos y choferes se movieron a `renderFlotaPanel()`, ambas **debajo** de los formularios y una al lado de la otra (mismo `.panel-grid`, con una variante `.two-col` nueva) — antes la lista de vehículos vivía arriba de todo y la de choferes debajo de su propio formulario, dos criterios distintos en el mismo panel.
+
+**Fuera de alcance:** el concepto de "Equipos" (camión+chofer como una sola unidad para asignar) — evaluado en la misma conversación, pero es un hito aparte porque toca esquema nuevo.
+
+### Resultado
+
+`node --check` sobre `frontend/app.js` + suite completa sin regresiones. Todo el cambio es de renderizado/CSS — ningún dato ni transición de estado se tocó. Verificación interactiva en staging pendiente del Project Owner.
+
+---
+
 ## Resumen de secuencia y dependencias
 
 | Hito | Estado | Depende de | Severidad de lo que resuelve | Esfuerzo relativo |

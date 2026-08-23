@@ -270,23 +270,6 @@ function truckIcon(truck, isRealGps = false) {
   const badge = isRealGps ? '<i class="gps-real-badge" title="Posición GPS real">●</i>' : '';
   return `<span class="truck-icon ${truck.state}" title="${label(truck.state)}">${badge}${TRUCK_SILHOUETTE_SVG}<small>${truck.unit.replace('SW-LS-', '')}</small></span>`;
 }
-function kpiValue(predicate) { return trucks.filter(predicate).length; }
-function operationalKpis() {
-  const completedRoutes = routes.filter((route) => ['completed', 'verified'].includes(route.status)).length;
-  const openIncidents = incidents.filter((incident) => incident.status !== 'Cerrada').length;
-  const compliance = routes.length ? Math.round(routes.reduce((total, route) => total + route.progress, 0) / routes.length) : 0;
-  return [
-    ['Camiones activos', kpiValue((truck) => truck.state === 'active')],
-    ['Camiones detenidos', kpiValue((truck) => truck.state === 'stopped')],
-    ['Camiones retrasados', kpiValue((truck) => truck.state === 'delayed')],
-    ['Camiones offline', kpiValue((truck) => truck.state === 'offline')],
-    ['Rutas en progreso', routes.filter((route) => route.status === 'in_progress' || route.status === 'delayed').length],
-    ['Rutas completadas', completedRoutes],
-    ['Cumplimiento del día', `${compliance}%`],
-    ['Incidencias abiertas', openIncidents]
-  ];
-}
-
 // Fase 2 UX (auditoría SW-020): la app no tenía pantalla de aterrizaje — se llegaba directo a
 // "Mapa" sin ningún resumen de qué necesita atención. Esta sección agrega esa vista, reutilizando
 // los mismos filtros que ya usan renderMap()/renderSupervisor() (no se inventa ningún estado
@@ -334,13 +317,26 @@ function routeFocusSelect() {
   return `<select id="simVehicle"><option value="">Seleccionar ruta a monitorear…</option>${routes.map((route) => `<option value="${route.id}"${route.id === selectedRouteId ? ' selected' : ''}>${route.name}</option>`).join('')}</select>`;
 }
 
+// SW-054: only shown when a route is actually selected on the map AND ready to start (same
+// truckId/status guard as renderRouteDetail()'s startAction) — reuses the existing
+// [data-start-route] handler, no new wiring. Kept in its own function/container (#mapStartAction)
+// so markSelection() can refresh it on every route selection change without re-rendering the whole
+// map panel (which would tear down and rebuild the Leaflet map).
+function mapStartAction() {
+  const route = selectedRouteId ? routeById(selectedRouteId) : null;
+  if (!route || !route.truckId || route.truckId === 'Sin asignar' || route.status !== 'assigned') return '';
+  return `<button type="button" class="btn-primary" data-start-route="${route.id}">Iniciar ruta</button>`;
+}
+// SW-054: the Project Owner reported this panel felt "saturado" — 8 KPI tiles (operationalKpis(),
+// removed) stacked above the map itself, duplicating numbers already on Resumen (renderSummary()),
+// before ever reaching the map. Trimmed to just: route selector + start action + the map. Anything
+// needing the broader operational KPIs is a click away on Resumen.
 function renderMapPanel() {
   return `<div class="map-card">
       <div class="map-header">
         <div><p class="eyebrow">${pilotMunicipality.branding.label}</p><h1>Mapa operativo real de ${pilotMunicipality.name}</h1><p class="demo">${demoNotice} · Las rutas son simuladas, no oficiales del ayuntamiento.</p><p class="demo gps-legend">● = posición GPS real · el resto son camiones simulados</p></div>
-        <div class="sim-controls" aria-label="Controles de simulación"><span>${simulationNotice} · fuente desacoplada: ${backendMode}</span>${routeFocusSelect()}<button class="btn-primary" data-sim="start">Iniciar</button><button data-sim="pause">Pausar</button><button data-sim="reset">Reiniciar</button><button class="btn-ghost" data-sim="speed">${simulationSpeed}×</button><button class="btn-ghost" data-sim="fullscreen">Pantalla completa</button></div>
+        <div class="sim-controls" aria-label="Controles de simulación"><span>${simulationNotice} · fuente desacoplada: ${backendMode}</span>${routeFocusSelect()}<span id="mapStartAction">${mapStartAction()}</span><button class="btn-primary" data-sim="start">Iniciar</button><button data-sim="pause">Pausar</button><button data-sim="reset">Reiniciar</button><button class="btn-ghost" data-sim="speed">${simulationSpeed}×</button><button class="btn-ghost" data-sim="fullscreen">Pantalla completa</button></div>
       </div>
-      <div class="kpis compact">${operationalKpis().map(([name, value]) => `<div class="kpi"><strong>${value}</strong><br>${name}</div>`).join('')}</div>
       <div id="realMap" class="real-map" role="application" aria-label="Mapa OpenStreetMap de Laguna Salada"><div class="map-fallback"><strong>Mapa externo no disponible.</strong><span>Fallback operativo demo: use listas, paneles y coordenadas simuladas.</span></div></div>
     </div>
     <aside class="detail-drawer is-hidden" id="detail" aria-hidden="true"></aside>`;
@@ -469,16 +465,31 @@ function renderRouteDetail(route) {
 }
 function renderIncidentDetail(incident) { return `<div class="drawer-head"><p class="eyebrow">Incidencia operativa demo</p><h2>${incident.type}</h2>${pill('open')}</div><p><b>Folio:</b> ${incident.id}</p><p><b>Sector:</b> ${incident.sector}</p><p><b>Prioridad:</b> ${incident.priority}</p><p><b>Estado:</b> ${incident.status}</p><p>${incident.detail}</p><p class="demo">${demoNotice}</p>`; }
 
+// SW-054: "+ Nueva ruta" used to be the last thing in this panel, collapsed below the entire route
+// list — the Project Owner reported it was "muy difícil de encontrar". Moved above the list, same
+// collapsible <details> (no behavior change, just position), and the search bar got its own
+// `.search-bar` class instead of the generic `.controls` (used everywhere from creation forms to
+// route-detail actions) so it can have its own alignment without affecting every other `.controls`
+// block in the app.
 function renderRutasPanel() {
   return `<h2>Rutas</h2><p class="demo">${demoNotice} · Municipio piloto configurable: ${pilotMunicipality.name}, ${pilotMunicipality.country}</p>
-    <div class="controls"><input id="search" placeholder="Buscar ruta, camión o sector"><select id="sectorFilter"><option value="">Todos los sectores</option>${sectors.map((s) => `<option>${s.name}</option>`).join('')}</select></div>
-    <h3>Rutas del día</h3><div class="list" id="routeList">${renderRoutes(routes)}</div>
-    <details class="create-route-toggle" id="createRouteToggle"><summary>+ Nueva ruta</summary>${renderCreateRoute()}</details>`;
+    <details class="create-route-toggle" id="createRouteToggle"><summary>+ Nueva ruta</summary>${renderCreateRoute()}</details>
+    <div class="search-bar"><input id="search" placeholder="Buscar ruta, camión o sector"><select id="sectorFilter"><option value="">Todos los sectores</option>${sectors.map((s) => `<option>${s.name}</option>`).join('')}</select></div>
+    <h3>Rutas del día</h3><div class="list compact" id="routeList">${renderRoutes(routes)}</div>`;
 }
+// SW-054: renamed "Flota" -> "Flotilla" (display label only, OPS_VIEW_LABELS above — the
+// #operaciones/flota hash/ids are untouched so existing links keep working). Reordered so both
+// vehicles and drivers now follow the same top-to-bottom pattern — creation forms first, lists
+// after — instead of the old inconsistency (vehicle list rendered before any form; driver list
+// rendered after its own form but vehicle form had none below it).
 function renderFlotaPanel() {
-  return `<h2>Flota</h2><p class="demo">${demoNotice}</p>
-    <h3>Vehículos demo</h3><div id="vehicleList">${renderVehicleList()}</div>
-    ${renderFleetManagement()}`;
+  return `<h2>Flotilla</h2><p class="demo">${demoNotice}</p>
+    ${renderFleetManagement()}
+    <h3>Vehículos y choferes</h3>
+    <div class="panel-grid two-col">
+      <div><h4>Vehículos</h4><div id="vehicleList">${renderVehicleList()}</div></div>
+      <div><h4>Choferes</h4><div class="list" id="driverList">${renderDriverList()}</div></div>
+    </div>`;
 }
 function renderIncidenciasPanel() {
   return `<h2>Incidencias</h2><p class="demo">${demoNotice}</p>
@@ -532,7 +543,7 @@ async function refreshEfficiencyDashboard() {
 // mismas funciones/estado que antes (renderRoutes(), renderVehicleList(), renderFleetManagement(),
 // renderCreateRoute() sin cambios), solo reorganizado en paneles separados.
 const OPS_VIEWS = ['mapa', 'rutas', 'flota', 'incidencias', 'estadisticas'];
-const OPS_VIEW_LABELS = { mapa: 'Mapa', rutas: 'Rutas', flota: 'Flota', incidencias: 'Incidencias', estadisticas: 'Estadísticas' };
+const OPS_VIEW_LABELS = { mapa: 'Mapa', rutas: 'Rutas', flota: 'Flotilla', incidencias: 'Incidencias', estadisticas: 'Estadísticas' };
 function renderOperations() {
   return `<section id="operaciones" class="section">
     <div class="ops-nav" role="tablist" aria-label="Vistas de Operaciones">${OPS_VIEWS.map((view) => `<button type="button" class="ops-tab" data-ops-nav="${view}" role="tab">${OPS_VIEW_LABELS[view]}</button>`).join('')}</div>
@@ -572,11 +583,13 @@ function renderDriverList() {
 // every existing render function already reads trucks/drivers directly, not through the adapter.
 // Driver login accounts are a separate, Supabase-only concern (see docs/TECHNICAL_DEBT_REGISTER.md);
 // a driver created here has no access account yet, only a record.
+// SW-054: driver list moved out to renderFlotaPanel() (now lives alongside the vehicle list, both
+// below the forms) — this function is creation-only now, matching its own heading.
 function renderFleetManagement() {
   return `<div class="card" id="fleetManagement">
-    <h3>Flota y personal</h3>
-    <p class="demo">${demoNotice} · Alta de vehículos y choferes. El chofer queda registrado sin cuenta de acceso todavía.</p>
-    <div class="panel-grid">
+    <h3>Registrar nuevo vehículo o chofer</h3>
+    <p class="demo">${demoNotice} · El chofer queda registrado sin cuenta de acceso todavía.</p>
+    <div class="panel-grid two-col">
       <div>
         <h4>Nuevo vehículo</h4>
         <div class="controls"><input id="fleetVehicleUnit" placeholder="Unidad (p. ej. SW-LS-07)"><input id="fleetVehiclePlate" placeholder="Matrícula"><input id="fleetVehicleMaxStops" type="number" min="1" placeholder="Paradas máx. por viaje" value="20"></div>
@@ -588,7 +601,6 @@ function renderFleetManagement() {
         <div class="controls"><input id="fleetDriverName" placeholder="Nombre del chofer"><input id="fleetDriverPhone" placeholder="Teléfono"><input id="fleetDriverEmail" type="email" placeholder="Correo (para cuenta de acceso, opcional)"></div>
         <div class="controls"><button type="button" class="btn-primary" data-fleet="create-driver">Registrar chofer</button></div>
         <p id="fleetDriverStatus" class="demo"></p>
-        <div class="list" id="driverList">${renderDriverList()}</div>
       </div>
     </div>
   </div>`;
@@ -873,7 +885,11 @@ function stopDriverGps() {
 // solo movido a un lugar de primer nivel, gateado a los mismos roles que ya veían Municipal
 // (municipal_admin/dispatcher/driver — frontend/auth-gate.js's SECTION_ROLES).
 function renderDriverSection() { return `<section id="conductor" class="section card"><h2>Vista móvil conductor</h2><p class="demo">${demoNotice} · Posición y trazo del vehículo asignado.</p>${renderDriverMobile()}</section>`; }
-function renderRoutes(items) { return items.map((route) => `<article class="row selectable${route.id === selectedRouteId ? ' selected' : ''}" data-route="${route.id}"><div><strong>${route.name}</strong><br>${route.sectors.join(' · ')} · ETA ${route.eta}<br>${progress(route.progress)}</div><div>${pill(routeReadinessStage(route, trucks.find((truck) => truck.routeId === route.id)) ?? routeStatus(route))}<br>${route.covered}/${route.stops} paradas</div></article>`).join(''); }
+// SW-054: every route row shared the exact same flat background (only the currently-selected one
+// stood out) — the Project Owner reported the list was hard to scan. `route-status-${status}` adds
+// a left-border tint per status (CSS, `.list.compact .row[class*="route-status-"]`), reusing the
+// same status keyword `pill()` already renders (no new vocabulary, just a second surface for it).
+function renderRoutes(items) { return items.map((route) => { const status = routeReadinessStage(route, trucks.find((truck) => truck.routeId === route.id)) ?? routeStatus(route); return `<article class="row selectable route-status-${status}${route.id === selectedRouteId ? ' selected' : ''}" data-route="${route.id}"><div><strong>${route.name}</strong><br>${route.sectors.join(' · ')} · ETA ${route.eta}<br>${progress(route.progress)}</div><div>${pill(status)}<br>${route.covered}/${route.stops} paradas</div></article>`; }).join(''); }
 function renderSupervisor() {
   const pendingVerification = routes.filter((route) => route.status === 'completed');
   const openIncidents = incidents.filter((incident) => incident.status !== 'Cerrada');
@@ -1700,6 +1716,10 @@ function markSelection() {
   // way — clicking its row in "Rutas", its polyline on the map, or closing the detail drawer.
   const simVehicleSelect = $('#simVehicle');
   if (simVehicleSelect) simVehicleSelect.value = selectedRouteId ?? '';
+  // SW-054: mapStartAction() depends on the currently selected route — refresh it here too, same
+  // trigger as the select above, so the button appears/disappears/updates without a full map re-render.
+  const mapStartActionEl = $('#mapStartAction');
+  if (mapStartActionEl) mapStartActionEl.innerHTML = mapStartAction();
 }
 function closeDetail() { const detail = $('#detail'); detail.classList.add('is-hidden'); detail.setAttribute('aria-hidden', 'true'); detail.innerHTML = ''; selectedTruckId = null; selectedRouteId = null; selectedIncidentId = null; drawMapLayers(); markSelection(); }
 function selectTruck(id) { selectedTruckId = id; selectedRouteId = null; selectedIncidentId = null; const truck = trucks.find((item) => item.id === id); openDetail(renderTruckDetail(truck)); drawMapLayers(); markSelection(); }
