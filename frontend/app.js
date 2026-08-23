@@ -16,6 +16,26 @@ import { initAuthGate, readSupabaseConfig, getAuthClient } from './auth-gate.js'
 
 const $ = (selector) => document.querySelector(selector);
 const app = $('#app');
+// SW-055: a recurring source of confusion this whole project — actions that DO work (completar
+// ruta, asignar vehículo/chofer, iniciar recorrido) only ever showed their result as a silent
+// re-render somewhere in the page, so it repeatedly looked like "nothing happened" even when it
+// had. One small reusable toast instead of scattering ad-hoc status text everywhere: a fixed banner
+// at the top of the viewport, auto-dismissed, reused by every mutating action below rather than
+// each inventing its own feedback (or none at all). `type` picks the color (success/error); a
+// second call while one is still showing replaces it rather than stacking multiple banners.
+let toastTimer = null;
+function showToast(message, { type = 'success' } = {}) {
+  clearTimeout(toastTimer);
+  let toast = document.getElementById('appToast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'appToast';
+    document.body.append(toast);
+  }
+  toast.className = `app-toast app-toast-${type} visible`;
+  toast.textContent = message;
+  toastTimer = setTimeout(() => toast.classList.remove('visible'), 3200);
+}
 // SW-044: a real municipality only starts genuinely demo-free the very first time it has zero
 // real vehicles/drivers/routes (bootstrapRealBackend()'s "vacío real" branch, further down) — the
 // moment any real record exists, later logins go back to showing the 5 bundled demo
@@ -1252,6 +1272,7 @@ async function assignVehicleToExistingRoute(routeId, vehicleId) {
   const truck = trucks.find((item) => item.id === vehicleId);
   if (!route || !truck) return;
   await assignTruckToRoute(route, truck);
+  showToast(`${truck.unit} asignado a "${route.name}".`);
   selectRoute(routeId); // re-render the detail panel so it reflects the new assignment immediately
   $('#routeList').innerHTML = renderRoutes(routes);
   refreshFleetSelects();
@@ -1319,9 +1340,14 @@ async function assignDriverToTruck(vehicleId, driverId) {
   const driver = drivers.find((item) => item.id === driverId);
   if (!truck || !driver) return;
   if (truck.real_id) {
-    if (driver.real_id) await mirrorToRealAdapter(realAdapter?.assignDriverToVehicle(truck.real_id, driver.real_id));
+    // SW-055: a real truck paired with a driver that hasn't finished syncing (no real_id yet) used
+    // to silently skip the actual Supabase write here — the local assignment below would still look
+    // successful forever. Now says so instead of looking identical to a real success.
+    if (driver.real_id) { await mirrorToRealAdapter(realAdapter?.assignDriverToVehicle(truck.real_id, driver.real_id)); showToast(`${driver.name} asignado a ${truck.unit}.`); }
+    else showToast(`"${driver.name}" todavía no terminó de sincronizarse — la asignación quedó solo local, no en el servidor.`, { type: 'error' });
   } else {
     operationsAdapter.assignDriverToVehicle(truck.id, driver.id);
+    showToast(`${driver.name} asignado a ${truck.unit}.`);
   }
   // A driver drives one truck at a time — clear them from wherever they were assigned before,
   // same constraint shared/operations-adapter.js's assignDriverToVehicle() enforces server-side.
@@ -1399,6 +1425,7 @@ async function startRouteManually(routeId) {
   if (!route.real_id) operationsAdapter.startRoute(routeId);
   route.status = 'started';
   if (!route.started_at) route.started_at = new Date().toISOString();
+  showToast(`Ruta "${route.name}" iniciada.`);
   // Only re-opens the route detail drawer if it's already showing this route (admin/dispatcher
   // clicking "Iniciar ruta" there) — this is also reachable from the driver's own Conductor view
   // (driverRouteLifecycleControl(), via driverStartRoute() below), which must NOT get yanked into
@@ -1412,6 +1439,7 @@ async function startRouteManually(routeId) {
   if (realAdapter) {
     const realRouteId = route.real_id ?? routeId;
     const updated = await mirrorToRealAdapter(realAdapter.startRoute(realRouteId));
+    if (!updated) showToast(`"${route.name}" se inició localmente, pero no se pudo confirmar con el servidor.`, { type: 'error' });
     if (updated?.started_at) route.started_at = updated.started_at; // el timestamp real gana sobre el sello local optimista
   }
 }
@@ -1437,9 +1465,20 @@ async function completeRouteManually(routeId) {
   // completing without starting first stays possible (unchanged from before this hito, e.g.
   // skipping straight to "Completar"), it just means no measured duration, same as any demo route.
   if (route.started_at && !route.completed_at) route.completed_at = new Date().toISOString();
-  operationsAdapter.completeRoute(routeId);
+  // SW-055 (encontrado en vivo verificando el toast de esta misma ruta): faltaba el mismo guard que
+  // ya tienen startRouteManually()/assignTruckToRoute() — operationsAdapter (el clon demo, que nunca
+  // aprende sobre una ruta real hidratada) tiraba "Route not found" sin capturar, matando el resto de
+  // esta función en silencio para CUALQUIER ruta real: nunca llegaba a escribir en Supabase, nunca
+  // mostraba el aviso nuevo. El dato local (route.completed_at arriba) sí quedaba puesto, por eso la
+  // pantalla mostraba "medido" aunque el servidor nunca se enterara — la causa real detrás de lo que
+  // SW-053 solo corrigió a medias.
+  if (!route.real_id) operationsAdapter.completeRoute(routeId);
   const truck = trucks.find((item) => item.routeId === routeId);
   if (truck) { truck.state = 'completed'; truck.progress = 100; }
+  // SW-055: found repeatedly in staging — completing a route silently frees its vehicle
+  // (isTruckAvailable() already treats a completed/verified route's truck as available again,
+  // SW-044) but nothing ever said so, which is exactly what read as "los choferes no se liberan."
+  showToast(truck ? `Ruta "${route.name}" completada — ${truck.unit} ya está disponible para asignar.` : `Ruta "${route.name}" completada.`);
   // SW-044: same guard as startRouteManually() — this is now also reachable from the driver's own
   // Conductor view (driverCompleteRoute() below), which must not get yanked into the operations
   // detail panel just because the chofer finished their own route.
@@ -1456,6 +1495,7 @@ async function completeRouteManually(routeId) {
   if (realAdapter) {
     const realRouteId = route.real_id ?? routeId;
     const updated = await mirrorToRealAdapter(realAdapter.completeRoute(realRouteId));
+    if (!updated) showToast(`"${route.name}" se completó localmente, pero no se pudo confirmar con el servidor.`, { type: 'error' });
     if (updated?.completed_at) route.completed_at = updated.completed_at; // el timestamp real gana sobre el sello local optimista
     // SW-045: distance_meters solo llega si hubo suficiente rastro de GPS real durante la corrida —
     // ausente para una ruta demo o una real sin GPS activo, y ahí se sigue mostrando la distancia
@@ -1477,10 +1517,14 @@ async function verifyRouteManually(routeId) {
   const route = routeById(routeId);
   if (!route) return;
   route.status = 'verified';
-  operationsAdapter.verifyRoute(routeId);
+  // SW-055: same missing guard just found/fixed in completeRouteManually() — operationsAdapter (demo
+  // clone) throws "Route not found" uncaught for any real/hydrated route, silently killing the rest
+  // of this function (refreshSupervisor/refreshResumen/the real mirror write below never ran).
+  if (!route.real_id) operationsAdapter.verifyRoute(routeId);
   refreshSupervisor();
   refreshResumen();
   if (realAdapter) await mirrorToRealAdapter(realAdapter.verifyRoute(route.real_id ?? routeId));
+  showToast(`Ruta "${route.name}" verificada.`);
 }
 
 function initCreateRouteMap() {

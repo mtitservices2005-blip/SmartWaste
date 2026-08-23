@@ -333,6 +333,26 @@ Verificado con `tests/operational-cycle.test.mjs` (extendido: sin ingesta de GPS
 
 ---
 
+## SW-055 — Aviso de confirmación (toast) para acciones que antes eran silenciosas (no propuesto por este documento) ✅ Hecho (2026-08-23)
+
+**Por qué:** patrón repetido durante toda la sesión — acciones que sí funcionaban (completar ruta, iniciar ruta, asignar vehículo/chofer) solo se reflejaban como un re-render silencioso en algún lugar de la pantalla, así que repetidamente parecía que "no pasaba nada" aunque sí había pasado. El disparador puntual: el Project Owner tocó "Marcar como completada" y no notó ningún cambio, aunque el botón sí funcionaba.
+
+**Alcance:**
+1. `showToast(message, {type})` (nuevo, `frontend/app.js`): un aviso fijo arriba de la pantalla, auto-descartado a los ~3.2s, con transición de entrada/salida. Una sola instancia reutilizada — un segundo aviso reemplaza al anterior en vez de apilarse.
+2. Enganchado en las acciones que más generaron confusión esta sesión: `completeRouteManually()` (incluye explícitamente qué vehículo quedó libre — la conexión "completar ruta → chofer/vehículo disponible" que antes era invisible y generó la confusión de "los choferes no se liberan"), `startRouteManually()`, `assignVehicleToExistingRoute()`, `assignDriverToTruck()`.
+3. Aviso de **error** (mismo componente, color distinto) cuando una escritura al servidor falla pero el estado local ya cambió — incluye el caso real encontrado en staging: asignar un chofer que todavía no terminó de sincronizarse con Supabase (`driver.real_id` ausente) antes se guardaba solo local sin avisar nada.
+
+**Fuera de alcance (por ahora, evaluado y diferido):**
+- Estado "procesando…" en el botón mismo mientras espera confirmación del servidor.
+- Transición de salida al desaparecer un botón que ya no aplica (hoy desaparece de golpe con el re-render).
+- No se tocó `createDriverAccount()`/`resendDriverInvite()` — ya muestran la contraseña temporal en un texto inline persistente; un toast de 3s la haría desaparecer antes de que el admin la copie, así que ese patrón queda como está a propósito.
+
+### Resultado
+
+`node --check` sobre `frontend/app.js` + suite completa sin regresiones. Sin test unitario directo — es UI/DOM puro (mismo criterio que el resto de `frontend/app.js`, sin suite propia). Verificación interactiva en staging pendiente del Project Owner.
+
+---
+
 ## Resumen de secuencia y dependencias
 
 | Hito | Estado | Depende de | Severidad de lo que resuelve | Esfuerzo relativo |
