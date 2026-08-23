@@ -3,8 +3,18 @@ export const VEHICLE_STATES = ['active','stopped','delayed','offline','completed
 export const INCIDENT_STATES = ['open','triaged','assigned','in_progress','resolved','verified','cancelled'];
 export const CITIZEN_REPORT_STATES = ['received','validated','linked_to_incident','in_progress','resolved','closed','rejected'];
 
+// SW-053: 'started' could not transition directly to 'completed' — only via 'in_progress'/
+// 'delayed' first. That matched the demo simulation (which always ticks through in_progress), but
+// the real driver's "Iniciar/Finalizar recorrido" flow (SW-044) never calls updateProgress() at
+// all, so a short real route going straight from Iniciar to Finalizar had its 'completed'
+// transition rejected by transitionRouteRun() (shared/operations-adapter.js) — silently, since the
+// UI's local optimistic state already showed "medido" regardless of whether the real write
+// succeeded. Found in staging: started_at was stamped, completed_at never was. A route completing
+// without ever being explicitly marked "in progress" is a legitimate real-world case (a route short
+// enough to finish before anyone would bother reporting partial progress), so 'started' can now
+// also go straight to 'completed'.
 export const ROUTE_TRANSITIONS = {
-  planned: ['assigned','cancelled'], assigned: ['started','cancelled'], started: ['in_progress','delayed','cancelled'],
+  planned: ['assigned','cancelled'], assigned: ['started','cancelled'], started: ['in_progress','delayed','completed','cancelled'],
   in_progress: ['delayed','completed','cancelled'], delayed: ['in_progress','completed','cancelled'], completed: ['verified'], verified: [], cancelled: []
 };
 
