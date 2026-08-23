@@ -298,6 +298,24 @@ Verificado con `tests/operational-cycle.test.mjs` (extendido: sin ingesta de GPS
 
 ---
 
+## SW-053 — Permitir completar una ruta directo desde "started" (no propuesto por este documento) ✅ Hecho (2026-08-23)
+
+**Por qué:** encontrado en vivo verificando Estadísticas (SW-047) en staging — una corrida real (iniciar → GPS real → finalizar) mostraba "Duración: medido" en pantalla, pero en Supabase `route_runs` tenía `started_at` sellado y **`completed_at` en `null`**. La pantalla mentía: `completeRouteManually()` (`frontend/app.js`) sella `route.completed_at` localmente de forma optimista *antes* de confirmar con el servidor, así que un rechazo del backend queda invisible en la UI.
+
+**Causa raíz:** `ROUTE_TRANSITIONS` (`shared/contracts.js`) no permitía `started → completed` directo — solo vía `in_progress`/`delayed` primero. Eso coincidía con la simulación demo (que siempre pasa por `in_progress` al avanzar el tick), pero el flujo real del chofer ("Iniciar recorrido"/"Finalizar recorrido", SW-044) nunca llama a `updateProgress()` — va directo de `started` a intentar `completed`, y `transitionRouteRun()` (`shared/operations-adapter.js`) rechazaba esa transición específica, silenciosamente.
+
+**Alcance:**
+1. `shared/contracts.js`: `ROUTE_TRANSITIONS.started` ahora incluye `'completed'` — una ruta corta que termina sin haber sido marcada explícitamente "en progreso" es un caso real legítimo, no un error.
+2. No se tocó `shared/operations-adapter.js` ni el frontend — el motor de transición ya validaba correctamente contra `ROUTE_TRANSITIONS`, solo hacía falta corregir la tabla misma.
+
+**Fuera de alcance:** el "falso positivo" de la UI (mostrar "medido" antes de confirmar con el servidor) no se corrigió en este hito — con la transición ahora permitida, el caso real que lo disparó deja de ocurrir, pero el patrón de UI optimista sin rollback ante un rechazo del servidor sigue ahí para cualquier otro fallo futuro. Queda anotado como mejora de robustez pendiente.
+
+### Resultado
+
+`tests/contracts.test.mjs` sin regresiones (no había ninguna aserción que dependiera de que `started->completed` fuera inválido). Suite completa sin regresiones. Verificación interactiva en staging pendiente del Project Owner: repetir el ciclo iniciar→GPS real→finalizar y confirmar que esta vez `route_runs.completed_at` sí queda sellado.
+
+---
+
 ## Resumen de secuencia y dependencias
 
 | Hito | Estado | Depende de | Severidad de lo que resuelve | Esfuerzo relativo |
