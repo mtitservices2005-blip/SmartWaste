@@ -1,5 +1,7 @@
 # SmartWaste Alpha
 
+> Este proyecto participa en la [Infraestructura Karpathy de MT IT Services](https://github.com/mtitservices2005-blip/MTIT-Blueprint). Agentes y desarrolladores deben empezar por [`AGENTS.md`](AGENTS.md) y respetar las reglas permanentes de [`CLAUDE.md`](CLAUDE.md).
+
 SmartWaste es una demo Alpha visual para ayuntamientos que necesitan monitorear rutas de recolección de residuos, camiones, sectores, incidencias y cumplimiento operativo.
 
 > Datos demo · no producción
