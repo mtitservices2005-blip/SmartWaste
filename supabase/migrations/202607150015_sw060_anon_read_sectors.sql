@@ -19,3 +19,30 @@ create policy anon_read_sectors on sectors for select
     status = 'active'
     and municipality_is_onboarded(sectors.municipality_id)
   );
+
+-- Codex review (PR #77, P1): anon_read_sectors above lets an anonymous caller enumerate sector ids
+-- across every onboarded municipality, not just the one they happen to be reporting for. Without
+-- this, nothing stopped an anon insert into citizen_reports for municipality A carrying a
+-- sector_id that actually belongs to municipality B — citizen_reports.sector_id's FK only checks
+-- that the row exists, and anon_insert_citizen_report (202607150006_sw020_rls_fixes.sql) only ever
+-- checked that the report's own municipality_id is onboarded, never that sector_id's municipality
+-- matches it. Redefines the policy (rather than editing the already-shipped migration that first
+-- created it — CLAUDE.md rule against rewriting shipped migrations) to add that same-tenant check.
+drop policy if exists anon_insert_citizen_report on citizen_reports;
+create policy anon_insert_citizen_report on citizen_reports for insert
+  to anon
+  with check (
+    status = 'received'
+    and channel in ('web', 'chatbot', 'whatsapp')
+    and folio is not null and char_length(folio) between 4 and 40
+    and (description is null or char_length(description) <= 2000)
+    and municipality_is_onboarded(citizen_reports.municipality_id)
+    and (
+      sector_id is null
+      or exists (
+        select 1 from sectors s
+        where s.id = citizen_reports.sector_id
+          and s.municipality_id = citizen_reports.municipality_id
+      )
+    )
+  );
