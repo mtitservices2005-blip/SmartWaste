@@ -278,6 +278,11 @@ function tickDriverTelemetry() {
 }
 setInterval(tickDriverTelemetry, 4000);
 
+// SW-058 (Codex review, PR #75, P1): citizen_reports.type/description are filled by anonymous
+// citizens (submitCitizenReport(), shared/citizen-portal.js) with no RLS constraint on their
+// content beyond a length check on description — interpolating them into innerHTML unescaped lets
+// a report body carrying e.g. <img src=x onerror=...> execute in a supervisor's browser.
+function escapeHtml(value) { return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 function progress(value) { return `<div class="progress" aria-label="${value}% completado"><i style="width:${value}%"></i></div>`; }
 function pill(state) { return `<span class="pill ${state}">${label(state)}</span>`; }
 function routeStatus(route) { return route.status === 'completed' || route.status === 'verified' ? 'completed' : route.status; }
@@ -918,9 +923,27 @@ function renderRoutes(items) { return items.map((route) => { const status = rout
 // connected — hydrateCitizenReports()) instead of being merged into the existing "Incidencias
 // abiertas" block, which stays 100% demo (`incidents` array — an unrelated concept, see
 // docs/TECHNICAL_DEBT_REGISTER.md #23). Keeps the demo path byte-identical (rule 5).
+//
+// Codex review (PR #75, P1): #supervisor is only ever visible to role 'supervisor'
+// (frontend/auth-gate.js's SECTION_ROLES), but that's CSS-only gating — it doesn't stop
+// hydrateCitizenReports() from fetching report data (description, folio) into a driver's or
+// dispatcher's browser/module state regardless. The actual restriction has to live in
+// hydrateCitizenReports() itself (role check before the fetch even happens), not here — this
+// function only decides what to render *given* whatever realCitizenReports already holds. Always
+// renders the wrapping div (even empty) so refreshCitizenReportsBlock() below always has an
+// element to replace, regardless of backendMode/role at the time #supervisor was last built.
 function renderCitizenReportsBlock() {
-  if (backendMode === 'DEMO_ONLY') return '';
-  return `<div><h3>Reportes ciudadanos reales</h3>${realCitizenReports.length ? realCitizenReports.map((report) => `<article class="row"><div><strong>${report.type}</strong><br>Folio ${report.folio}${report.description ? ` · ${report.description}` : ''}</div><div>${pill('open')}<button class="btn-primary" data-resolve-citizen-report="${report.id}">Marcar resuelto</button></div></article>`).join('') : '<p>Sin reportes ciudadanos reales pendientes.</p>'}</div>`;
+  if (backendMode === 'DEMO_ONLY') return '<div id="citizenReportsBlock"></div>';
+  return `<div id="citizenReportsBlock"><h3>Reportes ciudadanos reales</h3>${realCitizenReports.length ? realCitizenReports.map((report) => `<article class="row"><div><strong>${escapeHtml(report.type)}</strong><br>Folio ${escapeHtml(report.folio)}${report.description ? ` · ${escapeHtml(report.description)}` : ''}</div><div>${pill('open')}<button class="btn-primary" data-resolve-citizen-report="${report.id}">Marcar resuelto</button></div></article>`).join('') : '<p>Sin reportes ciudadanos reales pendientes.</p>'}</div>`;
+}
+// Codex review (PR #75, P2): hydrateCitizenReports() only ran once, at login bootstrap — a report
+// submitted afterward never appeared without a full page reload. Re-fetches + re-renders just this
+// block (not the whole #supervisor section, which would re-trigger showSection() and risk a loop
+// with the hook in showSection() below that calls this on every entry into "supervisor").
+async function refreshCitizenReportsBlock() {
+  await hydrateCitizenReports();
+  const el = document.getElementById('citizenReportsBlock');
+  if (el) el.outerHTML = renderCitizenReportsBlock();
 }
 function renderSupervisor() {
   const pendingVerification = routes.filter((route) => route.status === 'completed');
@@ -1624,6 +1647,12 @@ function showSection(id) {
   document.querySelectorAll('.topbar nav a').forEach((link) => link.classList.toggle('active', link.getAttribute('href') === `#${id}`));
   if (id === 'operaciones') showOpsView(currentOpsView());
   if (id === 'conductor' && driverMapReady) requestAnimationFrame(() => driverMap.invalidateSize());
+  // Codex review (PR #75, P2): re-fetches real citizen reports every time Supervisor is entered
+  // (same "refetch on view entry" precedent as showOpsView()'s 'estadisticas' branch above) —
+  // otherwise a report submitted after login bootstrap never appeared without a full page reload.
+  // refreshCitizenReportsBlock() only patches its own div, never calls showSection() itself, so this
+  // can't loop back into showSection('supervisor').
+  if (id === 'supervisor') refreshCitizenReportsBlock();
 }
 window.addEventListener('hashchange', () => { if (!redirectLegacyHash()) showSection(sectionFromHash()); });
 // SW-036 fix: an outerHTML replace swaps in a brand-new element that never had the 'hidden' class
@@ -2136,8 +2165,17 @@ async function hydrateRoutes() {
 // before, so a real citizen report had no way to ever reach a dispatcher (see
 // docs/TECHNICAL_DEBT_REGISTER.md #23). Same never-block-the-page posture as every other real
 // hydrate call: a failed fetch just leaves the list empty rather than surfacing an error.
+//
+// Codex review (PR #75, P1): #supervisor is only ever visible to role 'supervisor'
+// (SECTION_ROLES), but that's a CSS class, not a network boundary — without this check, a signed-in
+// driver's or dispatcher's browser would still fetch and hold every citizen report's description/
+// evidence_path in module state (and on the wire) even though they can never see the section that
+// displays it. The `tenant_read` RLS policy itself stays broader (shared across 13 tables by
+// migration 202607150004_sw014_auth_rls_policies.sql's role loop, not specific to citizen_reports)
+// — narrowing that is a separate, pre-existing piece of schema work, out of scope here; this closes
+// the concrete leak this hito introduced (an unconditional fetch), not the underlying RLS grant.
 async function hydrateCitizenReports() {
-  if (!realAdapter) return;
+  if (!realAdapter || driverAuthContext?.role !== 'supervisor') return;
   const result = await realAdapter.listCitizenReports();
   if (result.ok) realCitizenReports = result.data;
 }
