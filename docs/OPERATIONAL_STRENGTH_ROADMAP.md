@@ -387,6 +387,25 @@ Verificado con `tests/operational-cycle.test.mjs` (extendido: sin ingesta de GPS
 
 ---
 
+## SW-060 — Sectores reales en el portal ciudadano (no propuesto por este documento) ✅ Hecho (2026-09-06)
+
+**Por qué:** cierra la parte pendiente del ítem #23 del registro de deuda (dejada explícitamente fuera de alcance en SW-058): un reporte ciudadano real siempre mandaba `sector_id: null` porque el `<select>` del formulario solo ofrecía los sectores demo hardcodeados de `shared/demo-data.js`, cuyos ids no existen como filas reales (violarían el FK de `citizen_reports.sector_id`).
+
+**Causa raíz adicional encontrada al investigar:** no era solo un hueco de frontend — `sectors` solo tenía la política `tenant_read` (exige una fila de membresía municipal), y un visitante anónimo del portal ciudadano no tiene ninguna. Sin una política nueva, ni siquiera hidratando desde el frontend un visitante anónimo podría leer un sector real.
+
+**Alcance:**
+1. `supabase/migrations/202607150015_sw060_anon_read_sectors.sql`: nueva política `anon_read_sectors` (solo `SELECT`, acotada a `status = 'active'` y `municipality_is_onboarded(municipality_id)`) — reutiliza la función `municipality_is_onboarded()` ya existente de SW-020, mismo criterio anti-abuso que `anon_insert_citizen_report`, sin función nueva.
+2. `shared/citizen-portal.js`: `fetchRealSectors(client, municipality_id)`, mismo estilo que `submitCitizenReport()` (falla explícito sin cliente/municipio, nunca lanza).
+3. `frontend/app.js`: `hydrateRealCitizenSectors()` — a diferencia de `hydrateCitizenReports()` (SW-058), no depende de `bootstrapRealBackend()`/una sesión firmada: el portal ciudadano debe funcionar para un visitante anónimo (camino "Continuar como ciudadano" de `frontend/auth-gate.js`), así que se dispara directo después de `initAuthGate()` sin importar el resultado. Si la hidratación resuelve con al menos un sector, reemplaza las opciones de `<select id="incidentSector">` por las reales. El submit de `#incidentForm` solo manda `sector_id` cuando el valor elegido está efectivamente en `realSectors` (chequeo explícito, no asumido por timing/modo) — así un valor todavía demo (hidratación no corrió, falló, o vino vacía) nunca llega a violar el FK, cae al mismo `null` de siempre.
+
+**Fuera de alcance:** el `<select id="citizenSector">` de "Consulta de recogida" (`findSectorService()`) sigue 100% demo — es una función informativa no relacionada con el reporte, no tocada acá.
+
+### Resultado
+
+`node --check` sobre `frontend/app.js` y `shared/citizen-portal.js` + suite completa sin regresiones (extendido `tests/citizen-portal.test.mjs` con 4 casos nuevos para `fetchRealSectors()`). **Pendiente de verificación real contra Postgres** (este sandbox no tiene Docker — ítem #15 del registro de deuda): confirmar que `anon_read_sectors` efectivamente permite a un cliente `anon` leer sectores de un municipio *onboarded* y rechaza los de uno que no lo está, y verificación interactiva en staging por el Project Owner (enviar un reporte real, confirmar que `sector_id` llega poblado en `citizen_reports`).
+
+---
+
 ## Resumen de secuencia y dependencias
 
 | Hito | Estado | Depende de | Severidad de lo que resuelve | Esfuerzo relativo |
