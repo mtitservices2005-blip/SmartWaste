@@ -75,7 +75,7 @@ const rejectedResult = await submitCitizenReport(rejectedClient, { municipality_
 assert.equal(rejectedResult.ok, false);
 assert.equal(rejectedResult.error.code, 'PGRST_TEST');
 
-// SW-059: fetchRealSectors() — real sectors for the citizen form's <select>.
+// SW-060: fetchRealSectors() — real sectors for the citizen form's <select>.
 function makeSectorsFakeClient(response) {
   const calls = [];
   const query = { eq: (...args) => { calls.push(args); return query; }, order: () => Promise.resolve(response) };

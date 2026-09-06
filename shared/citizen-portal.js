@@ -52,11 +52,11 @@ export async function submitCitizenReport(client, { municipality_id, sector_id, 
   return { ok: true, folio };
 }
 
-// SW-059: real sectors for the citizen report form's <select> — before this, that form only ever
+// SW-060: real sectors for the citizen report form's <select> — before this, that form only ever
 // offered the hardcoded demo sectors from shared/demo-data.js, whose ids don't exist as real rows
 // in Supabase, so a real report always sent sector_id: null (would violate the FK otherwise). Anon
 // has no SELECT policy on `sectors` by default (only tenant_read, which requires a municipality
-// membership row); supabase/migrations/202607150015_sw059_anon_read_sectors.sql adds the anon
+// membership row); supabase/migrations/202607150015_sw060_anon_read_sectors.sql adds the anon
 // policy this depends on, scoped the same way anon_insert_citizen_report already is (bounded to an
 // onboarded municipality, via municipality_is_onboarded()).
 export async function fetchRealSectors(client, municipality_id) {

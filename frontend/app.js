@@ -124,10 +124,10 @@ let backendMode = 'DEMO_ONLY';
 // Supabase already) that Supervisor can act on — see hydrateCitizenReports()/renderSupervisor()
 // below. Unrelated to the demo `incidents` array (a separate, always-demo concept).
 let realCitizenReports = [];
-// SW-059: real sectors for the citizen report form's <select id="incidentSector"> — see
+// SW-060: real sectors for the citizen report form's <select id="incidentSector"> — see
 // hydrateRealCitizenSectors() below. Kept separate from the demo `sectors` import (shared/demo-
 // data.js), which the "Consulta de recogida" select (#citizenSector) still uses unchanged (out of
-// scope for this hito — see docs/OPERATIONAL_STRENGTH_ROADMAP.md's SW-059 section).
+// scope for this hito — see docs/OPERATIONAL_STRENGTH_ROADMAP.md's SW-060 section).
 let realSectors = [];
 // Roadmap item 3 ("GPS real"): the signed-in session's context (user_id/municipality_id, from
 // initAuthGate()/bootstrapRealBackend() below), kept around so the driver GPS button can resolve
@@ -1959,7 +1959,7 @@ $('#citizenSector').dispatchEvent(new Event('change'));
 // SW-039: real submission when a municipality-specific deployment is configured
 // (SMARTWASTE_SUPABASE_CONFIG.municipality_id — see frontend/auth-gate.js's readSupabaseConfig()),
 // demo folio otherwise (rule 5 — never breaks the approved demo when no real backend is set).
-// SW-059: `sector_id` is now sent when hydrateRealCitizenSectors() (module init) actually swapped
+// SW-060: `sector_id` is now sent when hydrateRealCitizenSectors() (module init) actually swapped
 // #incidentSector's options for real ones — checked against realSectors rather than assumed from
 // backendMode/timing, so a selected value that's still one of the demo options (hydration never
 // ran, failed, or came back empty) can never reach the FK as a bogus id; citizen_reports.sector_id
@@ -2187,7 +2187,7 @@ async function hydrateCitizenReports() {
   const result = await realAdapter.listCitizenReports();
   if (result.ok) realCitizenReports = result.data;
 }
-// SW-059: unlike hydrateCitizenReports() above, this must work with no session at all — the
+// SW-060: unlike hydrateCitizenReports() above, this must work with no session at all — the
 // citizen portal is reachable by an anonymous visitor (frontend/auth-gate.js's skip-to-public
 // path), so it can't wait for/depend on realAdapter or bootstrapRealBackend(ctx), which only ever
 // run for a signed-in staff session. Same never-block-the-page posture as every other real hydrate
@@ -2266,7 +2266,7 @@ async function bootstrapRealBackend(ctx) {
 }
 // No-ops entirely (leaves every section visible, same as before this line existed) unless the
 // page sets window.SMARTWASTE_SUPABASE_CONFIG — see frontend/auth-gate.js and CLAUDE.md rule 5.
-// SW-059: unlike bootstrapRealBackend() below, real sectors for the citizen portal must load
+// SW-060: unlike bootstrapRealBackend() below, real sectors for the citizen portal must load
 // regardless of ctx — the citizen portal is meant to work for an anonymous visitor too (the
 // "Continuar como ciudadano" / skip-to-public path in frontend/auth-gate.js resolves ctx to null),
 // and getAuthClient()/readSupabaseConfig() are both already available at this point either way.

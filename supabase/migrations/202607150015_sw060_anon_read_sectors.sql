@@ -1,4 +1,4 @@
--- SW-059: real sectors for the citizen portal form. Before this, an anonymous citizen report
+-- SW-060: real sectors for the citizen portal form. Before this, an anonymous citizen report
 -- (submitCitizenReport(), shared/citizen-portal.js) always sent sector_id: null, because the
 -- <select> in the citizen portal form only ever offered the hardcoded demo sectors from
 -- shared/demo-data.js — those ids don't exist as real rows in Supabase, so sending one would
