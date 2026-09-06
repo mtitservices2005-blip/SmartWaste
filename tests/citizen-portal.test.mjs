@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createDemoFolio, findIncidentStatus, findSectorService, chatbotReadiness, generateCitizenFolio, submitCitizenReport } from '../shared/citizen-portal.js';
+import { createDemoFolio, findIncidentStatus, findSectorService, chatbotReadiness, generateCitizenFolio, submitCitizenReport, fetchRealSectors } from '../shared/citizen-portal.js';
 
 assert.equal(createDemoFolio(7), 'SW-FOLIO-3007');
 assert.equal(findSectorService('centro').pickupDay, 'Lunes y jueves');
@@ -74,5 +74,30 @@ const rejectedClient = { from: () => ({ insert: () => Promise.resolve({ error: {
 const rejectedResult = await submitCitizenReport(rejectedClient, { municipality_id: 'muni-1', type: 'x' });
 assert.equal(rejectedResult.ok, false);
 assert.equal(rejectedResult.error.code, 'PGRST_TEST');
+
+// SW-059: fetchRealSectors() — real sectors for the citizen form's <select>.
+function makeSectorsFakeClient(response) {
+  const calls = [];
+  const query = { eq: (...args) => { calls.push(args); return query; }, order: () => Promise.resolve(response) };
+  return { client: { from: (table) => { assert.equal(table, 'sectors'); return { select: () => query }; } }, calls };
+}
+const { client: sectorsClient, calls: sectorsCalls } = makeSectorsFakeClient({ data: [{ id: 'sec-1', name: 'Centro' }], error: null });
+const sectorsResult = await fetchRealSectors(sectorsClient, 'muni-1');
+assert.equal(sectorsResult.ok, true);
+assert.deepEqual(sectorsResult.sectors, [{ id: 'sec-1', name: 'Centro' }]);
+assert.deepEqual(sectorsCalls, [['municipality_id', 'muni-1'], ['status', 'active']], 'must scope by municipality and only offer active sectors');
+
+const noClientSectorsResult = await fetchRealSectors({}, 'muni-1');
+assert.equal(noClientSectorsResult.ok, false);
+assert.equal(noClientSectorsResult.error.code, 'NO_CLIENT');
+
+const noMunicipalitySectorsResult = await fetchRealSectors(sectorsClient, null);
+assert.equal(noMunicipalitySectorsResult.ok, false);
+assert.equal(noMunicipalitySectorsResult.error.code, 'NO_MUNICIPALITY');
+
+const { client: failingSectorsClient } = makeSectorsFakeClient({ data: null, error: { code: 'PGRST_TEST', message: 'rejected' } });
+const failingSectorsResult = await fetchRealSectors(failingSectorsClient, 'muni-1');
+assert.equal(failingSectorsResult.ok, false);
+assert.equal(failingSectorsResult.error.code, 'PGRST_TEST');
 
 console.log('citizen-portal ok');

@@ -2,7 +2,7 @@ import { demoNotice, simulationNotice, pilotMunicipality, trucks, routes, sector
 import { operationsAdapter, resolveOperationsAdapter } from '../shared/operations-adapter.js';
 import { DeviceSimulator, createDemoPositionHistory, createTelemetryIngestionAdapter } from '../shared/telemetry-simulator.js';
 import { validateEvidenceFile } from '../shared/channel-contracts.js';
-import { createDemoFolio, findSectorService, findIncidentStatus, submitCitizenReport } from '../shared/citizen-portal.js';
+import { createDemoFolio, findSectorService, findIncidentStatus, submitCitizenReport, fetchRealSectors } from '../shared/citizen-portal.js';
 import { generateRouteStopPoints, deriveStopStatus, haversineMeters, splitIntoTrips } from '../shared/route-engine.js';
 import { fetchRoadRoute } from '../shared/osrm-routing.js';
 import { fetchBuildingCount, estimateCollectionMinutes } from '../shared/overpass-buildings.js';
@@ -124,6 +124,11 @@ let backendMode = 'DEMO_ONLY';
 // Supabase already) that Supervisor can act on — see hydrateCitizenReports()/renderSupervisor()
 // below. Unrelated to the demo `incidents` array (a separate, always-demo concept).
 let realCitizenReports = [];
+// SW-059: real sectors for the citizen report form's <select id="incidentSector"> — see
+// hydrateRealCitizenSectors() below. Kept separate from the demo `sectors` import (shared/demo-
+// data.js), which the "Consulta de recogida" select (#citizenSector) still uses unchanged (out of
+// scope for this hito — see docs/OPERATIONAL_STRENGTH_ROADMAP.md's SW-059 section).
+let realSectors = [];
 // Roadmap item 3 ("GPS real"): the signed-in session's context (user_id/municipality_id, from
 // initAuthGate()/bootstrapRealBackend() below), kept around so the driver GPS button can resolve
 // "my own real vehicle" on demand. driverGpsWatchId is the navigator.geolocation.watchPosition()
@@ -954,7 +959,7 @@ function renderSupervisor() {
     ${renderCitizenReportsBlock()}
   </div></section>`;
 }
-function renderCitizen() { return `<section id="ciudadania" class="section card"><h2>Portal ciudadano</h2><p class="demo">${demoNotice}</p><div class="panel-grid"><div><h3>Consulta de recogida</h3><select id="citizenSector">${sectors.map((s) => `<option value="${s.id}">${s.name}</option>`).join('')}</select><p id="pickupResult"></p><h3>Avisos municipales</h3>${notifications.map((n) => `<div class="row">🔔 ${n}</div>`).join('')}</div><form id="incidentForm"><h3>Reportar incidencia</h3><select name="type"><option>Basura no recogida</option><option>Vertedero improvisado</option></select><select name="sector">${sectors.map((s) => `<option value="${s.id}">${s.name}</option>`).join('')}</select><textarea name="description" placeholder="Descripción demo"></textarea><input id="manualAddress" name="address" placeholder="Dirección manual si no usa GPS"><button type="button" id="useGeo">Usar ubicación GPS del navegador</button><p id="geoStatus" class="demo">GPS requiere permiso del usuario.</p><input id="evidence" type="file" accept="image/png,image/jpeg,image/webp,application/pdf" aria-label="Adjuntar evidencia demo"><p id="evidencePreview" class="demo">Evidencia local; no upload real verificado.</p><button class="btn-primary">Obtener folio</button><p id="folio"></p></form><div><h3>Consultar estado</h3><input id="folioSearch" value="SW-FOLIO-1001"><button id="checkFolio">Consultar</button><p id="folioStatus"></p><h3>Futura relación</h3><p>Preparado para Chatbot Municipal: preguntas frecuentes, folios y avisos por sector.</p></div></div></section>`; }
+function renderCitizen() { return `<section id="ciudadania" class="section card"><h2>Portal ciudadano</h2><p class="demo">${demoNotice}</p><div class="panel-grid"><div><h3>Consulta de recogida</h3><select id="citizenSector">${sectors.map((s) => `<option value="${s.id}">${s.name}</option>`).join('')}</select><p id="pickupResult"></p><h3>Avisos municipales</h3>${notifications.map((n) => `<div class="row">🔔 ${n}</div>`).join('')}</div><form id="incidentForm"><h3>Reportar incidencia</h3><select name="type"><option>Basura no recogida</option><option>Vertedero improvisado</option></select><select name="sector" id="incidentSector">${sectors.map((s) => `<option value="${s.id}">${s.name}</option>`).join('')}</select><textarea name="description" placeholder="Descripción demo"></textarea><input id="manualAddress" name="address" placeholder="Dirección manual si no usa GPS"><button type="button" id="useGeo">Usar ubicación GPS del navegador</button><p id="geoStatus" class="demo">GPS requiere permiso del usuario.</p><input id="evidence" type="file" accept="image/png,image/jpeg,image/webp,application/pdf" aria-label="Adjuntar evidencia demo"><p id="evidencePreview" class="demo">Evidencia local; no upload real verificado.</p><button class="btn-primary">Obtener folio</button><p id="folio"></p></form><div><h3>Consultar estado</h3><input id="folioSearch" value="SW-FOLIO-1001"><button id="checkFolio">Consultar</button><p id="folioStatus"></p><h3>Futura relación</h3><p>Preparado para Chatbot Municipal: preguntas frecuentes, folios y avisos por sector.</p></div></div></section>`; }
 
 const money = (value) => `RD$ ${Number(value).toLocaleString('es-DO', { maximumFractionDigits: 0 })}`;
 const num = (value, suffix = '') => `${Number(value).toLocaleString('es-DO', { maximumFractionDigits: 1 })}${suffix}`;
@@ -1954,11 +1959,11 @@ $('#citizenSector').dispatchEvent(new Event('change'));
 // SW-039: real submission when a municipality-specific deployment is configured
 // (SMARTWASTE_SUPABASE_CONFIG.municipality_id — see frontend/auth-gate.js's readSupabaseConfig()),
 // demo folio otherwise (rule 5 — never breaks the approved demo when no real backend is set).
-// `sector` isn't sent in real mode: the dropdown's options come from shared/demo-data.js's
-// hardcoded sectors, whose ids don't correspond to real Supabase sectors rows — sending one would
-// violate citizen_reports.sector_id's foreign key. citizen_reports.sector_id is nullable, so a real
-// report is simply created without one for now; hydrating real sector data into this dropdown is a
-// separate, not-yet-built piece of work (SW-035 hydrates vehicles/drivers/routes, never sectors).
+// SW-059: `sector_id` is now sent when hydrateRealCitizenSectors() (module init) actually swapped
+// #incidentSector's options for real ones — checked against realSectors rather than assumed from
+// backendMode/timing, so a selected value that's still one of the demo options (hydration never
+// ran, failed, or came back empty) can never reach the FK as a bogus id; citizen_reports.sector_id
+// stays nullable specifically for that fallback case.
 $('#incidentForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   const config = readSupabaseConfig();
@@ -1968,8 +1973,11 @@ $('#incidentForm').addEventListener('submit', async (event) => {
     if (folioEl) folioEl.textContent = 'Enviando reporte…';
     const form = event.target;
     const evidenceFile = $('#evidence')?.files?.[0] || null;
+    const selectedSectorId = form.sector.value;
+    const sector_id = realSectors.some((s) => s.id === selectedSectorId) ? selectedSectorId : null;
     const result = await submitCitizenReport(client, {
       municipality_id: config.municipality_id,
+      sector_id,
       type: form.type.value,
       description: form.description.value,
       evidenceFile
@@ -2179,6 +2187,23 @@ async function hydrateCitizenReports() {
   const result = await realAdapter.listCitizenReports();
   if (result.ok) realCitizenReports = result.data;
 }
+// SW-059: unlike hydrateCitizenReports() above, this must work with no session at all — the
+// citizen portal is reachable by an anonymous visitor (frontend/auth-gate.js's skip-to-public
+// path), so it can't wait for/depend on realAdapter or bootstrapRealBackend(ctx), which only ever
+// run for a signed-in staff session. Same never-block-the-page posture as every other real hydrate
+// call: a failed/empty fetch just leaves the citizen form's sector <select> on its demo options
+// (submitCitizenReport()'s call site below only ever sends a sector_id that's actually in
+// realSectors, so a stale demo option value can never violate citizen_reports.sector_id's FK).
+async function hydrateRealCitizenSectors() {
+  const client = getAuthClient();
+  const municipality_id = readSupabaseConfig()?.municipality_id;
+  if (!client || !municipality_id) return;
+  const result = await fetchRealSectors(client, municipality_id);
+  if (!result.ok || !result.sectors.length) return;
+  realSectors = result.sectors;
+  const select = document.getElementById('incidentSector');
+  if (select) select.innerHTML = realSectors.map((s) => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
+}
 async function bootstrapRealBackend(ctx) {
   const client = getAuthClient();
   if (!client || !ctx?.municipality_id) return;
@@ -2241,4 +2266,8 @@ async function bootstrapRealBackend(ctx) {
 }
 // No-ops entirely (leaves every section visible, same as before this line existed) unless the
 // page sets window.SMARTWASTE_SUPABASE_CONFIG — see frontend/auth-gate.js and CLAUDE.md rule 5.
-initAuthGate().then((ctx) => { if (ctx) bootstrapRealBackend(ctx); });
+// SW-059: unlike bootstrapRealBackend() below, real sectors for the citizen portal must load
+// regardless of ctx — the citizen portal is meant to work for an anonymous visitor too (the
+// "Continuar como ciudadano" / skip-to-public path in frontend/auth-gate.js resolves ctx to null),
+// and getAuthClient()/readSupabaseConfig() are both already available at this point either way.
+initAuthGate().then((ctx) => { if (ctx) bootstrapRealBackend(ctx); hydrateRealCitizenSectors(); });

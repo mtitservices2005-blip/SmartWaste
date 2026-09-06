@@ -52,6 +52,21 @@ export async function submitCitizenReport(client, { municipality_id, sector_id, 
   return { ok: true, folio };
 }
 
+// SW-059: real sectors for the citizen report form's <select> — before this, that form only ever
+// offered the hardcoded demo sectors from shared/demo-data.js, whose ids don't exist as real rows
+// in Supabase, so a real report always sent sector_id: null (would violate the FK otherwise). Anon
+// has no SELECT policy on `sectors` by default (only tenant_read, which requires a municipality
+// membership row); supabase/migrations/202607150015_sw059_anon_read_sectors.sql adds the anon
+// policy this depends on, scoped the same way anon_insert_citizen_report already is (bounded to an
+// onboarded municipality, via municipality_is_onboarded()).
+export async function fetchRealSectors(client, municipality_id) {
+  if (!client?.from) return { ok: false, error: { code: 'NO_CLIENT', message: 'No hay backend real configurado.' } };
+  if (!municipality_id) return { ok: false, error: { code: 'NO_MUNICIPALITY', message: 'Falta municipality_id en la configuración del portal.' } };
+  const result = await client.from('sectors').select('id,name').eq('municipality_id', municipality_id).eq('status', 'active').order('name');
+  if (result.error) return { ok: false, error: { code: result.error.code ?? 'SUPABASE_ERROR', message: result.error.message } };
+  return { ok: true, sectors: result.data };
+}
+
 export function findSectorService(sectorId) {
   const sector = sectors.find((item) => item.id === sectorId);
   if (!sector) return null;
