@@ -120,6 +120,10 @@ let selectedIncidentId = null;
 // larger refactor — tracked as a follow-up (SW-035), not force-fit into this change.
 let realAdapter = null;
 let backendMode = 'DEMO_ONLY';
+// SW-058: real citizen reports (shared/citizen-portal.js's submitCitizenReport() writes them to
+// Supabase already) that Supervisor can act on — see hydrateCitizenReports()/renderSupervisor()
+// below. Unrelated to the demo `incidents` array (a separate, always-demo concept).
+let realCitizenReports = [];
 // Roadmap item 3 ("GPS real"): the signed-in session's context (user_id/municipality_id, from
 // initAuthGate()/bootstrapRealBackend() below), kept around so the driver GPS button can resolve
 // "my own real vehicle" on demand. driverGpsWatchId is the navigator.geolocation.watchPosition()
@@ -910,12 +914,21 @@ function renderDriverSection() { return `<section id="conductor" class="section 
 // a left-border tint per status (CSS, `.list.compact .row[class*="route-status-"]`), reusing the
 // same status keyword `pill()` already renders (no new vocabulary, just a second surface for it).
 function renderRoutes(items) { return items.map((route) => { const status = routeReadinessStage(route, trucks.find((truck) => truck.routeId === route.id)) ?? routeStatus(route); return `<article class="row selectable route-status-${status}${route.id === selectedRouteId ? ' selected' : ''}" data-route="${route.id}"><div><strong>${route.name}</strong><br>${route.sectors.join(' · ')} · ETA ${route.eta}<br>${progress(route.progress)}</div><div>${pill(status)}<br>${route.covered}/${route.stops} paradas</div></article>`; }).join(''); }
+// SW-058: real citizen reports get their own block (only ever populated when a real backend is
+// connected — hydrateCitizenReports()) instead of being merged into the existing "Incidencias
+// abiertas" block, which stays 100% demo (`incidents` array — an unrelated concept, see
+// docs/TECHNICAL_DEBT_REGISTER.md #23). Keeps the demo path byte-identical (rule 5).
+function renderCitizenReportsBlock() {
+  if (backendMode === 'DEMO_ONLY') return '';
+  return `<div><h3>Reportes ciudadanos reales</h3>${realCitizenReports.length ? realCitizenReports.map((report) => `<article class="row"><div><strong>${report.type}</strong><br>Folio ${report.folio}${report.description ? ` · ${report.description}` : ''}</div><div>${pill('open')}<button class="btn-primary" data-resolve-citizen-report="${report.id}">Marcar resuelto</button></div></article>`).join('') : '<p>Sin reportes ciudadanos reales pendientes.</p>'}</div>`;
+}
 function renderSupervisor() {
   const pendingVerification = routes.filter((route) => route.status === 'completed');
   const openIncidents = incidents.filter((incident) => incident.status !== 'Cerrada');
-  return `<section id="supervisor" class="section card"><h2>Panel de supervisor</h2><p class="demo">${demoNotice} · Verificación de rutas completadas y gestión de incidencias. "Verificar" ruta escribe contra Supabase cuando hay backend real conectado; "Marcar resuelta" una incidencia sigue siendo solo demo local.</p><div class="panel-grid">
+  return `<section id="supervisor" class="section card"><h2>Panel de supervisor</h2><p class="demo">${demoNotice} · Verificación de rutas completadas y gestión de incidencias. "Verificar" ruta escribe contra Supabase cuando hay backend real conectado; "Marcar resuelta" una incidencia demo sigue siendo solo local, pero los reportes ciudadanos reales (abajo) sí escriben contra Supabase.</p><div class="panel-grid">
     <div><h3>Rutas pendientes de verificación</h3>${pendingVerification.length ? pendingVerification.map((route) => `<article class="row"><div><strong>${route.name}</strong><br>${route.sectors.join(' · ')} · ${route.progress}% completado</div><div>${pill('completed')}<button class="btn-primary" data-verify-route="${route.id}">Verificar</button></div></article>`).join('') : '<p>No hay rutas completadas pendientes de verificación.</p>'}</div>
     <div><h3>Incidencias abiertas</h3>${openIncidents.length ? openIncidents.map((incident) => `<article class="row"><div><strong>${incident.type}</strong><br>${incident.sector} · ${incident.priority}</div><div>${pill('open')}<button class="btn-primary" data-resolve-incident="${incident.code}">Marcar resuelta</button></div></article>`).join('') : '<p>Sin incidencias abiertas.</p>'}</div>
+    ${renderCitizenReportsBlock()}
   </div></section>`;
 }
 function renderCitizen() { return `<section id="ciudadania" class="section card"><h2>Portal ciudadano</h2><p class="demo">${demoNotice}</p><div class="panel-grid"><div><h3>Consulta de recogida</h3><select id="citizenSector">${sectors.map((s) => `<option value="${s.id}">${s.name}</option>`).join('')}</select><p id="pickupResult"></p><h3>Avisos municipales</h3>${notifications.map((n) => `<div class="row">🔔 ${n}</div>`).join('')}</div><form id="incidentForm"><h3>Reportar incidencia</h3><select name="type"><option>Basura no recogida</option><option>Vertedero improvisado</option></select><select name="sector">${sectors.map((s) => `<option value="${s.id}">${s.name}</option>`).join('')}</select><textarea name="description" placeholder="Descripción demo"></textarea><input id="manualAddress" name="address" placeholder="Dirección manual si no usa GPS"><button type="button" id="useGeo">Usar ubicación GPS del navegador</button><p id="geoStatus" class="demo">GPS requiere permiso del usuario.</p><input id="evidence" type="file" accept="image/png,image/jpeg,image/webp,application/pdf" aria-label="Adjuntar evidencia demo"><p id="evidencePreview" class="demo">Evidencia local; no upload real verificado.</p><button class="btn-primary">Obtener folio</button><p id="folio"></p></form><div><h3>Consultar estado</h3><input id="folioSearch" value="SW-FOLIO-1001"><button id="checkFolio">Consultar</button><p id="folioStatus"></p><h3>Futura relación</h3><p>Preparado para Chatbot Municipal: preguntas frecuentes, folios y avisos por sector.</p></div></div></section>`; }
@@ -1526,6 +1539,20 @@ async function verifyRouteManually(routeId) {
   if (realAdapter) await mirrorToRealAdapter(realAdapter.verifyRoute(route.real_id ?? routeId));
   showToast(`Ruta "${route.name}" verificada.`);
 }
+// SW-058: unlike the demo `incidents` "Marcar resuelta" handler (pure local mutation, no adapter),
+// a real citizen report has no demo/local mirror at all — there's only ever the real write. No
+// optimistic local update here for that reason; the row is removed from realCitizenReports once
+// the server confirms it, not before.
+async function resolveCitizenReportManually(reportId) {
+  if (!realAdapter) return;
+  const report = realCitizenReports.find((item) => item.id === reportId);
+  if (!report) return;
+  const result = await realAdapter.updateCitizenReportStatus(reportId, 'resolved');
+  if (!result.ok) { showToast(`No se pudo marcar el reporte "${report.folio}" como resuelto: ${result.error.message}`, { type: 'error' }); return; }
+  realCitizenReports = realCitizenReports.filter((item) => item.id !== reportId);
+  refreshSupervisor();
+  showToast(`Reporte "${report.folio}" marcado como resuelto.`);
+}
 
 function initCreateRouteMap() {
   loadLeaflet().then((L) => {
@@ -1860,6 +1887,8 @@ document.addEventListener('click', (event) => {
   if (reoptimizeButton) previewRouteReoptimization(reoptimizeButton.dataset.reoptimizeRoute);
   const resolveButton = event.target.closest('[data-resolve-incident]');
   if (resolveButton) { const incident = incidents.find((item) => item.code === resolveButton.dataset.resolveIncident); if (incident) { incident.status = 'Cerrada'; refreshSupervisor(); refreshResumen(); } }
+  const resolveReportButton = event.target.closest('[data-resolve-citizen-report]');
+  if (resolveReportButton) resolveCitizenReportManually(resolveReportButton.dataset.resolveCitizenReport);
   const onboardButton = event.target.closest('[data-onboarding]');
   if (onboardButton) { const status = document.querySelector(`[data-onboarding-status="${onboardButton.dataset.onboarding}"]`); if (status) status.textContent = 'Onboarding demo iniciado — flujo completo en desarrollo.'; }
   if (event.target.id === 'useGeo') { requestGeolocation(); }
@@ -2103,6 +2132,15 @@ async function hydrateRoutes() {
 // createVehicleFromForm/createDriverFromForm/finishCreateRoute mirror their writes to. Patches only
 // the "fuente desacoplada" label directly (not a full section re-render) so the already-initialized
 // Leaflet map instance is never touched by this.
+// SW-058: brings real citizen_reports (still open/unresolved) into Supervisor — nothing did this
+// before, so a real citizen report had no way to ever reach a dispatcher (see
+// docs/TECHNICAL_DEBT_REGISTER.md #23). Same never-block-the-page posture as every other real
+// hydrate call: a failed fetch just leaves the list empty rather than surfacing an error.
+async function hydrateCitizenReports() {
+  if (!realAdapter) return;
+  const result = await realAdapter.listCitizenReports();
+  if (result.ok) realCitizenReports = result.data;
+}
 async function bootstrapRealBackend(ctx) {
   const client = getAuthClient();
   if (!client || !ctx?.municipality_id) return;
@@ -2118,6 +2156,8 @@ async function bootstrapRealBackend(ctx) {
   // AMBAS hidrataciones realmente resolvieron (ok), no cuando fallaron.
   const vehiclesAndDriversHydrated = await hydrateVehiclesAndDrivers();
   const routesHydrated = await hydrateRoutes();
+  await hydrateCitizenReports();
+  refreshSupervisor();
   // Onboarding en vacío: si la hidratación de arriba resolvió bien y no trajo NINGÚN vehículo/
   // chofer/ruta real, este municipio nunca operó en Supabase — mostrarle los 5 datos demo
   // sembrados al cargar el módulo (module-init, antes de que se supiera si habría backend real) lo

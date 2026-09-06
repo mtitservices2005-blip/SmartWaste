@@ -371,6 +371,22 @@ Verificado con `tests/operational-cycle.test.mjs` (extendido: sin ingesta de GPS
 
 ---
 
+## SW-058 — Conectar reportes ciudadanos reales al panel de Supervisor (no propuesto por este documento) ✅ Hecho (2026-09-06)
+
+**Por qué:** el registro de deuda técnica (ítem #23) documentaba "falta `resolveIncident()` real" como si el único hueco fuera un botón. Al investigar antes de tocar código apareció un hueco más grande: `submitCitizenReport()` (SW-039) ya escribe reportes reales en `citizen_reports`, pero **ningún código los leía de vuelta** — el panel de Supervisor solo mostraba/mutaba el array demo `incidents` (concepto no relacionado), y `registerIncident()` (que sí escribe en la tabla `incidents`) nunca se llama desde el frontend. Un reporte ciudadano real no tenía ningún camino para llegar a un despachador.
+
+**Alcance (confirmado con el Project Owner vía pregunta de alcance — opción completa, no solo lectura):**
+1. `shared/operations-adapter.js`: `listCitizenReports()` (trae `citizen_reports` no resueltos, ordenados por fecha; sin equivalente demo, así que el fallback es lista vacía en vez de fallar) y `updateCitizenReportStatus(reportId, status)` (falla explícito `NOT_SUPPORTED_IN_DEMO` sin cliente real — no hay ningún concepto demo que mutar, a diferencia de los métodos con fallback vía `run()`).
+2. `frontend/app.js`: `hydrateCitizenReports()` (llamada desde `bootstrapRealBackend()`, junto a las demás hidrataciones) + nueva sección "Reportes ciudadanos reales" en `renderSupervisor()` (solo visible con backend real conectado — la demo queda byte-idéntica, regla 5), con botón "Marcar resuelto" (`resolveCitizenReportManually()`, sin actualización optimista local — a diferencia del resto de acciones de esta sesión, acá no hay ningún estado demo que optimizar, solo la escritura real) y toast de confirmación/error (mismo patrón de SW-055).
+
+**Fuera de alcance:** hidratar `sectors` reales (para que el formulario ciudadano pueda mandar `sector_id`) y conectar `registerIncident()`/la tabla `incidents` — ambos son huecos separados, ya documentados en el ítem #23 del registro de deuda, no tocados en este hito.
+
+### Resultado
+
+`node --check` sobre `frontend/app.js` y `shared/operations-adapter.js` + suite completa sin regresiones (extendidos `tests/operations-adapter.test.mjs` con 4 casos nuevos: lectura con/sin cliente real, resolución exitosa y fallo explícito en modo demo). Verificación interactiva en staging pendiente del Project Owner: enviar un reporte ciudadano real desde el Portal Ciudadano, confirmar que aparece en el panel de Supervisor, y que "Marcar resuelto" lo hace desaparecer de la lista.
+
+---
+
 ## Resumen de secuencia y dependencias
 
 | Hito | Estado | Depende de | Severidad de lo que resuelve | Esfuerzo relativo |

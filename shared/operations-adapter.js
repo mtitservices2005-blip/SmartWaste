@@ -261,7 +261,29 @@ export function createSupabaseOperationsAdapter(client, { fallback = createDemoO
       () => fallback.listVehicleAssignments(),
       opts.correlation_id
     ),
-    assignDriverToVehicle: (vehicleId, driverId, opts = {}) => assignDriverToVehicle(client, fallback, municipality_id, vehicleId, driverId, opts)
+    assignDriverToVehicle: (vehicleId, driverId, opts = {}) => assignDriverToVehicle(client, fallback, municipality_id, vehicleId, driverId, opts),
+    // SW-058 (docs/TECHNICAL_DEBT_REGISTER.md #23): citizen_reports already gets real writes from
+    // submitCitizenReport() (shared/citizen-portal.js), but nothing ever read them back — the
+    // Supervisor panel only ever showed the local demo `incidents` array, so a real citizen report
+    // had no way to reach a dispatcher at all. No demo equivalent exists (the demo panel's
+    // "incidencias" are a separate, unrelated concept, see shared/demo-data.js), so the demo
+    // fallback is an empty list rather than fallback.listCitizenReports() — same
+    // no-op-in-demo-mode posture as findOwnVehicleAssignment() above.
+    listCitizenReports: (opts = {}) => run(
+      () => scoped(table(client, 'citizen_reports').select('*')).neq('status', 'resolved').order('created_at', { ascending: false }),
+      () => [],
+      opts.correlation_id
+    ),
+    // No demo fallback here (unlike run()-based methods above): there is no demo concept of a
+    // citizen_reports row to mutate, so this fails explicitly rather than silently no-op'ing —
+    // same posture as findOwnVehicleAssignment() above, which run() can't express since its
+    // fallbackOperation result always gets wrapped in ok().
+    updateCitizenReportStatus: async (reportId, status, opts = {}) => {
+      if (!hasClient) return fail('NOT_SUPPORTED_IN_DEMO', 'Citizen report resolution requires a real backend.', { source:'DEMO_FALLBACK', correlation_id: opts.correlation_id });
+      const result = await scoped(table(client, 'citizen_reports').update({ status }).eq('id', reportId)).select('*').single();
+      if (result.error) return fail(result.error.code ?? 'SUPABASE_ERROR', result.error.message, { correlation_id: opts.correlation_id });
+      return ok(result.data, { correlation_id: opts.correlation_id });
+    }
   };
 }
 
