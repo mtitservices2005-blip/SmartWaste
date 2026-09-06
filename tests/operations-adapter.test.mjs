@@ -432,4 +432,54 @@ const noInheritResult = await createSupabaseOperationsAdapter(noDriverToInheritC
 assert.equal(noInheritResult.ok, true);
 assert.equal(noInheritPatches[0].driver_id, undefined, 'must not invent a driver_id when the vehicle has none assigned');
 
+// SW-058: listCitizenReports()/updateCitizenReportStatus() — real citizen_reports had no read/write
+// path from the frontend at all before this (only submitCitizenReport(), shared/citizen-portal.js,
+// wrote them). Minimal fake client covering just the 'citizen_reports' table this adapter touches.
+function makeCitizenReportsFakeClient({ listResponse = { data: [], error: null }, updateResponse = { data: null, error: null } } = {}) {
+  const updateCalls = [];
+  const client = {
+    from: (table) => {
+      if (table !== 'citizen_reports') throw new Error(`unexpected table ${table}`);
+      const listQuery = { eq: () => listQuery, neq: () => listQuery, order: () => Promise.resolve(listResponse) };
+      return {
+        select: () => listQuery,
+        update: (patch) => {
+          updateCalls.push(patch);
+          const updateQuery = { eq: () => updateQuery, select: () => ({ single: async () => updateResponse }) };
+          return updateQuery;
+        }
+      };
+    }
+  };
+  return { client, updateCalls };
+}
+
+const { client: listReportsClient } = makeCitizenReportsFakeClient({
+  listResponse: { data: [{ id: 'rep-1', folio: 'SW-ABC', type: 'Basura no recogida', status: 'received' }], error: null }
+});
+const listReportsResult = await createSupabaseOperationsAdapter(listReportsClient, { municipality_id: 'mun-a' }).listCitizenReports();
+assert.equal(listReportsResult.ok, true);
+assert.equal(listReportsResult.data.length, 1);
+assert.equal(listReportsResult.data[0].folio, 'SW-ABC');
+
+// No real client at all: no demo equivalent of a citizen report exists, so this must return an
+// empty list rather than throw or invent one.
+const noClientReportsResult = await createSupabaseOperationsAdapter({}).listCitizenReports();
+assert.equal(noClientReportsResult.ok, true);
+assert.deepEqual(noClientReportsResult.data, []);
+
+const { client: resolveClient, updateCalls: resolveUpdateCalls } = makeCitizenReportsFakeClient({
+  updateResponse: { data: { id: 'rep-1', folio: 'SW-ABC', status: 'resolved' }, error: null }
+});
+const resolveResult = await createSupabaseOperationsAdapter(resolveClient, { municipality_id: 'mun-a' }).updateCitizenReportStatus('rep-1', 'resolved');
+assert.equal(resolveResult.ok, true);
+assert.equal(resolveResult.data.status, 'resolved');
+assert.deepEqual(resolveUpdateCalls[0], { status: 'resolved' });
+
+// Demo mode (no client): must fail explicitly, not silently succeed — there's nothing real to
+// resolve, unlike run()-based methods that have a genuine demo fallback to fall back to.
+const demoResolveResult = await createSupabaseOperationsAdapter({}).updateCitizenReportStatus('rep-1', 'resolved');
+assert.equal(demoResolveResult.ok, false);
+assert.equal(demoResolveResult.error.code, 'NOT_SUPPORTED_IN_DEMO');
+
 console.log('operations-adapter ok');
