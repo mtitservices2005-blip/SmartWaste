@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { summarizeRouteRunsByRoute, summarizeRouteRunsByDriver } from '../shared/route-run-stats.js';
+import { summarizeRouteRunsByRoute, summarizeRouteRunsByDriver, summarizeRouteRunsForMunicipality } from '../shared/route-run-stats.js';
 
 // Two measured runs for route A (driver X), one measured run for route B (driver Y), one
 // unmeasured run (no completed_at yet, should be excluded entirely).
@@ -18,6 +18,10 @@ assert.equal(routeA.avgDurationMinutes, 60, '(50+70)/2 = 60');
 assert.equal(routeA.lastDurationMinutes, 70, 'last measured run is the 70-minute one');
 assert.equal(routeA.avgDistanceKm, 5.2, '(5.0+5.4)/2 = 5.2 km');
 assert.equal(routeA.lastDistanceKm, 5.4);
+assert.equal(routeA.totalDurationMinutes, 120);
+assert.equal(routeA.totalDistanceMeters, 10400);
+assert.equal(routeA.totalDistanceKm, 10.4);
+assert.equal(routeA.completedRunsCount, 2);
 
 const routeB = byRoute.find((r) => r.routeId === 'B');
 assert.equal(routeB.runsCount, 1);
@@ -30,6 +34,9 @@ assert.equal(byDriver.length, 2);
 const driverX = byDriver.find((d) => d.driverId === 'X');
 assert.equal(driverX.runsCount, 2, 'driver X ran route A twice (measured); the incomplete run excluded');
 assert.equal(driverX.avgDurationMinutes, 60);
+assert.equal(driverX.totalDurationMinutes, 120);
+assert.equal(driverX.totalDistanceMeters, 10400);
+assert.equal(driverX.completedRunsCount, 2);
 
 const driverY = byDriver.find((d) => d.driverId === 'Y');
 assert.equal(driverY.runsCount, 1);
@@ -42,5 +49,35 @@ assert.deepEqual(summarizeRouteRunsByDriver(runsWithoutDriver), []);
 // Empty input never throws, returns empty arrays.
 assert.deepEqual(summarizeRouteRunsByRoute([]), []);
 assert.deepEqual(summarizeRouteRunsByDriver([]), []);
+
+// Municipality totals aggregate every completed route and driver into one level.
+assert.deepEqual(summarizeRouteRunsForMunicipality(routeRuns), {
+  runsCount: 3,
+  completedRunsCount: 3,
+  totalDurationMinutes: 160,
+  totalDistanceMeters: 10400,
+  totalDistanceKm: 10.4,
+});
+
+// Month filtering uses the explicit year and month from started_at, never the current year.
+const multiMonthRuns = [
+  { id: 'sep-2025', route_id: 'A', driver_id: 'X', started_at: '2025-09-10T08:00:00Z', completed_at: '2025-09-10T08:30:00Z', distance_meters: 1000 },
+  { id: 'aug-2026', route_id: 'A', driver_id: 'X', started_at: '2026-08-31T23:00:00Z', completed_at: '2026-08-31T23:20:00Z', distance_meters: 2000 },
+  { id: 'sep-2026', route_id: 'B', driver_id: 'Y', started_at: '2026-09-01T00:00:00Z', completed_at: '2026-09-01T00:40:00Z', distance_meters: 3000 },
+];
+assert.deepEqual(summarizeRouteRunsForMunicipality(multiMonthRuns, '2026-09'), {
+  runsCount: 1,
+  completedRunsCount: 1,
+  totalDurationMinutes: 40,
+  totalDistanceMeters: 3000,
+  totalDistanceKm: 3,
+});
+assert.deepEqual(summarizeRouteRunsByRoute(multiMonthRuns, '2026-09').map((run) => run.routeId), ['B']);
+assert.deepEqual(summarizeRouteRunsByDriver(multiMonthRuns, '2025-09').map((run) => run.driverId), ['X']);
+
+// Input order cannot change group order or which chronologically latest run is reported.
+const deterministicForward = summarizeRouteRunsByRoute(routeRuns);
+const deterministicReverse = summarizeRouteRunsByRoute([...routeRuns].reverse());
+assert.deepEqual(deterministicReverse, deterministicForward);
 
 console.log('route-run-stats ok');
