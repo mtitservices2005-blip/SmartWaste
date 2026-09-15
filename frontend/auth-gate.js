@@ -83,6 +83,23 @@ export function readSupabaseConfig(win = typeof window !== 'undefined' ? window 
 let authClient = null;
 export function getAuthClient() { return authClient; }
 
+// Provisioned accounts receive this Auth-owned marker when their initial credential is temporary.
+// The marker, rather than the account role, is the source of truth: drivers, municipal admins, and
+// any future provisioned role must all replace a temporary password before entering the app.
+export function requiresPasswordChange(user) {
+  return user?.user_metadata?.requires_password_change === true;
+}
+
+export async function setOwnPassword(client, password) {
+  if (!client?.auth?.updateUser) throw new Error('Supabase client with auth.updateUser is required');
+  const result = await client.auth.updateUser({
+    password,
+    data: { requires_password_change: false }
+  });
+  if (result.error) throw new Error(result.error.message);
+  return result.data?.user ?? null;
+}
+
 function applySectionVisibility(visibleIds, sections = SECTION_ROLES) {
   Object.keys(sections).forEach((id) => {
     const section = document.getElementById(id);
@@ -155,6 +172,23 @@ function renderOverlay() {
   return overlay;
 }
 
+export function renderPasswordChangeOverlay() {
+  const overlay = document.createElement('div');
+  overlay.id = 'authOverlay';
+  overlay.className = 'auth-overlay';
+  overlay.innerHTML = `
+    <form id="passwordChangeForm" class="auth-card">
+      <h2>Establece tu contraseña</h2>
+      <p>Antes de continuar, reemplaza la contraseña temporal por una contraseña propia.</p>
+      <label>Nueva contraseña<input type="password" name="password" required minlength="8" autocomplete="new-password"></label>
+      <label>Confirmar contraseña<input type="password" name="confirmation" required minlength="8" autocomplete="new-password"></label>
+      <button type="submit">Guardar contraseña y continuar</button>
+      <p id="authError" class="auth-error" role="alert"></p>
+    </form>`;
+  document.body.append(overlay);
+  return overlay;
+}
+
 /**
  * Activates the login + role gate. No-ops entirely (see file header) if
  * window.SMARTWASTE_SUPABASE_CONFIG isn't set. Returns the resolved session context, or null if
@@ -173,21 +207,60 @@ export async function initAuthGate() {
   authClient = client;
   const identity = createIdentityProvider(client);
 
-  async function tryResolve() {
+  applySectionVisibility([]);
+  applyOpsViewVisibility([]);
+
+  async function resolveAuthenticatedUser() {
     try {
-      const ctx = await identity.resolveContext();
-      applySectionVisibility(pickVisibleSections(ctx.role));
-      applyOpsViewVisibility(pickVisibleOpsViews(ctx.role));
-      renderLogoutButton(client);
-      return ctx;
+      const [ctx, userResult] = await Promise.all([identity.resolveContext(), client.auth.getUser()]);
+      if (userResult.error || !userResult.data?.user) return null;
+      return { ctx, user: userResult.data.user };
     } catch {
       return null;
     }
   }
 
+  function grantApplicationAccess(ctx) {
+    applySectionVisibility(pickVisibleSections(ctx.role));
+    applyOpsViewVisibility(pickVisibleOpsViews(ctx.role));
+    renderLogoutButton(client);
+  }
+
+  function requireOwnPassword(resolved) {
+    const passwordOverlay = renderPasswordChangeOverlay();
+    return new Promise((resolve) => {
+      passwordOverlay.querySelector('#passwordChangeForm').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const errorEl = passwordOverlay.querySelector('#authError');
+        errorEl.textContent = '';
+        const formData = new FormData(event.target);
+        const password = formData.get('password');
+        if (password !== formData.get('confirmation')) {
+          errorEl.textContent = 'Las contraseñas no coinciden.';
+          return;
+        }
+        const button = event.target.querySelector('button[type="submit"]');
+        button.disabled = true;
+        try {
+          await setOwnPassword(client, password);
+          passwordOverlay.remove();
+          grantApplicationAccess(resolved.ctx);
+          resolve(resolved.ctx);
+        } catch {
+          errorEl.textContent = 'No se pudo actualizar la contraseña. Intenta nuevamente.';
+          button.disabled = false;
+        }
+      });
+    });
+  }
+
   // Reload with an existing signed-in session: skip the form if we can resolve a context.
-  const existing = await tryResolve();
-  if (existing) return existing;
+  const existing = await resolveAuthenticatedUser();
+  if (existing) {
+    if (requiresPasswordChange(existing.user)) return requireOwnPassword(existing);
+    grantApplicationAccess(existing.ctx);
+    return existing.ctx;
+  }
 
   const overlay = renderOverlay();
   return new Promise((resolve) => {
@@ -205,10 +278,15 @@ export async function initAuthGate() {
       const formData = new FormData(event.target);
       const { error: signInError } = await client.auth.signInWithPassword({ email: formData.get('email'), password: formData.get('password') });
       if (signInError) { errorEl.textContent = 'Credenciales inválidas.'; return; }
-      const ctx = await tryResolve();
-      if (!ctx) { errorEl.textContent = 'Sesión iniciada, pero sin membresía activa en ningún municipio.'; await client.auth.signOut(); return; }
+      const resolved = await resolveAuthenticatedUser();
+      if (!resolved) { errorEl.textContent = 'Sesión iniciada, pero sin membresía activa en ningún municipio.'; await client.auth.signOut(); return; }
       overlay.remove();
-      resolve(ctx);
+      if (requiresPasswordChange(resolved.user)) {
+        resolve(await requireOwnPassword(resolved));
+        return;
+      }
+      grantApplicationAccess(resolved.ctx);
+      resolve(resolved.ctx);
     });
   });
 }

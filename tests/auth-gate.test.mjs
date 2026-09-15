@@ -3,7 +3,7 @@
 // Supabase sign-in — those need a browser + local Supabase and are out of scope for a Node test;
 // see docs/LOGIN_GATING_VERIFICATION_BRIEF.md for the interactive verification this still needs.
 import assert from 'node:assert/strict';
-import { pickVisibleSections, pickVisibleOpsViews, readSupabaseConfig, SECTION_ROLES, OPS_SUBVIEW_ROLES } from '../frontend/auth-gate.js';
+import { pickVisibleSections, pickVisibleOpsViews, readSupabaseConfig, requiresPasswordChange, renderPasswordChangeOverlay, setOwnPassword, SECTION_ROLES, OPS_SUBVIEW_ROLES } from '../frontend/auth-gate.js';
 
 // Anonymous / no session: only the public citizen portal is visible.
 assert.deepEqual(pickVisibleSections(null).sort(), ['ciudadania']);
@@ -72,5 +72,36 @@ assert.deepEqual(
 // SECTION_ROLES itself: ciudadania must stay public (regression guard against accidentally gating
 // the anonymous citizen-report flow SW-020 specifically enabled).
 assert.equal(SECTION_ROLES.ciudadania, null);
+
+// The marker is role-independent: every provisioned account must replace its temporary password.
+const temporaryUser = { user_metadata: { requires_password_change: true } };
+assert.equal(requiresPasswordChange(temporaryUser), true);
+assert.equal(requiresPasswordChange({ user_metadata: {} }), false);
+assert.equal(requiresPasswordChange(null), false);
+
+let appendedOverlay;
+globalThis.document = {
+  createElement() { return { innerHTML: '', className: '', id: '' }; },
+  body: { append(node) { appendedOverlay = node; } }
+};
+const mandatoryOverlay = renderPasswordChangeOverlay();
+assert.equal(appendedOverlay, mandatoryOverlay);
+assert.match(mandatoryOverlay.innerHTML, /id="passwordChangeForm"/);
+assert.match(mandatoryOverlay.innerHTML, /name="confirmation"/);
+assert.doesNotMatch(mandatoryOverlay.innerHTML, /skipToPublic/);
+delete globalThis.document;
+
+let updatePayload;
+const updatedUser = { user_metadata: { requires_password_change: false } };
+const fakeClient = { auth: { async updateUser(payload) {
+  updatePayload = payload;
+  return { data: { user: updatedUser }, error: null };
+} } };
+assert.equal(await setOwnPassword(fakeClient, 'propia-segura-123'), updatedUser);
+assert.deepEqual(updatePayload, {
+  password: 'propia-segura-123',
+  data: { requires_password_change: false }
+});
+assert.equal(requiresPasswordChange(updatedUser), false);
 
 console.log('auth-gate ok');

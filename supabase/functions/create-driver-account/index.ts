@@ -89,7 +89,12 @@ Deno.serve(async (req: Request) => {
   if (!membershipLookup.data) return json({ error: 'Caller is not authorized to provision accounts for this municipality' }, 403);
 
   const temporaryPassword = generateTemporaryPassword();
-  const createdUser = await serviceClient.auth.admin.createUser({ email, password: temporaryPassword, email_confirm: true, user_metadata: { display_name: driver.display_name } });
+  const createdUser = await serviceClient.auth.admin.createUser({
+    email,
+    password: temporaryPassword,
+    email_confirm: true,
+    user_metadata: { display_name: driver.display_name, requires_password_change: true }
+  });
   if (createdUser.error) return json({ error: createdUser.error.message }, 500);
   const newUserId = createdUser.data.user.id;
 
