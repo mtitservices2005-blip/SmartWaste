@@ -165,7 +165,7 @@ function renderOverlay() {
       <label>Contraseña<input type="password" name="password" required autocomplete="current-password"></label>
       <button type="submit">Ingresar</button>
       <p id="authError" class="auth-error" role="alert"></p>
-      <p class="demo">¿Sos ciudadano? <a href="#ciudadania" id="skipToPublic">Ir al portal ciudadano sin iniciar sesión</a>.</p>
+      <p class="demo">¿Eres ciudadano? <a href="#ciudadania" id="skipToPublic">Ir al portal ciudadano sin iniciar sesión</a>.</p>
     </form>`;
   document.body.append(overlay);
   return overlay;
@@ -177,8 +177,8 @@ export function renderPasswordChangeOverlay() {
   overlay.className = 'auth-overlay';
   overlay.innerHTML = `
     <form id="passwordChangeForm" class="auth-card">
-      <h2>Establecé tu contraseña</h2>
-      <p>Antes de continuar, reemplazá la contraseña temporal por una contraseña propia.</p>
+      <h2>Establece tu contraseña</h2>
+      <p>Antes de continuar, reemplaza la contraseña temporal por una contraseña propia.</p>
       <label>Nueva contraseña<input type="password" name="password" required minlength="8" autocomplete="new-password"></label>
       <label>Confirmar contraseña<input type="password" name="confirmation" required minlength="8" autocomplete="new-password"></label>
       <button type="submit">Guardar contraseña y continuar</button>
@@ -248,7 +248,7 @@ export async function initAuthGate() {
           grantApplicationAccess(resolved.ctx);
           resolve(resolved.ctx);
         } catch {
-          errorEl.textContent = 'No se pudo actualizar la contraseña. Intentá nuevamente.';
+          errorEl.textContent = 'No se pudo actualizar la contraseña. Intenta nuevamente.';
           button.disabled = false;
         }
       });
