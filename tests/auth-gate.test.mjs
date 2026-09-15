@@ -1,9 +1,8 @@
-// Unit tests for the DOM-free logic in frontend/auth-gate.js: which role sees which section, and
-// how the optional Supabase config is read. Does NOT test the actual login form/overlay or a real
-// Supabase sign-in — those need a browser + local Supabase and are out of scope for a Node test;
-// see docs/LOGIN_GATING_VERIFICATION_BRIEF.md for the interactive verification this still needs.
+// Unit tests for auth-gate.js: role visibility, config parsing, and the mandatory first-login
+// password transition. A real Supabase sign-in still needs the interactive verification described
+// in docs/LOGIN_GATING_VERIFICATION_BRIEF.md.
 import assert from 'node:assert/strict';
-import { pickVisibleSections, pickVisibleOpsViews, readSupabaseConfig, SECTION_ROLES, OPS_SUBVIEW_ROLES } from '../frontend/auth-gate.js';
+import { pickVisibleSections, pickVisibleOpsViews, readSupabaseConfig, requiresDriverPasswordChange, renderPasswordChangeOverlay, setDriverOwnPassword, SECTION_ROLES, OPS_SUBVIEW_ROLES } from '../frontend/auth-gate.js';
 
 // Anonymous / no session: only the public citizen portal is visible.
 assert.deepEqual(pickVisibleSections(null).sort(), ['ciudadania']);
@@ -72,5 +71,40 @@ assert.deepEqual(
 // SECTION_ROLES itself: ciudadania must stay public (regression guard against accidentally gating
 // the anonymous citizen-report flow SW-020 specifically enabled).
 assert.equal(SECTION_ROLES.ciudadania, null);
+
+// A newly provisioned driver must complete the mandatory form. The explicit marker plus driver
+// role keeps existing accounts and other roles on the normal login path.
+const driverContext = { role: 'driver' };
+const temporaryUser = { user_metadata: { requires_password_change: true } };
+assert.equal(requiresDriverPasswordChange(temporaryUser, driverContext), true);
+assert.equal(requiresDriverPasswordChange({ user_metadata: {} }, driverContext), false);
+assert.equal(requiresDriverPasswordChange(temporaryUser, { role: 'dispatcher' }), false);
+
+let appendedOverlay;
+globalThis.document = {
+  createElement() { return { innerHTML: '', className: '', id: '' }; },
+  body: { append(node) { appendedOverlay = node; } }
+};
+const mandatoryOverlay = renderPasswordChangeOverlay();
+assert.equal(appendedOverlay, mandatoryOverlay);
+assert.match(mandatoryOverlay.innerHTML, /id="passwordChangeForm"/);
+assert.match(mandatoryOverlay.innerHTML, /name="confirmation"/);
+assert.doesNotMatch(mandatoryOverlay.innerHTML, /skipToPublic/);
+delete globalThis.document;
+
+// Completing the form changes the password and clears the marker in the same Supabase call. On
+// the following login the returned user therefore enters through the normal path.
+let updatePayload;
+const updatedUser = { user_metadata: { requires_password_change: false } };
+const fakeClient = { auth: { async updateUser(payload) {
+  updatePayload = payload;
+  return { data: { user: updatedUser }, error: null };
+} } };
+assert.equal(await setDriverOwnPassword(fakeClient, 'propia-segura-123'), updatedUser);
+assert.deepEqual(updatePayload, {
+  password: 'propia-segura-123',
+  data: { requires_password_change: false }
+});
+assert.equal(requiresDriverPasswordChange(updatedUser, driverContext), false);
 
 console.log('auth-gate ok');
