@@ -89,8 +89,6 @@ Deno.serve(async (req: Request) => {
   if (!membershipLookup.data) return json({ error: 'Caller is not authorized to provision accounts for this municipality' }, 403);
 
   const temporaryPassword = generateTemporaryPassword();
-  // The frontend reads this Auth-owned marker before exposing any application section. Keeping it
-  // on the Auth user also lets the password and marker be updated in one Auth operation.
   const createdUser = await serviceClient.auth.admin.createUser({
     email,
     password: temporaryPassword,

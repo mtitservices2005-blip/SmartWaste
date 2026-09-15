@@ -83,13 +83,14 @@ export function readSupabaseConfig(win = typeof window !== 'undefined' ? window 
 let authClient = null;
 export function getAuthClient() { return authClient; }
 
-// Only accounts provisioned by create-driver-account carry this marker. Checking the role too
-// prevents this driver-specific flow from affecting any other kind of account.
-export function requiresDriverPasswordChange(user, ctx) {
-  return ctx?.role === 'driver' && user?.user_metadata?.requires_password_change === true;
+// Provisioned accounts receive this Auth-owned marker when their initial credential is temporary.
+// The marker, rather than the account role, is the source of truth: drivers, municipal admins, and
+// any future provisioned role must all replace a temporary password before entering the app.
+export function requiresPasswordChange(user) {
+  return user?.user_metadata?.requires_password_change === true;
 }
 
-export async function setDriverOwnPassword(client, password) {
+export async function setOwnPassword(client, password) {
   if (!client?.auth?.updateUser) throw new Error('Supabase client with auth.updateUser is required');
   const result = await client.auth.updateUser({
     password,
@@ -165,7 +166,7 @@ function renderOverlay() {
       <label>Contraseña<input type="password" name="password" required autocomplete="current-password"></label>
       <button type="submit">Ingresar</button>
       <p id="authError" class="auth-error" role="alert"></p>
-      <p class="demo">¿Eres ciudadano? <a href="#ciudadania" id="skipToPublic">Ir al portal ciudadano sin iniciar sesión</a>.</p>
+      <p class="demo">¿Sos ciudadano? <a href="#ciudadania" id="skipToPublic">Ir al portal ciudadano sin iniciar sesión</a>.</p>
     </form>`;
   document.body.append(overlay);
   return overlay;
@@ -206,8 +207,6 @@ export async function initAuthGate() {
   authClient = client;
   const identity = createIdentityProvider(client);
 
-  // Nothing in the application is exposed until the session has passed every gate below. The
-  // anonymous portal is restored explicitly only when the visitor chooses that path.
   applySectionVisibility([]);
   applyOpsViewVisibility([]);
 
@@ -243,7 +242,7 @@ export async function initAuthGate() {
         const button = event.target.querySelector('button[type="submit"]');
         button.disabled = true;
         try {
-          await setDriverOwnPassword(client, password);
+          await setOwnPassword(client, password);
           passwordOverlay.remove();
           grantApplicationAccess(resolved.ctx);
           resolve(resolved.ctx);
@@ -258,7 +257,7 @@ export async function initAuthGate() {
   // Reload with an existing signed-in session: skip the form if we can resolve a context.
   const existing = await resolveAuthenticatedUser();
   if (existing) {
-    if (requiresDriverPasswordChange(existing.user, existing.ctx)) return requireOwnPassword(existing);
+    if (requiresPasswordChange(existing.user)) return requireOwnPassword(existing);
     grantApplicationAccess(existing.ctx);
     return existing.ctx;
   }
@@ -282,7 +281,7 @@ export async function initAuthGate() {
       const resolved = await resolveAuthenticatedUser();
       if (!resolved) { errorEl.textContent = 'Sesión iniciada, pero sin membresía activa en ningún municipio.'; await client.auth.signOut(); return; }
       overlay.remove();
-      if (requiresDriverPasswordChange(resolved.user, resolved.ctx)) {
+      if (requiresPasswordChange(resolved.user)) {
         resolve(await requireOwnPassword(resolved));
         return;
       }
