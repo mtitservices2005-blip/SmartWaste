@@ -19,14 +19,35 @@ function average(numbers) {
 
 function summarizeGroup(runs) {
   const durations = runs.map(runDurationMinutes).filter((n) => n != null);
+  const distanceMeters = runs.map((run) => run.distance_meters).filter((n) => n != null);
   const distances = runs.map(runDistanceKm).filter((n) => n != null);
   return {
     runsCount: runs.length,
+    completedRunsCount: runs.length,
+    totalDurationMinutes: durations.reduce((total, n) => total + n, 0),
+    totalDistanceMeters: distanceMeters.reduce((total, n) => total + n, 0),
+    totalDistanceKm: Math.round(distanceMeters.reduce((total, n) => total + n, 0) / 100) / 10,
     avgDurationMinutes: durations.length ? Math.round(average(durations)) : null,
     lastDurationMinutes: durations.length ? durations[durations.length - 1] : null,
     avgDistanceKm: distances.length ? Math.round(average(distances) * 10) / 10 : null,
     lastDistanceKm: distances.length ? distances[distances.length - 1] : null,
   };
+}
+
+function runsForMonth(routeRuns, month) {
+  if (month == null) return routeRuns;
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return [];
+  return routeRuns.filter((run) => typeof run.started_at === 'string' && run.started_at.slice(0, 7) === month);
+}
+
+function measuredRuns(routeRuns, month) {
+  return runsForMonth(routeRuns, month)
+    .filter((run) => run.started_at && run.completed_at)
+    .sort((a, b) => {
+      const byStart = Date.parse(a.started_at) - Date.parse(b.started_at);
+      if (byStart) return byStart;
+      return String(a.id ?? '').localeCompare(String(b.id ?? ''));
+    });
 }
 
 function groupBy(runs, key) {
@@ -41,12 +62,28 @@ function groupBy(runs, key) {
 
 // Only runs with both started_at and completed_at count as "measured" — matches
 // refreshRouteDurationHistory()'s filter, never inventing a duration for an in-progress/cancelled run.
-export function summarizeRouteRunsByRoute(routeRuns) {
-  const measured = routeRuns.filter((run) => run.started_at && run.completed_at);
-  return [...groupBy(measured, 'route_id').entries()].map(([routeId, runs]) => ({ routeId, ...summarizeGroup(runs) }));
+export function summarizeRouteRunsByRoute(routeRuns, month) {
+  const measured = measuredRuns(routeRuns, month);
+  return [...groupBy(measured, 'route_id').entries()]
+    .sort(([a], [b]) => String(a).localeCompare(String(b)))
+    .map(([routeId, runs]) => ({ routeId, ...summarizeGroup(runs) }));
 }
 
-export function summarizeRouteRunsByDriver(routeRuns) {
-  const measured = routeRuns.filter((run) => run.started_at && run.completed_at && run.driver_id);
-  return [...groupBy(measured, 'driver_id').entries()].map(([driverId, runs]) => ({ driverId, ...summarizeGroup(runs) }));
+export function summarizeRouteRunsByDriver(routeRuns, month) {
+  const measured = measuredRuns(routeRuns, month).filter((run) => run.driver_id);
+  return [...groupBy(measured, 'driver_id').entries()]
+    .sort(([a], [b]) => String(a).localeCompare(String(b)))
+    .map(([driverId, runs]) => ({ driverId, ...summarizeGroup(runs) }));
+}
+
+// Municipality-wide totals deliberately do not group by route or driver.
+export function summarizeRouteRunsForMunicipality(routeRuns, month) {
+  const summary = summarizeGroup(measuredRuns(routeRuns, month));
+  return {
+    runsCount: summary.runsCount,
+    completedRunsCount: summary.completedRunsCount,
+    totalDurationMinutes: summary.totalDurationMinutes,
+    totalDistanceMeters: summary.totalDistanceMeters,
+    totalDistanceKm: summary.totalDistanceKm,
+  };
 }
