@@ -1,7 +1,7 @@
 import { trucks, routePaths, simulationNotice } from './demo-data.js';
 export const TELEMETRY_SOURCES = ['driver_app','browser_geolocation','dedicated_tracker','external_authorized','simulator'];
-export function makeTelemetry({ vehicle_id, municipality_id='laguna-salada-rd', latitude, longitude, accuracy=12, speed=0, heading=0, source='simulator', device_id='demo-simulator', correlation_id='demo-correlation' }) {
-  return { vehicle_id, municipality_id, latitude, longitude, accuracy, speed, heading, captured_at:new Date().toISOString(), received_at:new Date().toISOString(), source, device_id, correlation_id };
+export function makeTelemetry({ vehicle_id, municipality_id='laguna-salada-rd', route_run_id=null, latitude, longitude, accuracy=12, speed=0, heading=0, source='simulator', device_id='demo-simulator', correlation_id='demo-correlation' }) {
+  return { vehicle_id, municipality_id, route_run_id, latitude, longitude, accuracy, speed, heading, captured_at:new Date().toISOString(), received_at:new Date().toISOString(), source, device_id, correlation_id };
 }
 export class DeviceSimulator {
   // docs/TECHNICAL_DEBT_REGISTER.md item 16: emit() used to always look up its path via the global
@@ -54,6 +54,7 @@ export function validateTelemetryPosition(position, { maxAgeMs = 1000 * 60 * 60 
   if (!Number.isFinite(Number(position?.latitude)) || Number(position.latitude) < -90 || Number(position.latitude) > 90) errors.push('latitude is invalid');
   if (!Number.isFinite(Number(position?.longitude)) || Number(position.longitude) < -180 || Number(position.longitude) > 180) errors.push('longitude is invalid');
   if (!TELEMETRY_SOURCES.includes(position?.source)) errors.push('source is not recognized');
+  if (position?.source === 'browser_geolocation' && !position?.route_run_id) errors.push('route_run_id is required for browser geolocation');
   if (position?.speed !== undefined && Number(position.speed) < 0) errors.push('speed cannot be negative');
   const recordedAt = Date.parse(position?.captured_at ?? position?.recorded_at ?? '');
   if (!Number.isFinite(recordedAt)) errors.push('timestamp is invalid');
@@ -81,6 +82,7 @@ export function createTelemetryIngestionAdapter(client, { municipality_id = null
       const payload = {
         vehicle_id: position.vehicle_id,
         municipality_id: position.municipality_id,
+        route_run_id: position.route_run_id ?? null,
         latitude: position.latitude,
         longitude: position.longitude,
         accuracy: position.accuracy,

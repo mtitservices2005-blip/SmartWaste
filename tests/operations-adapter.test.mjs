@@ -92,36 +92,37 @@ assert.equal(routeRunsResult.data[1].progress, 40, 'must be ordered oldest-first
 // builds a minimal chainable query per table (select().eq()...eq().maybeSingle()), routed by table
 // name and canned response, mirroring the shape createSupabaseOperationsAdapter actually calls.
 function makeChainableQuery(result) {
-  const query = { select: () => query, eq: () => query, maybeSingle: async () => result };
+  const query = { select: () => query, eq: () => query, in: () => query, order: () => query, limit: () => query, maybeSingle: async () => result };
   return query;
 }
-function makeFakeAssignmentClient({ driverRow, assignmentRow }) {
+function makeFakeAssignmentClient({ driverRow, routeRunRow }) {
   return {
     from: (table) => {
       if (table === 'drivers') return makeChainableQuery({ data: driverRow, error: null });
-      if (table === 'vehicle_assignments') return makeChainableQuery({ data: assignmentRow, error: null });
+      if (table === 'route_runs') return makeChainableQuery({ data: routeRunRow, error: null });
       throw new Error(`unexpected table ${table}`);
     }
   };
 }
 
-// Happy path: driver row found, assignment found.
-const happyAdapter = createSupabaseOperationsAdapter(makeFakeAssignmentClient({ driverRow: { id: 'drv-1' }, assignmentRow: { vehicle_id: 'veh-1' } }));
+// Happy path: driver row and active run found. The run id is returned so every GPS sample can be
+// attributed to the exact execution instead of only to the vehicle.
+const happyAdapter = createSupabaseOperationsAdapter(makeFakeAssignmentClient({ driverRow: { id: 'drv-1' }, routeRunRow: { id: 'run-1', route_id: 'route-1', vehicle_id: 'veh-1', status: 'started' } }));
 const happyResult = await happyAdapter.findOwnVehicleAssignment('profile-1');
 assert.equal(happyResult.ok, true);
-assert.equal(happyResult.data.vehicle_id, 'veh-1');
+assert.deepEqual(happyResult.data, { vehicle_id: 'veh-1', route_run_id: 'run-1', route_id: 'route-1' });
 
 // No driver row linked to this profile.
-const noDriverAdapter = createSupabaseOperationsAdapter(makeFakeAssignmentClient({ driverRow: null, assignmentRow: null }));
+const noDriverAdapter = createSupabaseOperationsAdapter(makeFakeAssignmentClient({ driverRow: null, routeRunRow: null }));
 const noDriverResult = await noDriverAdapter.findOwnVehicleAssignment('profile-unknown');
 assert.equal(noDriverResult.ok, false);
 assert.equal(noDriverResult.error.code, 'DRIVER_NOT_FOUND');
 
 // Driver exists but has no vehicle currently assigned.
-const noAssignmentAdapter = createSupabaseOperationsAdapter(makeFakeAssignmentClient({ driverRow: { id: 'drv-2' }, assignmentRow: null }));
+const noAssignmentAdapter = createSupabaseOperationsAdapter(makeFakeAssignmentClient({ driverRow: { id: 'drv-2' }, routeRunRow: null }));
 const noAssignmentResult = await noAssignmentAdapter.findOwnVehicleAssignment('profile-2');
 assert.equal(noAssignmentResult.ok, false);
-assert.equal(noAssignmentResult.error.code, 'NO_VEHICLE_ASSIGNED');
+assert.equal(noAssignmentResult.error.code, 'NO_ACTIVE_ROUTE_ASSIGNED');
 
 // Demo adapter always reports NOT_SUPPORTED_IN_DEMO — the GPS button only renders with a real
 // backend configured, so this path exists just to keep both adapters' interfaces consistent.
@@ -294,7 +295,7 @@ assert.equal(getAlreadyCompletedPatch().completed_at, undefined, 'must not overw
 // SW-045: on completion, with a vehicle_id and started_at present, transitionRouteRun() also sums
 // the real vehicle_positions trail since started_at into distance_meters. Fake client routes by
 // table name — route_runs uses the same chain as above, vehicle_positions gets its own
-// select().eq().neq().gte().order() chain.
+// select().eq().neq().order() chain.
 function makeRouteRunWithPositionsFakeClient(currentRun, positions) {
   let updatePatch = null;
   let positionsQueryArgs = null;
@@ -311,7 +312,7 @@ function makeRouteRunWithPositionsFakeClient(currentRun, positions) {
       }
       if (table === 'vehicle_positions') {
         return {
-          select: () => ({ eq: (...eqArgs) => { positionsQueryArgs = eqArgs; return { neq: () => ({ gte: () => ({ order: async () => ({ data: positions, error: null }) }) }) }; } })
+          select: () => ({ eq: (...eqArgs) => { positionsQueryArgs = eqArgs; return { neq: () => ({ order: async () => ({ data: positions, error: null }) }) }; } })
         };
       }
       throw new Error(`unexpected table ${table}`);
@@ -331,8 +332,11 @@ const { client: distanceClient, getUpdatePatch: getDistancePatch, getPositionsQu
 );
 const distanceResult = await createSupabaseOperationsAdapter(distanceClient).completeRoute('route-x');
 assert.equal(distanceResult.ok, true);
-assert.deepEqual(getPositionsQueryArgs(), ['vehicle_id', 'veh-1']);
+assert.deepEqual(getPositionsQueryArgs(), ['route_run_id', 'run-5']);
 assert.ok(getDistancePatch().distance_meters > 0, 'must compute a positive distance_meters from 2 distinct positions');
+assert.equal(getDistancePatch().gps_points_count, 2);
+assert.equal(getDistancePatch().gps_started_at, twoPositions[0].captured_at);
+assert.equal(getDistancePatch().gps_ended_at, twoPositions[1].captured_at);
 
 // Fewer than 2 positions: no GPS trail to measure a distance between — distance_meters stays
 // unstamped (falls back to the route's estimated distance in the UI), completion still succeeds.
@@ -342,6 +346,7 @@ const { client: noTrailClient, getUpdatePatch: getNoTrailPatch } = makeRouteRunW
 const noTrailResult = await createSupabaseOperationsAdapter(noTrailClient).completeRoute('route-x');
 assert.equal(noTrailResult.ok, true, 'completion must still succeed with no measurable distance');
 assert.equal(getNoTrailPatch().distance_meters, undefined, 'must not stamp distance_meters without at least 2 positions');
+assert.equal(getNoTrailPatch().gps_points_count, 1, 'must persist sample count even when distance cannot be measured');
 
 // No vehicle_id on the run: skips the distance query entirely rather than querying vehicle_id=null.
 const { client: noVehicleClient, getUpdatePatch: getNoVehiclePatch } = makeRouteRunFakeClient({ id: 'run-7', route_id: 'route-x', status: 'in_progress', started_at: '2026-01-01T00:00:00Z', completed_at: null });

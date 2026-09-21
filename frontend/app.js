@@ -135,6 +135,9 @@ let realSectors = [];
 // handle while GPS sharing is active, null otherwise.
 let driverAuthContext = null;
 let driverGpsWatchId = null;
+// SW-062: completion must wait until every in-flight GPS insert has settled; otherwise the final
+// sample can land after completeRoute() has already counted points and calculated distance.
+const driverGpsPendingWrites = new Set();
 // Onboarding en vacío (pedido del Project Owner): un municipio real recién conectado a Supabase, sin
 // ningún vehículo/chofer/ruta real todavía, no debería ver los 5 datos demo como si fueran
 // operación real — bootstrapRealBackend() (más abajo) detecta ese caso, vacía los arrays demo, y
@@ -482,12 +485,15 @@ function renderRouteDetail(route) {
     : `<p><b>Distancia</b><span>${route.distanceKm != null ? `${route.distanceKm} km` : '—'} · estimado</span></p>`;
   const estimatedFuelLiters = displayDistanceKm != null ? estimateFuelLiters(displayDistanceKm) : null;
   const fuelRow = `<p><b>Consumo estimado</b><span>${estimatedFuelLiters != null ? `${estimatedFuelLiters} L` : '—'}</span></p>`;
+  const gpsEvidenceRow = route.gps_points_count != null
+    ? `<p><b>Evidencia GPS</b><span>${route.gps_points_count} punto(s) reales guardados${route.gps_started_at && route.gps_ended_at ? ` · ${new Date(route.gps_started_at).toLocaleTimeString()}–${new Date(route.gps_ended_at).toLocaleTimeString()}` : ''}</span></p>`
+    : '<p><b>Evidencia GPS</b><span>Sin métricas GPS cerradas</span></p>';
   // Only real/hydrated routes can have more than one corrida to compare (a demo route is always
   // "the same object", never a history of separate route_runs) — refreshRouteDurationHistory()
   // (called from selectRoute()) fills this in asynchronously since it's a network read.
   const durationHistoryPlaceholder = route.real_id ? `<p id="routeDurationHistory" class="demo">Cargando histórico de corridas…</p>` : '';
   return `<div class="drawer-head"><p class="eyebrow">Detalle de ruta</p><h2>${route.name}</h2>${pill(readinessStage ?? routeStatus(route))}</div>
-    <div class="detail-grid"><p><b>Unidad asignada</b><span>${assignedTruck ? `<button type="button" class="row-link" data-truck="${assignedTruck.id}">${route.truckId}</button>` : route.truckId}</span></p><p><b>Conductor</b><span>${driverName(assignedTruck?.driverId)}</span></p><p><b>Paradas</b><span>${route.covered} completadas · ${route.pending} pendientes</span></p>${durationRow}${distanceRow}${fuelRow}</div>
+    <div class="detail-grid"><p><b>Unidad asignada</b><span>${assignedTruck ? `<button type="button" class="row-link" data-truck="${assignedTruck.id}">${route.truckId}</button>` : route.truckId}</span></p><p><b>Conductor</b><span>${driverName(assignedTruck?.driverId)}</span></p><p><b>Paradas</b><span>${route.covered} completadas · ${route.pending} pendientes</span></p>${durationRow}${distanceRow}${fuelRow}${gpsEvidenceRow}</div>
     ${durationHistoryPlaceholder}
     ${guidedAction || `${assignAction}${driverAssignAction}`}${startAction}${completeAction}${reoptimizeAction}
     <details class="detail-more"><summary>Ver detalles técnicos</summary>
@@ -887,6 +893,7 @@ async function startDriverGps() {
   const assignment = await realAdapter.findOwnVehicleAssignment(driverAuthContext.user_id);
   if (!assignment.ok) { if (status) status.textContent = `No se pudo activar el GPS real: ${assignment.error.message}`; return; }
   const vehicleId = assignment.data.vehicle_id;
+  const routeRunId = assignment.data.route_run_id;
   const client = getAuthClient();
   const telemetry = createTelemetryIngestionAdapter(client, { municipality_id: driverAuthContext.municipality_id });
   let lastSentAt = 0;
@@ -894,8 +901,16 @@ async function startDriverGps() {
     const now = Date.now();
     if (!shouldSendPosition(lastSentAt, now)) return;
     lastSentAt = now;
-    const position = positionFromGeolocationEvent(geoPosition, { vehicle_id: vehicleId, municipality_id: driverAuthContext.municipality_id });
-    const result = await telemetry.ingest(position);
+    const position = positionFromGeolocationEvent(geoPosition, {
+      vehicle_id: vehicleId,
+      municipality_id: driverAuthContext.municipality_id,
+      route_run_id: routeRunId
+    });
+    const write = telemetry.ingest(position);
+    driverGpsPendingWrites.add(write);
+    let result;
+    try { result = await write; }
+    finally { driverGpsPendingWrites.delete(write); }
     const currentStatus = $('#driverGpsStatus');
     if (currentStatus) currentStatus.textContent = result.ok ? `Última posición real enviada: ${new Date().toLocaleTimeString()}` : `No se pudo enviar la posición real: ${result.error?.message ?? 'error desconocido'}`;
   }, (error) => {
@@ -906,9 +921,10 @@ async function startDriverGps() {
   const button = document.querySelector('[data-driver-gps]');
   if (button) { button.dataset.driverGps = 'stop'; button.textContent = 'Detener GPS real'; }
 }
-function stopDriverGps() {
+async function stopDriverGps({ flush = false } = {}) {
   if (driverGpsWatchId != null) navigator.geolocation.clearWatch(driverGpsWatchId);
   driverGpsWatchId = null;
+  if (flush && driverGpsPendingWrites.size) await Promise.allSettled([...driverGpsPendingWrites]);
   const button = document.querySelector('[data-driver-gps]');
   if (button) { button.dataset.driverGps = 'start'; button.textContent = 'Compartir mi ubicación real'; }
 }
@@ -1495,8 +1511,10 @@ async function driverStartRoute(routeId) {
   await startDriverGps();
 }
 async function driverCompleteRoute(routeId) {
+  // Stop producing samples, then wait for the last accepted browser event to reach Supabase before
+  // completeRoute() calculates distance and stamps the final GPS metrics on route_runs.
+  await stopDriverGps({ flush: true });
   await completeRouteManually(routeId);
-  stopDriverGps();
 }
 async function completeRouteManually(routeId) {
   const route = routeById(routeId);
@@ -1542,12 +1560,15 @@ async function completeRouteManually(routeId) {
     // ausente para una ruta demo o una real sin GPS activo, y ahí se sigue mostrando la distancia
     // estimada del trazo dibujado (route.distanceKm), sin cambios.
     if (updated?.distance_meters != null) route.real_distance_meters = updated.distance_meters;
+    if (updated?.gps_points_count != null) route.gps_points_count = updated.gps_points_count;
+    if (updated?.gps_started_at) route.gps_started_at = updated.gps_started_at;
+    if (updated?.gps_ended_at) route.gps_ended_at = updated.gps_ended_at;
     // Bug real encontrado en staging: refreshRouteDurationHistory() (disparado desde selectRoute()
     // más arriba) corría ANTES de que esta escritura terminara, así que la consulta de histórico
     // llegaba a Supabase antes de que completed_at existiera — mostraba "medido" en la fila de
     // duración (dato local optimista) pero "sin corridas medidas" en el histórico (leído de la base
     // vieja) al mismo tiempo. Repetir la consulta acá, ya con la escritura confirmada, corrige eso.
-    if (selectedRouteId === routeId) refreshRouteDurationHistory(routeId);
+    if (selectedRouteId === routeId) selectRoute(routeId);
   }
 }
 // SW-039 audit: Supervisor's "Verificar" button used to only set route.status directly — it never
@@ -2129,7 +2150,10 @@ async function hydrateRoutes() {
       started_at: run?.started_at ?? null, completed_at: run?.completed_at ?? null,
       // SW-045: real GPS-derived distance for this run, if one was computed (transitionRouteRun()
       // in shared/operations-adapter.js, only on completion, only when there was a GPS trail).
-      real_distance_meters: run?.distance_meters ?? null
+      real_distance_meters: run?.distance_meters ?? null,
+      gps_points_count: run?.gps_points_count ?? null,
+      gps_started_at: run?.gps_started_at ?? null,
+      gps_ended_at: run?.gps_ended_at ?? null
     };
     routes.push(newRoute);
     initialRouteProgress[row.id] = newRoute.progress;

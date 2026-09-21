@@ -28,7 +28,7 @@ jobs:
       - name: Run each tests/*.test.mjs file as an independent node process
         run: |
           set -e
-          skip_list="tests/rls-adversarial.test.mjs tests/operational-cycle.test.mjs tests/telemetry-persistence.test.mjs tests/telemetry-realtime-diagnosis.test.mjs tests/route-stops-persistence.test.mjs tests/route-paths-persistence.test.mjs tests/rls-coverage.test.mjs"
+          skip_list="tests/rls-adversarial.test.mjs tests/operational-cycle.test.mjs tests/telemetry-persistence.test.mjs tests/telemetry-realtime-diagnosis.test.mjs tests/route-stops-persistence.test.mjs tests/route-paths-persistence.test.mjs tests/rls-coverage.test.mjs tests/gps-route-metrics.test.mjs"
           for f in tests/*.test.mjs; do
             skip=false
             for s in $skip_list; do
@@ -64,6 +64,7 @@ jobs:
           node tests/rls-coverage.test.mjs
           node tests/operational-cycle.test.mjs
           node tests/telemetry-persistence.test.mjs
+          node tests/gps-route-metrics.test.mjs
           node tests/route-stops-persistence.test.mjs
           node tests/route-paths-persistence.test.mjs
       # SW-022 (docs/TECHNICAL_DEBT_REGISTER.md item #14): diagnostic-only, inspects Postgres
