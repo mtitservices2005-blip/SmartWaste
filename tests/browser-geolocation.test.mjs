@@ -6,9 +6,10 @@ import { validateTelemetryPosition } from '../shared/telemetry-simulator.js';
 
 // 1. Happy path: full coords convert to the shape ingest()/validateTelemetryPosition() expect.
 const geoPosition = { coords: { latitude: 19.6489, longitude: -71.0956, accuracy: 8, speed: 3.2, heading: 90 }, timestamp: Date.now() };
-const position = positionFromGeolocationEvent(geoPosition, { vehicle_id: 'truck-01', municipality_id: 'laguna-salada-rd' });
+const position = positionFromGeolocationEvent(geoPosition, { vehicle_id: 'truck-01', municipality_id: 'laguna-salada-rd', route_run_id: 'run-01' });
 assert.equal(position.vehicle_id, 'truck-01');
 assert.equal(position.municipality_id, 'laguna-salada-rd');
+assert.equal(position.route_run_id, 'run-01');
 assert.equal(position.latitude, 19.6489);
 assert.equal(position.longitude, -71.0956);
 assert.equal(position.accuracy, 8);
@@ -25,15 +26,18 @@ assert.equal(validation.valid, true, 'a converted browser position must pass the
 // 2. Null-prone browser fields (accuracy/speed/heading can be null in real GeolocationCoordinates)
 // must default to 0, not leak null into the telemetry payload / fail validation.
 const sparseGeoPosition = { coords: { latitude: 19.65, longitude: -71.10, accuracy: null, speed: null, heading: null }, timestamp: Date.now() };
-const sparsePosition = positionFromGeolocationEvent(sparseGeoPosition, { vehicle_id: 'truck-02', municipality_id: 'laguna-salada-rd' });
+const sparsePosition = positionFromGeolocationEvent(sparseGeoPosition, { vehicle_id: 'truck-02', municipality_id: 'laguna-salada-rd', route_run_id: 'run-02' });
 assert.equal(sparsePosition.accuracy, 0);
 assert.equal(sparsePosition.speed, 0);
 assert.equal(sparsePosition.heading, 0);
 assert.equal(validateTelemetryPosition(sparsePosition).valid, true);
 
 // 3. Custom device_id is honored when passed.
-const customDevice = positionFromGeolocationEvent(geoPosition, { vehicle_id: 'truck-01', municipality_id: 'm1', device_id: 'phone-123' });
+const customDevice = positionFromGeolocationEvent(geoPosition, { vehicle_id: 'truck-01', municipality_id: 'm1', route_run_id: 'run-01', device_id: 'phone-123' });
 assert.equal(customDevice.device_id, 'phone-123');
+
+const unscopedBrowserPosition = positionFromGeolocationEvent(geoPosition, { vehicle_id: 'truck-01', municipality_id: 'm1' });
+assert.equal(validateTelemetryPosition(unscopedBrowserPosition).valid, false, 'browser GPS must be tied to an active route_run');
 
 // 4. shouldSendPosition: throttle behavior.
 assert.equal(shouldSendPosition(0, 4999, 5000), false, 'must not send before the minimum interval elapses');

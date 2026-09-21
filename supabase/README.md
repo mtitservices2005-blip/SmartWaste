@@ -2,7 +2,11 @@
 
 > Datos demo · no producción
 
-Las 10 migraciones en `migrations/` (`sw007_foundation` → `sw008_rls_draft` → `sw013_persistence_hardening` → `sw014_auth_rls_policies` → `sw015_operations_integrity` → `sw020_rls_fixes` → `sw016_telemetry_realtime` → `sw025_vehicle_capacity` → `sw027_route_paths` → `sw030_route_run_progress`) están aplicadas y verificadas contra una instancia Supabase local real (Docker + Postgres) — ver "SW-020 — Verificación real contra Supabase local" en `docs/CURRENT_STATE_AUDIT.md`.
+Las migraciones en `migrations/` se aplican en orden y conservan la evolución completa del esquema.
+La base hasta SW-020 fue verificada contra Supabase local real; los hitos posteriores agregan rutas,
+telemetría, evidencias, duración, distancia, cuentas y métricas GPS. Consulta la evidencia específica
+de cada hito, incluida `docs/SW062_GPS_ROUTE_METRICS.md`; una migración presente en el repositorio no
+se considera verificada en un entorno real hasta ejecutar su prueba de integración correspondiente.
 
 **Orden de aplicación:** `npx supabase start` (y por lo tanto el job `integration-tests` de `.github/workflows/tests.yml`) aplica los archivos de `migrations/` en orden alfabético por nombre de archivo — de ahí el prefijo de fecha `202607150001`...`202607150010`. Ese orden importa porque `sw008_rls_draft` habilita RLS en varias tablas sin políticas propias, dejándolas efectivamente bloqueadas hasta que `sw014_auth_rls_policies` (aplicada después) agregue las políticas reales; invertir ese orden dejaría esas tablas abiertas o bloqueadas según cómo se edite. Cada corrida de CI desde el PR #16 aplica las migraciones en este orden automáticamente, dando evidencia real y repetida de que la secuencia es correcta (ver `docs/TECHNICAL_DEBT_REGISTER.md` ítem #3).
 

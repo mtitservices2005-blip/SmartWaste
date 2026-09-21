@@ -245,10 +245,10 @@ export function createSupabaseOperationsAdapter(client, { fallback = createDemoO
       () => fallback.listPathPoints(routeId),
       opts.correlation_id
     ),
-    // Roadmap item 3 ("GPS real"): resolves the real vehicle_id currently assigned to the signed-in
-    // driver (by their auth profile_id), so frontend/app.js's GPS button knows which vehicle_id to
-    // tag positions with before calling createTelemetryIngestionAdapter().ingest(). Two-step lookup
-    // (drivers -> vehicle_assignments), so it doesn't fit the single-query run() wrapper above.
+    // SW-062: resolves the driver's active route_run, not a generic vehicle_assignment. A driver
+    // can legitimately have both a persistent vehicle pairing and a run-scoped assignment; asking
+    // maybeSingle() over both made GPS activation fail. Returning route_run_id also binds every GPS
+    // point to the exact execution whose metrics will be finalized on completion.
     findOwnVehicleAssignment: (profileId, opts = {}) => findOwnVehicleAssignment(client, municipality_id, profileId, opts),
     // SW-042 (docs/TECHNICAL_DEBT_REGISTER.md #24): there was no way to read or create a
     // driver<->vehicle link from the frontend at all — vehicle_assignments could only be written
@@ -293,10 +293,15 @@ async function findOwnVehicleAssignment(client, municipality_id, profileId, opts
   const driverRow = await scoped(client.from('drivers').select('id')).eq('profile_id', profileId).maybeSingle();
   if (driverRow.error) return fail(driverRow.error.code ?? 'SUPABASE_ERROR', driverRow.error.message, { correlation_id: opts.correlation_id });
   if (!driverRow.data) return fail('DRIVER_NOT_FOUND', 'No driver row is linked to this account.', { correlation_id: opts.correlation_id });
-  const assignment = await scoped(client.from('vehicle_assignments').select('vehicle_id')).eq('driver_id', driverRow.data.id).eq('status', 'assigned').maybeSingle();
+  const assignment = await scoped(client.from('route_runs').select('id,route_id,vehicle_id,status'))
+    .eq('driver_id', driverRow.data.id)
+    .in('status', ['started', 'in_progress', 'delayed'])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
   if (assignment.error) return fail(assignment.error.code ?? 'SUPABASE_ERROR', assignment.error.message, { correlation_id: opts.correlation_id });
-  if (!assignment.data) return fail('NO_VEHICLE_ASSIGNED', 'This driver has no vehicle currently assigned.', { correlation_id: opts.correlation_id });
-  return ok(assignment.data, { correlation_id: opts.correlation_id });
+  if (!assignment.data?.vehicle_id) return fail('NO_ACTIVE_ROUTE_ASSIGNED', 'This driver has no active route with an assigned vehicle.', { correlation_id: opts.correlation_id });
+  return ok({ vehicle_id: assignment.data.vehicle_id, route_run_id: assignment.data.id, route_id: assignment.data.route_id }, { correlation_id: opts.correlation_id });
 }
 
 // SW-042: creates the driver<->vehicle link a despachador makes from the truck detail panel.
@@ -433,13 +438,21 @@ async function transitionRouteRun(client, fallback, municipality_id, routeId, ne
   // than 2 points to measure a distance between) just leaves distance_meters unstamped — the UI
   // falls back to the route's drawn/estimated distance, same as it always has. Never blocks the
   // completion itself; this runs after started_at/completed_at are already decided above.
-  if (next === 'completed' && !current.data.distance_meters && current.data.vehicle_id && current.data.started_at) {
+  if (next === 'completed' && current.data.vehicle_id && current.data.started_at) {
     const positionsResult = await client.from('vehicle_positions').select('latitude,longitude,captured_at')
-      .eq('vehicle_id', current.data.vehicle_id).neq('source', 'simulator').gte('captured_at', current.data.started_at).order('captured_at', { ascending: true });
-    if (!positionsResult.error && positionsResult.data?.length >= 2) {
-      const points = positionsResult.data.map((row) => [row.latitude, row.longitude]);
-      const distanceMeters = points.slice(1).reduce((total, point, index) => total + haversineMeters(points[index], point), 0);
-      timingPatch.distance_meters = Math.round(distanceMeters);
+      .eq('route_run_id', current.data.id).neq('source', 'simulator').order('captured_at', { ascending: true });
+    if (!positionsResult.error) {
+      const samples = positionsResult.data ?? [];
+      timingPatch.gps_points_count = samples.length;
+      if (samples.length) {
+        timingPatch.gps_started_at = samples[0].captured_at;
+        timingPatch.gps_ended_at = samples[samples.length - 1].captured_at;
+      }
+      if (!current.data.distance_meters && samples.length >= 2) {
+        const points = samples.map((row) => [row.latitude, row.longitude]);
+        const distanceMeters = points.slice(1).reduce((total, point, index) => total + haversineMeters(points[index], point), 0);
+        timingPatch.distance_meters = Math.round(distanceMeters);
+      }
     }
   }
   let q = client.from('route_runs').update({ status: next, ...timingPatch, ...patch }).eq('id', current.data.id);

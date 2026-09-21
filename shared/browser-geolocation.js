@@ -3,11 +3,12 @@
 // position shape shared/telemetry-simulator.js's validateTelemetryPosition()/ingest() already
 // expect — no new validation rules, reuse what's there. Pure, no DOM/navigator access here, so this
 // is testable without a browser (the same separation used for shared/osrm-routing.js).
-export function positionFromGeolocationEvent(geoPosition, { vehicle_id, municipality_id, device_id = 'browser-geolocation' } = {}) {
+export function positionFromGeolocationEvent(geoPosition, { vehicle_id, municipality_id, route_run_id = null, device_id = 'browser-geolocation' } = {}) {
   const { latitude, longitude, accuracy, speed, heading } = geoPosition.coords;
   return {
     vehicle_id,
     municipality_id,
+    route_run_id,
     latitude,
     longitude,
     accuracy: accuracy ?? 0,
