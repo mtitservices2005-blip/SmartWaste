@@ -7,11 +7,12 @@
 // established by scripts/seed-local.mjs and scripts/seed-empty-municipality.mjs, so all three
 // injection points stay consistent and none of them fight over the same block.
 //
-// SUPABASE_URL/SUPABASE_ANON_KEY are optional on purpose: if they're not set (e.g. a preview
+// SUPABASE_URL/SUPABASE_ANON_KEY are optional by default: if they're not set (e.g. a preview
 // deploy without secrets configured), this still produces a working dist/ — just demo-only, same
 // as opening frontend/index.html locally with no config (rule 5, never break the demo). Only warns
 // loudly, never fails the build, so a misconfigured env doesn't take down a deploy that was only
-// ever meant to show the demo.
+// ever meant to show the demo. SW-063 adds SMARTWASTE_REQUIRE_BACKEND=true for presentation/live
+// environments: those builds fail closed instead of silently publishing a demo-only deployment.
 import { readFileSync, writeFileSync, mkdirSync, cpSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
@@ -68,6 +69,32 @@ for (const file of readdirSync(DIST_DIR)) {
 
 const url = process.env.SUPABASE_URL;
 const anonKey = process.env.SUPABASE_ANON_KEY;
+const requireBackend = process.env.SMARTWASTE_REQUIRE_BACKEND === 'true';
+const missingBackendVariables = [
+  !url && 'SUPABASE_URL',
+  !anonKey && 'SUPABASE_ANON_KEY',
+  !process.env.SUPABASE_MUNICIPALITY_ID && 'SUPABASE_MUNICIPALITY_ID'
+].filter(Boolean);
+
+if (requireBackend && missingBackendVariables.length) {
+  throw new Error(`SMARTWASTE_REQUIRE_BACKEND=true pero faltan variables requeridas: ${missingBackendVariables.join(', ')}.`);
+}
+
+if (url) {
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(url);
+  } catch {
+    throw new Error('SUPABASE_URL no es una URL valida.');
+  }
+  if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+    throw new Error('SUPABASE_URL debe usar http:// o https://.');
+  }
+  if (requireBackend && parsedUrl.protocol !== 'https:') {
+    throw new Error('SMARTWASTE_REQUIRE_BACKEND=true exige una SUPABASE_URL con https://.');
+  }
+}
+
 if (!url || !anonKey) {
   console.warn('\n⚠️  SUPABASE_URL/SUPABASE_ANON_KEY no configuradas — dist/ queda en modo demo puro (sin backend real). Configuralas en las variables de entorno del hosting si esta build es para staging real.\n');
 } else {
