@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "node scripts/build-frontend-config.mjs",
+    "provision:presentation": "node scripts/provision-presentation.mjs",
     "verify:presentation": "node scripts/verify-presentation.mjs"
   },
   "devDependencies": {

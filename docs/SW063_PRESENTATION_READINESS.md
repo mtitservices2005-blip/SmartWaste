@@ -49,6 +49,34 @@ La verificación es de solo lectura y usa únicamente la clave pública. Comprue
 
 Pasar este comando no prueba el flujo funcional ni certifica producción. El ensayo final requiere un teléfono real: login de chofer, permiso de ubicación, inicio, movimiento, finalización, recarga y confirmación de ruta y métricas persistidas.
 
+## Aprovisionamiento controlado
+
+`npm run provision:presentation` crea de forma idempotente un tenant claramente identificado como
+presentación: municipio, administrador, chofer, vehículo, asignación, sector, ruta y tres paradas.
+Las rutas, sectores y paradas incluyen “ensayo” en su nombre para no presentarlos como operación
+municipal real. El script no elimina datos y no imprime contraseñas.
+
+Debe ejecutarlo el propietario desde su propia terminal, con las variables sensibles cargadas en el
+entorno. Además de URL, `service_role`, correos y contraseñas de las dos cuentas, exige:
+
+- `SUPABASE_EXPECTED_PROJECT_REF`, que debe coincidir con el host de Supabase;
+- `SMARTWASTE_PRESENTATION_CONFIRM=PROVISION_<project-ref>_LAGUNA_SALADA`;
+- contraseñas distintas de al menos 12 caracteres;
+- `PRESENTATION_ROTATE_PASSWORDS=true` solo cuando se desea rotar cuentas que ya existen.
+
+Nunca se debe colocar `SUPABASE_SERVICE_ROLE_KEY` en Vercel, el frontend, un teléfono, git o un chat.
+Al terminar, el comando imprime únicamente el UUID del municipio que debe copiarse directamente a
+`SUPABASE_MUNICIPALITY_ID` en Vercel.
+
+## Interfaz de login
+
+La interfaz ya existe en `frontend/auth-gate.js` y se activa cuando el build contiene URL y clave
+`anon` válidas. Usa email/contraseña de Supabase, resuelve membresía y rol, limita las secciones,
+conserva sesión, permite cerrar sesión y obliga a sustituir credenciales marcadas como temporales.
+El `service_role` no interviene nunca en el navegador. Las cuentas creadas por el aprovisionador son
+exclusivas del entorno controlado y permiten probar por separado la vista administrativa y el flujo
+GPS del chofer.
+
 ## Criterios de salida
 
 - CI verde sobre SW-063 y su base SW-062.
