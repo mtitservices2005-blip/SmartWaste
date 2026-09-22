@@ -8,12 +8,9 @@ import { pickVisibleSections, pickVisibleOpsViews, readSupabaseConfig, requiresP
 // Anonymous / no session: only the public citizen portal is visible.
 assert.deepEqual(pickVisibleSections(null).sort(), ['ciudadania']);
 
-// Driver: operational sections, not the impact center (no reports.read in PERMISSIONS.driver) or
-// master admin. Includes 'conductor' (item #12 of docs/TECHNICAL_DEBT_REGISTER.md — the driver
-// mobile view is now its own top-level section, not embedded inside 'municipal'). 'mapa' and
-// 'municipal' merged into a single 'operaciones' section with sub-vistas (Fase 3 UX,
-// OPS_SUBVIEW_ROLES below covers the finer-grained access that used to live at this level).
-assert.deepEqual(pickVisibleSections('driver').sort(), ['ciudadania', 'conductor', 'operaciones', 'resumen']);
+// Driver: one focused workspace only. The route lifecycle, stops, map and GPS controls all live in
+// #conductor; summary, municipality operations and the public portal are not work menus.
+assert.deepEqual(pickVisibleSections('driver').sort(), ['conductor']);
 
 // Dispatcher: same as driver plus 'configuracion' (SW-049 — dispatcher is who actually assigns
 // vehicles/choferes to routes, so the guided-flow toggle is theirs to set) — dispatcher also lacks
@@ -37,7 +34,7 @@ assert.deepEqual(pickVisibleSections('mt_superadmin').sort(), ['ciudadania', 'ma
 // access split that used to exist between the separate 'mapa' and 'municipal' top-level sections —
 // supervisor only ever saw 'mapa', never 'municipal'.
 assert.deepEqual(pickVisibleOpsViews('supervisor').sort(), ['mapa']);
-assert.deepEqual(pickVisibleOpsViews('driver').sort(), ['flota', 'incidencias', 'mapa', 'rutas']);
+assert.deepEqual(pickVisibleOpsViews('driver').sort(), []);
 assert.deepEqual(pickVisibleOpsViews('dispatcher').sort(), ['flota', 'incidencias', 'mapa', 'rutas']);
 assert.deepEqual(pickVisibleOpsViews('municipal_admin').sort(), ['flota', 'incidencias', 'mapa', 'rutas']);
 assert.deepEqual(pickVisibleOpsViews('mt_superadmin').sort(), []);
@@ -46,10 +43,11 @@ assert.deepEqual(pickVisibleOpsViews(null).sort(), []);
 // Every role in shared/auth-context.js ROLES must have an explicit entry here (fail loudly if a
 // role is added to auth-context.js and forgotten here).
 const allRoles = ['mt_superadmin', 'municipal_admin', 'supervisor', 'dispatcher', 'driver'];
-allRoles.forEach((role) => {
+allRoles.filter((role) => role !== 'driver').forEach((role) => {
   const visible = pickVisibleSections(role);
   assert.ok(visible.includes('ciudadania'), `${role} must always see the public citizen portal`);
 });
+assert.deepEqual(pickVisibleSections('driver'), ['conductor'], 'driver must only see their route workspace');
 
 // readSupabaseConfig: absent, partial, and complete config. municipality_id (SW-039) is optional —
 // only the anonymous citizen portal needs it, since it has no session to derive it from.

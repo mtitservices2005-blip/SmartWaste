@@ -13,12 +13,12 @@
 import { createIdentityProvider } from '../shared/core-ports.js';
 
 // Which top-level <section id="..."> each role may see, per docs/ROLE_PERMISSION_MATRIX.md.
-// `null` means the section is public: always shown, logged in or not (the citizen portal is
-// designed for anonymous access — see supabase/migrations/202607150006_sw020_rls_fixes.sql's
-// anon_insert_citizen_report policy).
+// `null` means the section is public (the citizen portal is designed for anonymous access — see
+// supabase/migrations/202607150006_sw020_rls_fixes.sql's anon_insert_citizen_report policy).
+// Authenticated drivers are the deliberate exception: their work shell stays route-only.
 export const SECTION_ROLES = {
-  resumen: ['municipal_admin', 'supervisor', 'dispatcher', 'driver'],
-  operaciones: ['municipal_admin', 'supervisor', 'dispatcher', 'driver'],
+  resumen: ['municipal_admin', 'supervisor', 'dispatcher'],
+  operaciones: ['municipal_admin', 'supervisor', 'dispatcher'],
   supervisor: ['supervisor'],
   conductor: ['municipal_admin', 'dispatcher', 'driver'],
   impacto: ['municipal_admin', 'supervisor'],
@@ -27,6 +27,8 @@ export const SECTION_ROLES = {
   // actually assign vehicles/choferes to routes (OPS_SUBVIEW_ROLES.rutas/flota below) — supervisor
   // and driver never assign, so they don't need this toggle.
   configuracion: ['municipal_admin', 'dispatcher'],
+  // Anonymous visitors can use the citizen portal. Once authenticated, a driver stays inside the
+  // focused route workspace: the public portal is not part of their work navigation.
   ciudadania: null
 };
 
@@ -36,17 +38,17 @@ export const SECTION_ROLES = {
 // 'municipal' (ahora repartida en rutas/flota/incidencias) nunca lo fue. Este mapa gatea las
 // sub-vistas dentro de #operaciones exactamente como antes gateaba las dos secciones separadas.
 export const OPS_SUBVIEW_ROLES = {
-  mapa: ['municipal_admin', 'supervisor', 'dispatcher', 'driver'],
-  rutas: ['municipal_admin', 'dispatcher', 'driver'],
-  flota: ['municipal_admin', 'dispatcher', 'driver'],
-  incidencias: ['municipal_admin', 'dispatcher', 'driver']
+  mapa: ['municipal_admin', 'supervisor', 'dispatcher'],
+  rutas: ['municipal_admin', 'dispatcher'],
+  flota: ['municipal_admin', 'dispatcher'],
+  incidencias: ['municipal_admin', 'dispatcher']
 };
 
 // Pure, DOM-free — unit-tested directly in tests/auth-gate.test.mjs. Given a role (or null for no
 // session / anonymous), returns the section ids that should be visible.
 export function pickVisibleSections(role, sections = SECTION_ROLES) {
   return Object.entries(sections)
-    .filter(([, allowedRoles]) => allowedRoles === null || (role && allowedRoles.includes(role)))
+    .filter(([, allowedRoles]) => allowedRoles === null ? role !== 'driver' : (role && allowedRoles.includes(role)))
     .map(([id]) => id);
 }
 
@@ -224,6 +226,16 @@ export async function initAuthGate() {
     applySectionVisibility(pickVisibleSections(ctx.role));
     applyOpsViewVisibility(pickVisibleOpsViews(ctx.role));
     renderLogoutButton(client);
+    // The driver's workspace is intentionally single-purpose. A stale bookmark (or the hash left
+    // by a previous admin session) must not leave them on a hidden/blank section after login, and
+    // manually changing the hash must not navigate away from the only authorized workspace.
+    if (ctx.role === 'driver') {
+      const keepDriverInWorkspace = () => {
+        if (window.location.hash !== '#conductor') window.location.hash = 'conductor';
+      };
+      window.addEventListener('hashchange', keepDriverInWorkspace);
+      keepDriverInWorkspace();
+    }
   }
 
   function requireOwnPassword(resolved) {

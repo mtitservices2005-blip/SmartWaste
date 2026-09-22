@@ -2,6 +2,11 @@
   "name": "smartwaste",
   "private": true,
   "type": "module",
+  "scripts": {
+    "build": "node scripts/build-frontend-config.mjs",
+    "provision:presentation": "node scripts/provision-presentation.mjs",
+    "verify:presentation": "node scripts/verify-presentation.mjs"
+  },
   "devDependencies": {
     "@supabase/supabase-js": "^2.45.0",
     "pg": "^8.22.0",
