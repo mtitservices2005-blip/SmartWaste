@@ -7,7 +7,7 @@ import { generateRouteStopPoints, deriveStopStatus, haversineMeters, splitIntoTr
 import { fetchRoadRoute } from '../shared/osrm-routing.js';
 import { fetchBuildingCount, estimateCollectionMinutes } from '../shared/overpass-buildings.js';
 import { optimizeWaypointOrder } from '../shared/route-optimizer.js';
-import { positionFromGeolocationEvent, shouldSendPosition } from '../shared/browser-geolocation.js';
+import { positionFromGeolocationEvent, requestCurrentBrowserPosition, shouldSendPosition } from '../shared/browser-geolocation.js';
 import { suggestReoptimizedOrder } from '../shared/route-reoptimizer.js';
 import { summarizeRouteRunsByRoute, summarizeRouteRunsByDriver } from '../shared/route-run-stats.js';
 import { routeReadinessStage, ROUTE_READINESS_LABELS } from '../shared/route-readiness.js';
@@ -885,10 +885,25 @@ function renderDriverGpsControl() {
 // browser/phone location to Supabase (source: browser_geolocation); does not touch the simulation
 // engine or any map rendering (drawDriverPositions/drawMapLayers stay demo-driven, by design —
 // showing real GPS on a live map is a separate, later milestone).
-async function startDriverGps() {
+function driverLocationErrorMessage(error) {
+  if (error?.code === 1) return 'Permiso de ubicación denegado. Actívalo para este sitio en la configuración del navegador y vuelve a intentarlo.';
+  if (error?.code === 2) return 'No se pudo determinar tu ubicación. Verifica que la ubicación del teléfono esté activada.';
+  if (error?.code === 3) return 'La ubicación tardó demasiado. Muévete a un lugar con mejor señal e inténtalo nuevamente.';
+  return error?.message ?? 'No se pudo obtener tu ubicación.';
+}
+async function startDriverGps({ initialPosition = null } = {}) {
   const status = $('#driverGpsStatus');
   if (!navigator.geolocation) { if (status) status.textContent = 'Este navegador no soporta geolocalización.'; return; }
   if (!realAdapter || !driverAuthContext) { if (status) status.textContent = 'GPS real requiere una sesión conectada a Supabase.'; return; }
+  // When called directly from the "Compartir" button, this executes before the first await so the
+  // browser still recognizes the click as a user gesture. driverStartRoute() supplies its own
+  // preflight position for the same reason (it must await the route write before GPS can persist).
+  if (!initialPosition) {
+    if (status) status.textContent = 'Solicitando permiso de ubicación…';
+    const permission = await requestCurrentBrowserPosition(navigator.geolocation);
+    if (!permission.ok) { if (status) status.textContent = driverLocationErrorMessage(permission.error); return; }
+    initialPosition = permission.position;
+  }
   if (status) status.textContent = 'Buscando tu vehículo asignado…';
   const assignment = await realAdapter.findOwnVehicleAssignment(driverAuthContext.user_id);
   if (!assignment.ok) { if (status) status.textContent = `No se pudo activar el GPS real: ${assignment.error.message}`; return; }
@@ -897,7 +912,7 @@ async function startDriverGps() {
   const client = getAuthClient();
   const telemetry = createTelemetryIngestionAdapter(client, { municipality_id: driverAuthContext.municipality_id });
   let lastSentAt = 0;
-  driverGpsWatchId = navigator.geolocation.watchPosition(async (geoPosition) => {
+  async function sendPosition(geoPosition) {
     const now = Date.now();
     if (!shouldSendPosition(lastSentAt, now)) return;
     lastSentAt = now;
@@ -913,9 +928,13 @@ async function startDriverGps() {
     finally { driverGpsPendingWrites.delete(write); }
     const currentStatus = $('#driverGpsStatus');
     if (currentStatus) currentStatus.textContent = result.ok ? `Última posición real enviada: ${new Date().toLocaleTimeString()}` : `No se pudo enviar la posición real: ${result.error?.message ?? 'error desconocido'}`;
-  }, (error) => {
+  }
+  // Persist the coordinate that triggered/granted permission before waiting for watchPosition's
+  // first callback. This guarantees the run has at least one attempted real sample immediately.
+  await sendPosition(initialPosition);
+  driverGpsWatchId = navigator.geolocation.watchPosition(sendPosition, (error) => {
     const currentStatus = $('#driverGpsStatus');
-    if (currentStatus) currentStatus.textContent = `No se pudo obtener tu ubicación: ${error.message}`;
+    if (currentStatus) currentStatus.textContent = driverLocationErrorMessage(error);
     stopDriverGps();
   }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 });
   const button = document.querySelector('[data-driver-gps]');
@@ -1507,8 +1526,18 @@ async function startRouteManually(routeId) {
 // [data-complete-route] buttons in renderRouteDetail() — those are a GPS-free backup path and must
 // never toggle another person's (the driver's) GPS sharing state.
 async function driverStartRoute(routeId) {
+  const status = $('#driverGpsStatus');
+  if (status) status.textContent = 'Solicitando permiso de ubicación…';
+  // This call must happen before startRouteManually()'s first network await. Otherwise mobile
+  // browsers can lose the button's transient user activation and suppress the permission prompt.
+  const permission = await requestCurrentBrowserPosition(navigator.geolocation);
+  if (!permission.ok) {
+    if (status) status.textContent = driverLocationErrorMessage(permission.error);
+    showToast('No se inició la ruta porque SmartWaste necesita acceso a tu ubicación.', { type: 'error' });
+    return;
+  }
   await startRouteManually(routeId);
-  await startDriverGps();
+  await startDriverGps({ initialPosition: permission.position });
 }
 async function driverCompleteRoute(routeId) {
   // Stop producing samples, then wait for the last accepted browser event to reach Supabase before
