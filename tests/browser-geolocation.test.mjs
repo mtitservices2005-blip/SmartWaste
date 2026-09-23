@@ -1,7 +1,7 @@
 // Roadmap item 3 ("GPS real"): unit coverage for shared/browser-geolocation.js — pure conversion
 // logic, no navigator/DOM needed, so a plain object stands in for a browser GeolocationPosition.
 import assert from 'node:assert/strict';
-import { positionFromGeolocationEvent, shouldSendPosition } from '../shared/browser-geolocation.js';
+import { positionFromGeolocationEvent, requestCurrentBrowserPosition, shouldSendPosition } from '../shared/browser-geolocation.js';
 import { validateTelemetryPosition } from '../shared/telemetry-simulator.js';
 
 // 1. Happy path: full coords convert to the shape ingest()/validateTelemetryPosition() expect.
@@ -44,5 +44,30 @@ assert.equal(shouldSendPosition(0, 4999, 5000), false, 'must not send before the
 assert.equal(shouldSendPosition(0, 5000, 5000), true, 'must send exactly at the minimum interval');
 assert.equal(shouldSendPosition(0, 10000, 5000), true, 'must send well after the minimum interval');
 assert.equal(shouldSendPosition(1000, 1000, 5000), false, 'zero elapsed time must not send');
+
+// 5. Permission preflight starts immediately (inside the click call stack), returns the first
+// position, and keeps the high-accuracy/no-cache defaults needed for a real route start.
+let requestedOptions;
+let requestStarted = false;
+const successfulRequest = requestCurrentBrowserPosition({
+  getCurrentPosition(success, _failure, options) {
+    requestStarted = true;
+    requestedOptions = options;
+    queueMicrotask(() => success(geoPosition));
+  }
+});
+assert.equal(requestStarted, true, 'permission request must start synchronously before any await');
+assert.deepEqual(await successfulRequest, { ok: true, position: geoPosition });
+assert.deepEqual(requestedOptions, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+
+const denied = await requestCurrentBrowserPosition({
+  getCurrentPosition(_success, failure) { failure({ code: 1, message: 'User denied Geolocation' }); }
+});
+assert.equal(denied.ok, false);
+assert.equal(denied.error.code, 1);
+
+const unsupported = await requestCurrentBrowserPosition(null);
+assert.equal(unsupported.ok, false);
+assert.equal(unsupported.error.code, 'UNSUPPORTED');
 
 console.log('browser-geolocation ok');

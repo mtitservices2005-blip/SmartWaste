@@ -26,3 +26,20 @@ export function positionFromGeolocationEvent(geoPosition, { vehicle_id, municipa
 export function shouldSendPosition(lastSentAt, now, minIntervalMs = 5000) {
   return now - lastSentAt >= minIntervalMs;
 }
+
+// Starts getCurrentPosition() synchronously when called, preserving the short-lived user gesture
+// browsers such as mobile Safari require before showing their location permission prompt. The
+// injected geolocation object keeps this deterministic in Node tests and avoids reading navigator
+// from shared code.
+export function requestCurrentBrowserPosition(geolocation, options = {}) {
+  if (!geolocation?.getCurrentPosition) {
+    return Promise.resolve({ ok: false, error: { code: 'UNSUPPORTED', message: 'Este navegador no soporta geolocalización.' } });
+  }
+  return new Promise((resolve) => {
+    geolocation.getCurrentPosition(
+      (position) => resolve({ ok: true, position }),
+      (error) => resolve({ ok: false, error }),
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0, ...options }
+    );
+  });
+}
