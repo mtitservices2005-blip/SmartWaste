@@ -27,6 +27,19 @@ export function shouldSendPosition(lastSentAt, now, minIntervalMs = 5000) {
   return now - lastSentAt >= minIntervalMs;
 }
 
+// Combines an immediately-persisted browser sample with rows later reconciled from Supabase.
+// IDs are authoritative when present; the composite fallback also keeps optimistic/test rows
+// deterministic. Oldest-first is the order Leaflet needs to draw the travelled trail.
+export function mergeRouteTrail(current = [], incoming = []) {
+  const points = new Map();
+  [...current, ...incoming].forEach((point) => {
+    if (!point || !Number.isFinite(Number(point.latitude)) || !Number.isFinite(Number(point.longitude))) return;
+    const key = point.id ?? `${point.captured_at ?? ''}:${point.latitude}:${point.longitude}`;
+    points.set(key, point);
+  });
+  return [...points.values()].sort((a, b) => new Date(a.captured_at ?? 0) - new Date(b.captured_at ?? 0));
+}
+
 // Starts getCurrentPosition() synchronously when called, preserving the short-lived user gesture
 // browsers such as mobile Safari require before showing their location permission prompt. The
 // injected geolocation object keeps this deterministic in Node tests and avoids reading navigator
