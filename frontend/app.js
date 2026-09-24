@@ -140,6 +140,7 @@ let driverRealTrail = [];
 let driverTrailFetchInFlight = false;
 let driverGpsLastReceivedAt = null;
 let driverGpsState = 'idle';
+let driverMapHasRealFix = false;
 // SW-062: completion must wait until every in-flight GPS insert has settled; otherwise the final
 // sample can land after completeRoute() has already counted points and calculated distance.
 const driverGpsPendingWrites = new Set();
@@ -1214,7 +1215,13 @@ document.addEventListener('fullscreenchange', () => {
 function initDriverMap() {
   loadLeaflet().then((L) => {
     driverMapReady = true;
-    driverMap = L.map('driverMap', { zoomControl: false, attributionControl: false }).setView(pilotMunicipality.center, pilotMunicipality.zoom);
+    const lastRealPosition = driverRealTrail.at(-1);
+    const initialCenter = lastRealPosition
+      ? [Number(lastRealPosition.latitude), Number(lastRealPosition.longitude)]
+      : pilotMunicipality.center;
+    const initialZoom = lastRealPosition ? 17 : pilotMunicipality.zoom;
+    driverMap = L.map('driverMap', { zoomControl: false, attributionControl: false }).setView(initialCenter, initialZoom);
+    driverMapHasRealFix = Boolean(lastRealPosition);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(driverMap);
     drawDriverPositions();
   }).catch(() => { const el = $('#driverMap'); if (el) { el.classList.add('fallback-active'); el.innerHTML = '<div class="map-fallback"><strong>Mapa externo no disponible.</strong></div>'; } });
@@ -1225,7 +1232,10 @@ async function fetchDriverRoutePositions() {
   try {
     const assignment = await realAdapter.findOwnVehicleAssignment(driverAuthContext.user_id);
     if (!assignment.ok) return;
-    if (driverActiveRouteRunId !== assignment.data.route_run_id) driverRealTrail = [];
+    if (driverActiveRouteRunId !== assignment.data.route_run_id) {
+      driverRealTrail = [];
+      driverMapHasRealFix = false;
+    }
     driverActiveRouteRunId = assignment.data.route_run_id;
     const assignedTruck = trucks.find((truck) => truck.real_id === assignment.data.vehicle_id);
     if (assignedTruck) driverVehicleId = assignedTruck.id;
@@ -1249,18 +1259,29 @@ function drawDriverPositions() {
   if (!driverMapReady) return;
   const L = window.L;
   const truck = trucks.find((item) => item.id === driverVehicleId);
-  if (!truck?.routeId) return;
+  const history = truck?.real_id && driverActiveRouteRunId
+    ? driverRealTrail
+    : positionHistory.listPositions(driverVehicleId);
+  if (!truck?.routeId && !history.length) return;
   // Keep the route/status text current on every poll, not just when the vehicle selector changes —
   // startSimulation() (the main operational map's simulation) mutates truck.progress/state on its
   // own timer, so a driver who stays on one vehicle would otherwise keep seeing a stale percentage.
   const routeInfo = $('#driverRouteInfo');
-  if (routeInfo) routeInfo.innerHTML = `${pill(truck.state)} ${routeName(truck.routeId)} · ${truck.progress}% completado`;
+  if (routeInfo && truck?.routeId) routeInfo.innerHTML = `${pill(truck.state)} ${routeName(truck.routeId)} · ${truck.progress}% completado`;
   const startRouteControl = $('#driverRouteLifecycleControl');
-  if (startRouteControl) startRouteControl.innerHTML = driverRouteLifecycleControl(truck);
+  if (startRouteControl && truck) startRouteControl.innerHTML = driverRouteLifecycleControl(truck);
+  const plannedGeometry = truck?.routeId ? routeGeometry(truck.routeId) : [];
+  const lastRealPoint = driverActiveRouteRunId ? history.at(-1) : null;
+  const plannedStart = plannedGeometry[0];
+  const demoRouteIsRemote = Boolean(lastRealPoint && plannedStart && haversineMeters(
+    { latitude: Number(lastRealPoint.latitude), longitude: Number(lastRealPoint.longitude) },
+    { latitude: Number(plannedStart[0]), longitude: Number(plannedStart[1]) }
+  ) > 20_000);
   if (driverPlannedLayer) driverPlannedLayer.remove();
-  driverPlannedLayer = L.polyline(routeGeometry(truck.routeId), { color: '#94a3b8', weight: 4, opacity: .6, dashArray: '6 8' }).addTo(driverMap);
+  driverPlannedLayer = !demoRouteIsRemote && plannedGeometry.length
+    ? L.polyline(plannedGeometry, { color: '#94a3b8', weight: 4, opacity: .6, dashArray: '6 8' }).addTo(driverMap)
+    : null;
 
-  const history = truck.real_id && driverActiveRouteRunId ? driverRealTrail : positionHistory.listPositions(driverVehicleId);
   const trail = history.map((point) => [point.latitude, point.longitude]);
   if (driverTrailLayer) driverTrailLayer.remove();
   driverTrailLayer = trail.length > 1 ? L.polyline(trail, { color: '#0f7b4f', weight: 5, opacity: .9 }).addTo(driverMap) : null;
@@ -1269,7 +1290,9 @@ function drawDriverPositions() {
   // deriveStopStatus() against this same recorded trail (`history`, above) — no separate query or
   // refresh mechanism, reuses the polling this function is already called from.
   if (driverStopsLayer) driverStopsLayer.remove();
-  const stopsWithStatus = operationsAdapter.listRouteStops(truck.routeId).map((stop) => ({ ...stop, status: deriveStopStatus(stop, history) }));
+  const stopsWithStatus = !demoRouteIsRemote && truck?.routeId
+    ? operationsAdapter.listRouteStops(truck.routeId).map((stop) => ({ ...stop, status: deriveStopStatus(stop, history) }))
+    : [];
   driverStopsLayer = L.layerGroup(stopsWithStatus.map((stop) => L.circleMarker([stop.latitude, stop.longitude], {
     radius: 5,
     weight: 2,
@@ -1280,14 +1303,23 @@ function drawDriverPositions() {
   const stopsProgress = $('#driverStopsProgress');
   if (stopsProgress) {
     const collected = stopsWithStatus.filter((stop) => stop.status === 'recolectado').length;
-    stopsProgress.textContent = stopsWithStatus.length ? `${collected}/${stopsWithStatus.length} recolectados` : '';
+    stopsProgress.textContent = demoRouteIsRemote
+      ? 'Modo de prueba local: mostrando tu GPS actual; la ruta planificada está en Laguna Salada.'
+      : stopsWithStatus.length ? `${collected}/${stopsWithStatus.length} recolectados` : '';
   }
 
   if (driverCurrentMarker) driverCurrentMarker.remove();
   const last = history[history.length - 1];
   if (last) {
-    driverCurrentMarker = L.circleMarker([last.latitude, last.longitude], { radius: 9, color: '#155eef', weight: 3, fillColor: '#155eef', fillOpacity: .9 }).addTo(driverMap);
-    driverMap.panTo([last.latitude, last.longitude]);
+    const currentPosition = [Number(last.latitude), Number(last.longitude)];
+    driverCurrentMarker = L.circleMarker(currentPosition, { radius: 9, color: '#155eef', weight: 3, fillColor: '#155eef', fillOpacity: .9 }).addTo(driverMap);
+    driverMap.invalidateSize();
+    if (!driverMapHasRealFix && driverActiveRouteRunId) {
+      driverMap.setView(currentPosition, 17, { animate: false });
+      driverMapHasRealFix = true;
+    } else {
+      driverMap.panTo(currentPosition, { animate: true });
+    }
   }
 }
 function startDriverPolling() {
