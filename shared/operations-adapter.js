@@ -94,7 +94,8 @@ export function createDemoOperationsAdapter(seed = { trucks, routes, drivers, in
     // demo adapter has no such concept to model, so this always fails. The GPS button in
     // frontend/app.js only renders once a real backend is configured anyway, so this path is never
     // exercised in demo-only mode; it exists purely so both adapters expose the same interface.
-    findOwnVehicleAssignment: () => ({ ok:false, source:'DEMO_ONLY', error:{ code:'NOT_SUPPORTED_IN_DEMO', message:'Vehicle assignment lookup requires a real backend.' } })
+    findOwnVehicleAssignment: () => ({ ok:false, source:'DEMO_ONLY', error:{ code:'NOT_SUPPORTED_IN_DEMO', message:'Vehicle assignment lookup requires a real backend.' } }),
+    listRouteRunPositions: () => ({ ok:true, source:'DEMO_ONLY', data:[] })
   };
 }
 // SW-044: stamps started_at/completed_at the first time a route reaches that status — mirrors the
@@ -169,6 +170,14 @@ export function createSupabaseOperationsAdapter(client, { fallback = createDemoO
     listRouteRuns: (opts = {}) => run(() => scoped(table(client, 'route_runs').select('*').order('created_at')), () => fallback.listRouteRuns?.() ?? [], opts.correlation_id),
     registerIncident: (incident, opts = {}) => run(() => table(client, 'incidents').insert({ ...incident, municipality_id: incident.municipality_id ?? municipality_id, correlation_id: opts.correlation_id ?? incident.correlation_id }).select('*').single(), () => fallback.registerIncident(incident), opts.correlation_id),
     listPositions: (opts = {}) => run(() => scoped(table(client, 'vehicle_positions').select('*').order('captured_at', { ascending:false })), () => fallback.listPositions(), opts.correlation_id),
+    // The driver's map must only reconstruct the exact active execution. Filtering by route_run_id
+    // prevents a vehicle's previous route from being joined to today's trail; simulator rows are
+    // excluded for the same reason as listLatestPositions().
+    listRouteRunPositions: (routeRunId, opts = {}) => run(
+      () => scoped(table(client, 'vehicle_positions').select('*').eq('route_run_id', routeRunId).neq('source', 'simulator').order('captured_at', { ascending:true })),
+      () => [],
+      opts.correlation_id
+    ),
     // SW-036: the dispatcher-facing map needs one row per vehicle (its most recent real position),
     // not the full history listPositions() above returns. The Supabase JS client has no "distinct
     // on" without an RPC/view, so this dedupes client-side over the same already-ordered-by-

@@ -154,6 +154,21 @@ assert.equal(positionsResult.data.length, 2, 'one row per vehicle_id, not the fu
 const latestVeh1 = positionsResult.data.find((row) => row.vehicle_id === 'veh-1');
 assert.equal(latestVeh1.captured_at, '2026-01-02T00:00:10Z', 'must keep the most recent row per vehicle, not the first/oldest');
 
+// Driver trail reads are scoped to one execution, exclude simulator samples, and request the
+// oldest-first order expected by the map polyline.
+const trailCalls = [];
+const trailQuery = {
+  select: (...args) => { trailCalls.push(['select', ...args]); return trailQuery; },
+  eq: (...args) => { trailCalls.push(['eq', ...args]); return trailQuery; },
+  neq: (...args) => { trailCalls.push(['neq', ...args]); return trailQuery; },
+  order: (...args) => { trailCalls.push(['order', ...args]); return Promise.resolve({ data: fakePositions.slice().reverse(), error: null }); }
+};
+const trailResult = await createSupabaseOperationsAdapter({ from: (table) => { assert.equal(table, 'vehicle_positions'); return trailQuery; } }).listRouteRunPositions('run-123');
+assert.equal(trailResult.ok, true);
+assert.deepEqual(trailCalls.find(([name]) => name === 'eq'), ['eq', 'route_run_id', 'run-123']);
+assert.deepEqual(trailCalls.find(([name]) => name === 'neq'), ['neq', 'source', 'simulator']);
+assert.deepEqual(trailCalls.find(([name]) => name === 'order'), ['order', 'captured_at', { ascending: true }]);
+
 // Adapter-exception fallback path (no client): mirrors listPositions()'s own fallback, so
 // listLatestPositions() degrades the same way when Supabase isn't configured.
 const noClientResult = await createSupabaseOperationsAdapter(null).listLatestPositions();
