@@ -1,7 +1,7 @@
 // Roadmap item 3 ("GPS real"): unit coverage for shared/browser-geolocation.js — pure conversion
 // logic, no navigator/DOM needed, so a plain object stands in for a browser GeolocationPosition.
 import assert from 'node:assert/strict';
-import { positionFromGeolocationEvent, requestCurrentBrowserPosition, shouldSendPosition } from '../shared/browser-geolocation.js';
+import { mergeRouteTrail, positionFromGeolocationEvent, requestCurrentBrowserPosition, shouldSendPosition } from '../shared/browser-geolocation.js';
 import { validateTelemetryPosition } from '../shared/telemetry-simulator.js';
 
 // 1. Happy path: full coords convert to the shape ingest()/validateTelemetryPosition() expect.
@@ -69,5 +69,16 @@ assert.equal(denied.error.code, 1);
 const unsupported = await requestCurrentBrowserPosition(null);
 assert.equal(unsupported.ok, false);
 assert.equal(unsupported.error.code, 'UNSUPPORTED');
+
+// Live samples and server reconciliation do not duplicate a point, and a refresh always restores
+// chronological drawing order even if its input arrives newest-first.
+const mergedTrail = mergeRouteTrail(
+  [{ id: 'point-2', latitude: 19.2, longitude: -71.2, captured_at: '2026-01-01T00:00:02Z' }],
+  [
+    { id: 'point-2', latitude: 19.2, longitude: -71.2, captured_at: '2026-01-01T00:00:02Z' },
+    { id: 'point-1', latitude: 19.1, longitude: -71.1, captured_at: '2026-01-01T00:00:01Z' }
+  ]
+);
+assert.deepEqual(mergedTrail.map((point) => point.id), ['point-1', 'point-2']);
 
 console.log('browser-geolocation ok');
