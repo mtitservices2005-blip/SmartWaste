@@ -7,7 +7,7 @@ import { generateRouteStopPoints, deriveStopStatus, haversineMeters, splitIntoTr
 import { fetchRoadRoute } from '../shared/osrm-routing.js';
 import { fetchBuildingCount, estimateCollectionMinutes } from '../shared/overpass-buildings.js';
 import { optimizeWaypointOrder } from '../shared/route-optimizer.js';
-import { positionFromGeolocationEvent, requestCurrentBrowserPosition, shouldSendPosition } from '../shared/browser-geolocation.js';
+import { mergeRouteTrail, positionFromGeolocationEvent, requestCurrentBrowserPosition, shouldSendPosition } from '../shared/browser-geolocation.js';
 import { suggestReoptimizedOrder } from '../shared/route-reoptimizer.js';
 import { summarizeRouteRunsByRoute, summarizeRouteRunsByDriver } from '../shared/route-run-stats.js';
 import { routeReadinessStage, ROUTE_READINESS_LABELS } from '../shared/route-readiness.js';
@@ -135,6 +135,12 @@ let realSectors = [];
 // handle while GPS sharing is active, null otherwise.
 let driverAuthContext = null;
 let driverGpsWatchId = null;
+let driverActiveRouteRunId = null;
+let driverRealTrail = [];
+let driverTrailFetchInFlight = false;
+let driverGpsLastReceivedAt = null;
+let driverGpsState = 'idle';
+let driverMapHasRealFix = false;
 // SW-062: completion must wait until every in-flight GPS insert has settled; otherwise the final
 // sample can land after completeRoute() has already counted points and calculated distance.
 const driverGpsPendingWrites = new Set();
@@ -872,19 +878,31 @@ function renderDriverMobile() {
     <p id="driverRouteInfo">${routeInfoLine}</p>
     <div id="driverRouteLifecycleControl">${driverRouteLifecycleControl(truck)}</div>
     <p id="driverStopsProgress"></p>
-    <div id="driverMap" class="real-map driver-map" role="application" aria-label="Posición y trazo del vehículo (demo)"></div>
-    <p class="demo">${simulationNotice} · trazo histórico vía polling cada ${DRIVER_POLL_INTERVAL_MS / 1000}s (sin Realtime, ver docs/TECHNICAL_DEBT_REGISTER.md #14)</p>
+    <div id="driverMap" class="real-map driver-map" role="application" aria-label="Posición y recorrido del vehículo"></div>
+    <p id="driverMapSource" class="demo">${simulationNotice} · trazo histórico vía polling cada ${DRIVER_POLL_INTERVAL_MS / 1000}s (sin Realtime, ver docs/TECHNICAL_DEBT_REGISTER.md #14)</p>
     ${backendMode !== 'DEMO_ONLY' ? renderDriverGpsControl() : ''}
   </div>`;
 }
 function renderDriverGpsControl() {
-  return `<div class="controls"><button type="button" class="btn-primary" data-driver-gps="${driverGpsWatchId ? 'stop' : 'start'}">${driverGpsWatchId ? 'Detener GPS real' : 'Compartir mi ubicación real'}</button></div><p id="driverGpsStatus" class="demo"></p>`;
+  return `<div id="driverGpsLive" class="driver-gps-live ${driverGpsState}" role="status" aria-live="polite"><span class="gps-live-dot" aria-hidden="true"></span><div><strong id="driverGpsLiveLabel">${driverGpsState === 'active' ? 'GPS activo' : 'GPS listo'}</strong><small id="driverGpsLiveMeta">${driverRealTrail.length ? `${driverRealTrail.length} puntos guardados` : 'Inicia el recorrido para compartir tu ubicación'}</small></div></div><div class="controls"><button type="button" class="btn-primary" data-driver-gps="${driverGpsWatchId ? 'stop' : 'start'}">${driverGpsWatchId ? 'Detener GPS real' : 'Compartir mi ubicación real'}</button></div><p id="driverGpsStatus" class="demo"></p>`;
+}
+function updateDriverGpsIndicator(state = driverGpsState, message = '') {
+  driverGpsState = state;
+  const panel = $('#driverGpsLive');
+  if (panel) panel.className = `driver-gps-live ${state}`;
+  const label = $('#driverGpsLiveLabel');
+  if (label) label.textContent = state === 'active' ? 'GPS activo' : state === 'error' ? 'GPS con problema' : 'GPS listo';
+  const meta = $('#driverGpsLiveMeta');
+  if (meta) {
+    const last = driverGpsLastReceivedAt ? ` · última ${new Date(driverGpsLastReceivedAt).toLocaleTimeString()}` : '';
+    meta.textContent = message || `${driverRealTrail.length} puntos guardados${last}`;
+  }
 }
 // Roadmap item 3 ("GPS real"): opt-in — only reachable via the button above, which only renders
 // once a real backend is configured (backendMode !== 'DEMO_ONLY'). Persists the driver's own
-// browser/phone location to Supabase (source: browser_geolocation); does not touch the simulation
-// engine or any map rendering (drawDriverPositions/drawMapLayers stay demo-driven, by design —
-// showing real GPS on a live map is a separate, later milestone).
+// browser/phone location to Supabase (source: browser_geolocation) and immediately appends the
+// accepted row to the driver's live trail. The periodic server read below reconciles that trail
+// after reloads or when the browser wakes from suspension.
 function driverLocationErrorMessage(error) {
   if (error?.code === 1) return 'Permiso de ubicación denegado. Actívalo para este sitio en la configuración del navegador y vuelve a intentarlo.';
   if (error?.code === 2) return 'No se pudo determinar tu ubicación. Verifica que la ubicación del teléfono esté activada.';
@@ -909,6 +927,10 @@ async function startDriverGps({ initialPosition = null } = {}) {
   if (!assignment.ok) { if (status) status.textContent = `No se pudo activar el GPS real: ${assignment.error.message}`; return; }
   const vehicleId = assignment.data.vehicle_id;
   const routeRunId = assignment.data.route_run_id;
+  if (driverActiveRouteRunId !== routeRunId) driverRealTrail = [];
+  driverActiveRouteRunId = routeRunId;
+  const assignedTruck = trucks.find((truck) => truck.real_id === vehicleId);
+  if (assignedTruck) driverVehicleId = assignedTruck.id;
   const client = getAuthClient();
   const telemetry = createTelemetryIngestionAdapter(client, { municipality_id: driverAuthContext.municipality_id });
   let lastSentAt = 0;
@@ -927,7 +949,16 @@ async function startDriverGps({ initialPosition = null } = {}) {
     try { result = await write; }
     finally { driverGpsPendingWrites.delete(write); }
     const currentStatus = $('#driverGpsStatus');
-    if (currentStatus) currentStatus.textContent = result.ok ? `Última posición real enviada: ${new Date().toLocaleTimeString()}` : `No se pudo enviar la posición real: ${result.error?.message ?? 'error desconocido'}`;
+    if (result.ok) {
+      driverRealTrail = mergeRouteTrail(driverRealTrail, [result.data]);
+      driverGpsLastReceivedAt = result.data?.captured_at ?? new Date().toISOString();
+      if (currentStatus) currentStatus.textContent = 'Ubicación real guardada y visible en el mapa.';
+      updateDriverGpsIndicator('active');
+      drawDriverPositions();
+    } else {
+      if (currentStatus) currentStatus.textContent = `No se pudo enviar la posición real: ${result.error?.message ?? 'error desconocido'}`;
+      updateDriverGpsIndicator('error', 'No se pudo guardar la última ubicación');
+    }
   }
   // Persist the coordinate that triggered/granted permission before waiting for watchPosition's
   // first callback. This guarantees the run has at least one attempted real sample immediately.
@@ -936,9 +967,11 @@ async function startDriverGps({ initialPosition = null } = {}) {
     const currentStatus = $('#driverGpsStatus');
     if (currentStatus) currentStatus.textContent = driverLocationErrorMessage(error);
     stopDriverGps();
+    updateDriverGpsIndicator('error', driverLocationErrorMessage(error));
   }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 });
   const button = document.querySelector('[data-driver-gps]');
   if (button) { button.dataset.driverGps = 'stop'; button.textContent = 'Detener GPS real'; }
+  updateDriverGpsIndicator('active');
 }
 async function stopDriverGps({ flush = false } = {}) {
   if (driverGpsWatchId != null) navigator.geolocation.clearWatch(driverGpsWatchId);
@@ -946,6 +979,7 @@ async function stopDriverGps({ flush = false } = {}) {
   if (flush && driverGpsPendingWrites.size) await Promise.allSettled([...driverGpsPendingWrites]);
   const button = document.querySelector('[data-driver-gps]');
   if (button) { button.dataset.driverGps = 'start'; button.textContent = 'Compartir mi ubicación real'; }
+  updateDriverGpsIndicator('idle');
 }
 // Ítem #12 de docs/TECHNICAL_DEBT_REGISTER.md: la vista móvil del conductor vivía embebida como un
 // <div class="mobile"> de unas pocas líneas dentro de renderMunicipal() — sin sección propia ni
@@ -1181,32 +1215,78 @@ document.addEventListener('fullscreenchange', () => {
 function initDriverMap() {
   loadLeaflet().then((L) => {
     driverMapReady = true;
-    driverMap = L.map('driverMap', { zoomControl: false, attributionControl: false }).setView(pilotMunicipality.center, pilotMunicipality.zoom);
+    const lastRealPosition = driverRealTrail.at(-1);
+    const initialCenter = lastRealPosition
+      ? [Number(lastRealPosition.latitude), Number(lastRealPosition.longitude)]
+      : pilotMunicipality.center;
+    const initialZoom = lastRealPosition ? 17 : pilotMunicipality.zoom;
+    driverMap = L.map('driverMap', { zoomControl: false, attributionControl: false }).setView(initialCenter, initialZoom);
+    driverMapHasRealFix = Boolean(lastRealPosition);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(driverMap);
     drawDriverPositions();
   }).catch(() => { const el = $('#driverMap'); if (el) { el.classList.add('fallback-active'); el.innerHTML = '<div class="map-fallback"><strong>Mapa externo no disponible.</strong></div>'; } });
 }
-// Reads positionHistory (the demo stand-in for a `select * from vehicle_positions where
-// vehicle_id=$1 order by captured_at` query) and redraws: planned route as a base line, the
-// traveled trail as a solid line, and the most recent point as a distinct marker. Called on every
-// poll tick and immediately on vehicle switch — cheap enough (a handful of points) to just redraw
-// everything each time, same approach drawMapLayers() already uses for the main operational map.
+async function fetchDriverRoutePositions() {
+  if (!realAdapter || driverAuthContext?.role !== 'driver' || driverTrailFetchInFlight) return;
+  driverTrailFetchInFlight = true;
+  try {
+    const assignment = await realAdapter.findOwnVehicleAssignment(driverAuthContext.user_id);
+    if (!assignment.ok) return;
+    if (driverActiveRouteRunId !== assignment.data.route_run_id) {
+      driverRealTrail = [];
+      driverMapHasRealFix = false;
+    }
+    driverActiveRouteRunId = assignment.data.route_run_id;
+    const assignedTruck = trucks.find((truck) => truck.real_id === assignment.data.vehicle_id);
+    if (assignedTruck) driverVehicleId = assignedTruck.id;
+    const result = await realAdapter.listRouteRunPositions(driverActiveRouteRunId);
+    if (!result.ok) {
+      updateDriverGpsIndicator('error', 'No se pudo recuperar el recorrido guardado');
+      return;
+    }
+    driverRealTrail = mergeRouteTrail(driverRealTrail, result.data);
+    driverGpsLastReceivedAt = driverRealTrail.at(-1)?.captured_at ?? null;
+    updateDriverGpsIndicator(driverGpsWatchId != null ? 'active' : 'idle');
+  } finally {
+    driverTrailFetchInFlight = false;
+    drawDriverPositions();
+  }
+}
+
+// Redraws the planned line, travelled trail and current point. A real driver session uses only
+// rows from its active route_run; demo mode keeps the existing in-memory simulator unchanged.
 function drawDriverPositions() {
   if (!driverMapReady) return;
   const L = window.L;
   const truck = trucks.find((item) => item.id === driverVehicleId);
-  if (!truck?.routeId) return;
+  // A successfully resolved route_run is sufficient to select the real trail. Vehicle hydration
+  // is a separate request and may finish later (or fail independently); tying this choice to
+  // truck.real_id made the map silently fall back to Laguna Salada's simulated history even while
+  // Supabase was already returning the driver's real points.
+  const history = driverActiveRouteRunId
+    ? driverRealTrail
+    : positionHistory.listPositions(driverVehicleId);
+  if (!truck?.routeId && !history.length) return;
   // Keep the route/status text current on every poll, not just when the vehicle selector changes —
   // startSimulation() (the main operational map's simulation) mutates truck.progress/state on its
   // own timer, so a driver who stays on one vehicle would otherwise keep seeing a stale percentage.
   const routeInfo = $('#driverRouteInfo');
-  if (routeInfo) routeInfo.innerHTML = `${pill(truck.state)} ${routeName(truck.routeId)} · ${truck.progress}% completado`;
+  if (routeInfo && truck?.routeId) routeInfo.innerHTML = `${pill(truck.state)} ${routeName(truck.routeId)} · ${truck.progress}% completado`;
   const startRouteControl = $('#driverRouteLifecycleControl');
-  if (startRouteControl) startRouteControl.innerHTML = driverRouteLifecycleControl(truck);
+  if (startRouteControl && truck) startRouteControl.innerHTML = driverRouteLifecycleControl(truck);
+  const plannedGeometry = truck?.routeId ? routeGeometry(truck.routeId) : [];
+  const lastRealPoint = driverActiveRouteRunId ? history.at(-1) : null;
+  const plannedStart = plannedGeometry[0];
+  const isPresentationFixture = truck?.routeId && routeName(truck.routeId) === 'Ruta de presentación — datos de ensayo';
+  const demoRouteIsRemote = Boolean(isPresentationFixture && lastRealPoint && plannedStart && haversineMeters(
+    { latitude: Number(lastRealPoint.latitude), longitude: Number(lastRealPoint.longitude) },
+    { latitude: Number(plannedStart[0]), longitude: Number(plannedStart[1]) }
+  ) > 20_000);
   if (driverPlannedLayer) driverPlannedLayer.remove();
-  driverPlannedLayer = L.polyline(routeGeometry(truck.routeId), { color: '#94a3b8', weight: 4, opacity: .6, dashArray: '6 8' }).addTo(driverMap);
+  driverPlannedLayer = !demoRouteIsRemote && plannedGeometry.length
+    ? L.polyline(plannedGeometry, { color: '#94a3b8', weight: 4, opacity: .6, dashArray: '6 8' }).addTo(driverMap)
+    : null;
 
-  const history = positionHistory.listPositions(driverVehicleId);
   const trail = history.map((point) => [point.latitude, point.longitude]);
   if (driverTrailLayer) driverTrailLayer.remove();
   driverTrailLayer = trail.length > 1 ? L.polyline(trail, { color: '#0f7b4f', weight: 5, opacity: .9 }).addTo(driverMap) : null;
@@ -1215,7 +1295,9 @@ function drawDriverPositions() {
   // deriveStopStatus() against this same recorded trail (`history`, above) — no separate query or
   // refresh mechanism, reuses the polling this function is already called from.
   if (driverStopsLayer) driverStopsLayer.remove();
-  const stopsWithStatus = operationsAdapter.listRouteStops(truck.routeId).map((stop) => ({ ...stop, status: deriveStopStatus(stop, history) }));
+  const stopsWithStatus = !demoRouteIsRemote && truck?.routeId
+    ? operationsAdapter.listRouteStops(truck.routeId).map((stop) => ({ ...stop, status: deriveStopStatus(stop, history) }))
+    : [];
   driverStopsLayer = L.layerGroup(stopsWithStatus.map((stop) => L.circleMarker([stop.latitude, stop.longitude], {
     radius: 5,
     weight: 2,
@@ -1226,17 +1308,34 @@ function drawDriverPositions() {
   const stopsProgress = $('#driverStopsProgress');
   if (stopsProgress) {
     const collected = stopsWithStatus.filter((stop) => stop.status === 'recolectado').length;
-    stopsProgress.textContent = stopsWithStatus.length ? `${collected}/${stopsWithStatus.length} recolectados` : '';
+    stopsProgress.textContent = demoRouteIsRemote
+      ? 'Modo de prueba local: mostrando tu GPS actual; la ruta planificada está en Laguna Salada.'
+      : stopsWithStatus.length ? `${collected}/${stopsWithStatus.length} recolectados` : '';
   }
 
   if (driverCurrentMarker) driverCurrentMarker.remove();
   const last = history[history.length - 1];
   if (last) {
-    driverCurrentMarker = L.circleMarker([last.latitude, last.longitude], { radius: 9, color: '#155eef', weight: 3, fillColor: '#155eef', fillOpacity: .9 }).addTo(driverMap);
-    driverMap.panTo([last.latitude, last.longitude]);
+    const currentPosition = [Number(last.latitude), Number(last.longitude)];
+    driverCurrentMarker = L.circleMarker(currentPosition, { radius: 9, color: '#155eef', weight: 3, fillColor: '#155eef', fillOpacity: .9 }).addTo(driverMap);
+    driverMap.invalidateSize();
+    if (!driverMapHasRealFix && driverActiveRouteRunId) {
+      driverMap.setView(currentPosition, 17, { animate: false });
+      driverMapHasRealFix = true;
+    } else {
+      driverMap.panTo(currentPosition, { animate: true });
+    }
   }
 }
-function startDriverPolling() { if (driverPollTimer) return; drawDriverPositions(); driverPollTimer = setInterval(drawDriverPositions, DRIVER_POLL_INTERVAL_MS); }
+function startDriverPolling() {
+  if (driverPollTimer) return;
+  if (realAdapter && driverAuthContext?.role === 'driver') fetchDriverRoutePositions();
+  else drawDriverPositions();
+  driverPollTimer = setInterval(() => {
+    if (realAdapter && driverAuthContext?.role === 'driver') fetchDriverRoutePositions();
+    else drawDriverPositions();
+  }, DRIVER_POLL_INTERVAL_MS);
+}
 function stopDriverPolling() { clearInterval(driverPollTimer); driverPollTimer = null; }
 // Every section is always in the DOM (single scrolling page, nav links just jump to an anchor —
 // see frontend/index.html), so "navigate away from the view" means scrolled out of the viewport,
@@ -2316,6 +2415,11 @@ async function bootstrapRealBackend(ctx) {
   if (driverMobile && backendMode !== 'DEMO_ONLY' && !driverMobile.querySelector('[data-driver-gps]')) {
     driverMobile.insertAdjacentHTML('beforeend', renderDriverGpsControl());
   }
+  const driverMapSource = $('#driverMapSource');
+  if (driverMapSource && ctx.role === 'driver') driverMapSource.textContent = `GPS real guardado · mapa actualizado al instante y reconciliado cada ${DRIVER_POLL_INTERVAL_MS / 1000}s`;
+  // Restore the active run's saved trail after login/reload. Successful live samples still update
+  // immediately; this fetch is the durable reconciliation path when the tab was closed or slept.
+  if (ctx.role === 'driver') await fetchDriverRoutePositions();
 }
 // No-ops entirely (leaves every section visible, same as before this line existed) unless the
 // page sets window.SMARTWASTE_SUPABASE_CONFIG — see frontend/auth-gate.js and CLAUDE.md rule 5.
