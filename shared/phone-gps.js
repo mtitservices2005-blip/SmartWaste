@@ -9,6 +9,11 @@
 //
 // Pure, no DOM/navigator access here, so this is testable without a browser — same separation
 // shared/browser-geolocation.js and shared/osrm-routing.js already use.
+//
+// Decision confirmed with the Project Owner: 'phone' and 'browser_geolocation' will coexist as two
+// separate real telemetry sources going forward — 'phone' is not a planned successor/replacement of
+// 'browser_geolocation'. Fase 2 of this hito connects this module's pings to their own persistence
+// path with source: 'phone'; it does not migrate or retire the existing browser_geolocation flow.
 
 // A garbage truck's own GPS reading worse than this is unreliable enough to skip rather than draw
 // a misleading position on the map — the caller (frontend/app.js) shows a "señal débil" message for

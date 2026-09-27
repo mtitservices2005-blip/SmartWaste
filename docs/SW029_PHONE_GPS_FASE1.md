@@ -54,6 +54,17 @@ fase funciona siempre, incluso en modo 100% demo, y nunca toca Supabase.
 - Reconciliar `device_id` real por dispositivo (esta fase usa un valor por defecto fijo,
   `'phone-browser'`) queda para cuando la fase 2 identifique dispositivos físicos distintos.
 
+**Decisión de arquitectura (confirmada con el Project Owner):** `source: 'phone'` (este selector) y
+`source: 'browser_geolocation'` (el botón "Compartir mi ubicación real" ya existente, roadmap ítem 3)
+van a **convivir como dos fuentes distintas**, no a fusionarse. `'phone'` no reemplaza a
+`'browser_geolocation'` en ningún momento futuro planeado — son dos caminos de telemetría real
+separados (este selector del lado del conductor vs. el botón de compartir dedicado), cada uno con su
+propio `source` en `vehicle_positions`. La fase 2 de este hito, cuando llegue, es "conectar este
+selector a su propio camino de persistencia con `source: 'phone'`", no "migrar/reemplazar" el flujo
+`browser_geolocation` existente. Cualquier trabajo futuro que trate a `'phone'` como sucesor de
+`'browser_geolocation'` (o viceversa) contradice esta decisión — confirmar con el Project Owner antes
+de asumir lo contrario.
+
 ## Evidencia automática
 
 `tests/phone-gps.test.mjs` (puro, sin navegador — mismo patrón que `tests/browser-geolocation.test.mjs`):
