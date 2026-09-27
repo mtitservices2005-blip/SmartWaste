@@ -1,24 +1,21 @@
 import { routes, sectors, trucks, incidents } from './demo-data.js';
+import { DEFAULT_COST_PARAMETERS } from './cost-parameters.js';
 
 export const IMPACT_DEMO_NOTICE = 'Datos simulados para demostración · no representan resultados reales del ayuntamiento';
 export const IMPACT_SCENARIO_NOTICE = 'Escenario simulado para demostración';
 
+// SW-030: the numeric defaults themselves now live in shared/cost-parameters.js (the module that
+// also validates/persists a municipality's own configured values, per municipality_id) — this stays
+// the single source of truth for what a freshly-loaded, never-configured municipality sees, so the
+// two never drift apart. currentDistanceKm is the one field that stays out of cost-parameters.js:
+// it's derived from real route data (or the demo routes below), never a configured input.
 export const defaultImpactAssumptions = {
-  fuelPrice: 76,
-  fuelEfficiency: 4.8,
-  operatingDays: 22,
-  hourlyCost: 950,
-  baseDistanceKm: 31,
-  currentDistanceKm: Number(routes.reduce((sum, route) => sum + route.distanceKm, 0).toFixed(1)),
-  operatingHours: 6.1,
-  baselineOperatingHours: 7.4,
-  incidentAvoidanceCost: 1200,
+  ...DEFAULT_COST_PARAMETERS,
+  currentDistanceKm: Number(routes.reduce((sum, route) => sum + route.distanceKm, 0).toFixed(1))
   // Uso estimado del camión (paradas × minutos/parada + distancia/velocidad): arranca como supuesto
   // configurable, no una medición real (no hay timestamps de inicio/fin de ruta persistidos hoy —
   // ver item #4 de docs/TECHNICAL_DEBT_REGISTER.md). La idea es empezar a recoger estas
   // estimaciones corrida a corrida y afinar los supuestos con datos reales más adelante.
-  minutesPerStop: 1,
-  avgSpeedKmh: 18
 };
 
 export const metricReadiness = {
@@ -33,7 +30,14 @@ const pct = (part, total) => total ? round((part / total) * 100, 1) : 0;
 const count = (items, predicate) => items.filter(predicate).length;
 const sum = (items, selector) => items.reduce((total, item) => total + selector(item), 0);
 
-export function calculateImpactMetrics(assumptions = defaultImpactAssumptions, filters = {}) {
+// SW-030: realData carries actual operational data when the caller (frontend/app.js) has it —
+// { operational: summarizeRouteRunsForMunicipality()'s result | null, routeSavings:
+// aggregateRouteSavings()'s result | null }. Both default to null/undefined so every existing call
+// site (demo mode, no real backend) keeps working unchanged — buildRealComparison() below then
+// returns { operational: null, routeSavings: null }, which the UI renders as "pendiente de datos"
+// rather than fabricating a number from simulated data (rule 6: no reclamar integraciones reales
+// sin evidencia).
+export function calculateImpactMetrics(assumptions = defaultImpactAssumptions, filters = {}, realData = {}) {
   const filteredRoutes = routes.filter((route) => (!filters.sector || route.sectors.includes(filters.sector)) && (!filters.route || route.id === filters.route) && (!filters.status || route.status === filters.status));
   const filteredTrucks = trucks.filter((truck) => (!filters.vehicle || truck.id === filters.vehicle) && (!filters.status || truck.state === filters.status || routeStatus(truck.routeId) === filters.status));
   const filteredIncidents = incidents.filter((incident) => !filters.sector || incident.sector === filters.sector);
@@ -79,9 +83,10 @@ export function calculateImpactMetrics(assumptions = defaultImpactAssumptions, f
   // vehicle (a vehicle filter says "show me this truck's load", not "hide routes it isn't on").
   const usageRoutes = filteredRoutes.filter((route) => !filters.vehicle || route.truckId === filters.vehicle);
   const usage = calculateUsageMetrics(usageRoutes, assumptions);
+  const mergedAssumptions = { ...defaultImpactAssumptions, ...assumptions };
   return {
     filters,
-    assumptions: { ...defaultImpactAssumptions, ...assumptions },
+    assumptions: mergedAssumptions,
     routes: { planned: plannedRoutes, assigned: assignedRoutes, started: startedRoutes, inProgress: inProgressRoutes, delayed: delayedRoutes, completed: completedRoutes, verified: verifiedRoutes, complianceRate: pct(completedRoutes, plannedRoutes), punctualityRate: pct(startedRoutes - delayedRoutes, startedRoutes), progressAverage },
     coverage: { plannedSectors, attendedSectors, coverageRate: pct(attendedSectors, plannedSectors), pendingSectors: Math.max(0, plannedSectors - attendedSectors), topIncidentZones: bySector.filter((sector) => sector.incidents > 0).sort((a, b) => b.incidents - a.incidents).slice(0, 3), bySector, stops, coveredStops },
     fleet: { ...vehicleTotals, availabilityRate: pct(vehicleTotals.active + vehicleTotals.delayed + vehicleTotals.completed, vehicleTotals.total), utilizationRate: pct(count(filteredTrucks, (truck) => Boolean(truck.routeId)), vehicleTotals.total) },
@@ -90,8 +95,56 @@ export function calculateImpactMetrics(assumptions = defaultImpactAssumptions, f
     efficiency: { avoidedKm, fuelSavedLiters, fuelCostAvoided, optimizedHours },
     economics: { monthlyFuelAvoided, monthlyHoursAvoided, incidentCostAvoided, monthlyPotentialAvoided, annualProjectionDemo: round(monthlyPotentialAvoided * 12, 2) },
     beforeAfter: buildBeforeAfter({ assumptions, currentKm, fuelSavedLiters, fuelCostAvoided, optimizedHours, monthlyPotentialAvoided }),
-    usage
+    usage,
+    realComparison: buildRealComparison({ assumptions: mergedAssumptions, operational: realData.operational ?? null, routeSavings: realData.routeSavings ?? null })
   };
+}
+
+// SW-030: the "con datos reales" comparisons (deliberately separate from buildBeforeAfter() below,
+// which stays exactly as it was — a labeled demo scenario, IMPACT_SCENARIO_NOTICE, rule 5: never
+// silently reclassified as real). `operational` is null unless the caller passed real, non-empty
+// route_runs data (any source — vehicle_positions from browser_geolocation or the simulator both
+// count, per this hito's scope: "no distinguir origen para este cálculo" — only whether route_runs
+// itself has a real measured distance/duration). `routeSavings` is null unless the caller passed at
+// least one real route with enough stops to compare. Both null cases render as "pendiente de datos"
+// in the UI, never as a fabricated 0.
+function buildRealComparison({ assumptions, operational, routeSavings }) {
+  const fuelEfficiency = Number(assumptions.fuelEfficiency) || 1;
+  const fuelPrice = Number(assumptions.fuelPrice) || 0;
+  const baselineDistanceKm = Number(assumptions.baseDistanceKm) || 0;
+  const baselineHours = Number(assumptions.baselineOperatingHours) || 0;
+
+  let operationalComparison = null;
+  if (operational && operational.runsCount > 0) {
+    const realDistanceKm = operational.totalDistanceKm;
+    const realHours = round(operational.totalDurationMinutes / 60, 2);
+    const baselineFuelLiters = round(baselineDistanceKm / fuelEfficiency, 2);
+    const realFuelLiters = round(realDistanceKm / fuelEfficiency, 2);
+    operationalComparison = {
+      runsCount: operational.runsCount,
+      distance: comparison('Kilómetros recorridos (medidos)', baselineDistanceKm, realDistanceKm, 'km'),
+      hours: comparison('Horas operativas (medidas)', baselineHours, realHours, 'h'),
+      fuelLiters: comparison('Consumo de combustible (medido)', baselineFuelLiters, realFuelLiters, 'L'),
+      fuelCost: comparison('Costo de combustible (medido)', round(baselineFuelLiters * fuelPrice, 2), round(realFuelLiters * fuelPrice, 2), 'RD$')
+    };
+  }
+
+  let routeSavingsComparison = null;
+  if (routeSavings && routeSavings.routesCompared > 0) {
+    const savedKm = round(routeSavings.savedMeters / 1000, 2);
+    const savedFuelLiters = round(savedKm / fuelEfficiency, 2);
+    routeSavingsComparison = {
+      routesCompared: routeSavings.routesCompared,
+      manualDistanceKm: round(routeSavings.manualDistanceMeters / 1000, 2),
+      optimizedDistanceKm: round(routeSavings.optimizedDistanceMeters / 1000, 2),
+      savedKm,
+      savedPercent: routeSavings.savedPercent,
+      savedFuelLiters,
+      savedFuelCost: round(savedFuelLiters * fuelPrice, 2)
+    };
+  }
+
+  return { operational: operationalComparison, routeSavings: routeSavingsComparison };
 }
 
 // Uso estimado del camión: paradas × minutos/parada (tiempo de recolección) + distancia/velocidad

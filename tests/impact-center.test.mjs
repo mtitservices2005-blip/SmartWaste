@@ -53,4 +53,42 @@ const assignedVehicleMetrics = calculateImpactMetrics(defaultImpactAssumptions, 
 assert.equal(assignedVehicleMetrics.usage.byRoute.length, 1, 'un vehículo con una ruta asignada debe aportar exactamente esa ruta al uso filtrado');
 assert.ok(assignedVehicleMetrics.usage.totalMinutes < metrics.usage.totalMinutes, 'el uso filtrado por un vehículo debe ser menor que el total de la flota');
 
+// SW-030: metrics.realComparison — "pendiente de datos" (null) when no real operational data was
+// passed in, never a fabricated number derived from the demo routes/assumptions.
+assert.equal(metrics.realComparison.operational, null, 'no realData passed in -> operational comparison must be null, not simulated');
+assert.equal(metrics.realComparison.routeSavings, null);
+
+// With real operational data (e.g. from summarizeRouteRunsForMunicipality()): the comparison is
+// populated, uses the configured baseline assumptions (baseDistanceKm/baselineOperatingHours) vs the
+// real measured figures, and derives fuel liters/cost from the real distance and the configured
+// fuelEfficiency/fuelPrice — never from the demo currentDistanceKm.
+const withOperational = calculateImpactMetrics(defaultImpactAssumptions, {}, { operational: { runsCount: 3, totalDistanceKm: 42, totalDurationMinutes: 300 } });
+assert.ok(withOperational.realComparison.operational, 'real operational data passed in -> comparison must be populated');
+assert.equal(withOperational.realComparison.operational.runsCount, 3);
+assert.equal(withOperational.realComparison.operational.distance.before, defaultImpactAssumptions.baseDistanceKm);
+assert.equal(withOperational.realComparison.operational.distance.after, 42);
+assert.equal(withOperational.realComparison.operational.hours.after, Number((300 / 60).toFixed(2)));
+const expectedRealFuelLiters = Number((42 / defaultImpactAssumptions.fuelEfficiency).toFixed(2));
+assert.equal(withOperational.realComparison.operational.fuelLiters.after, expectedRealFuelLiters);
+assert.equal(withOperational.realComparison.operational.fuelCost.after, Number((expectedRealFuelLiters * defaultImpactAssumptions.fuelPrice).toFixed(2)));
+
+// runsCount: 0 (an empty/zeroed summary, e.g. no measured runs this month) must still read as
+// "pendiente de datos", not as "zero real distance measured".
+const withZeroRuns = calculateImpactMetrics(defaultImpactAssumptions, {}, { operational: { runsCount: 0, totalDistanceKm: 0, totalDurationMinutes: 0 } });
+assert.equal(withZeroRuns.realComparison.operational, null);
+
+// With route savings data (e.g. from aggregateRouteSavings()): populated, derives km/fuel from
+// meters using the configured fuelEfficiency/fuelPrice.
+const withRouteSavings = calculateImpactMetrics(defaultImpactAssumptions, {}, { routeSavings: { routesCompared: 2, manualDistanceMeters: 10000, optimizedDistanceMeters: 8000, savedMeters: 2000, savedPercent: 20 } });
+assert.ok(withRouteSavings.realComparison.routeSavings);
+assert.equal(withRouteSavings.realComparison.routeSavings.routesCompared, 2);
+assert.equal(withRouteSavings.realComparison.routeSavings.savedKm, 2);
+assert.equal(withRouteSavings.realComparison.routeSavings.savedPercent, 20);
+const expectedSavedFuelLiters = Number((2 / defaultImpactAssumptions.fuelEfficiency).toFixed(2));
+assert.equal(withRouteSavings.realComparison.routeSavings.savedFuelLiters, expectedSavedFuelLiters);
+
+// routesCompared: 0 must read as "pendiente de datos", not "0% savings measured".
+const withZeroRoutesCompared = calculateImpactMetrics(defaultImpactAssumptions, {}, { routeSavings: { routesCompared: 0, manualDistanceMeters: 0, optimizedDistanceMeters: 0, savedMeters: 0, savedPercent: 0 } });
+assert.equal(withZeroRoutesCompared.realComparison.routeSavings, null);
+
 console.log('impact-center ok');
