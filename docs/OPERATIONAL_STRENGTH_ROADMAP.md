@@ -109,6 +109,8 @@ Esto no estaba en el roadmap original bajo este número, pero **sí resuelve por
 - Una jornada operativa simulada con datos reales del municipio (no demo) corre de principio a fin sin intervención del equipo de desarrollo.
 - El ayuntamiento tiene al menos un supervisor y un conductor entrenados y capaces de operar sin soporte directo.
 
+**Nota (2026-09-27, cierre de SW-029):** el "GPS real del conductor" que este hito necesitará para el piloto ya tiene solución técnica lista y `VERIFIED_REAL` — `shared/browser-geolocation.js` + `startDriverGps()`/`stopDriverGps()` (`frontend/app.js`), ver `docs/TECHNICAL_DEBT_REGISTER.md` ítem #20. No hace falta ingeniería adicional de GPS para que SW-041 arranque; lo único pendiente es la coordinación con el ayuntamiento descrita arriba. (SW-029 agregó, por separado, un modo "GPS del teléfono" puramente demo/tour en la misma vista — no relacionado con este hito, ver `docs/SW029_PHONE_GPS_FASE1.md`.)
+
 ---
 
 ## SW-042 — Asignación de chofer a vehículo desde la UI ✅ Hecho (2026-08-19)

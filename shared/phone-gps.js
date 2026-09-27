@@ -1,19 +1,19 @@
-// SW-029 fase 1: "GPS del teléfono" toggle in the driver's own view (vista móvil conductor) — lets
-// a driver see their phone's real position on their own map instead of the simulated one. This is
-// deliberately separate from shared/browser-geolocation.js (the existing "Compartir mi ubicación
-// real" flow, roadmap item 3), which already writes to Supabase via createTelemetryIngestionAdapter
-// (source: 'browser_geolocation', requires a route_run_id). This module's pings are source:
-// 'phone', have no such requirement, and — in this fase — are only ever recorded into the local
-// positionHistory demo store (frontend/app.js), never sent to Supabase. See
-// docs/SW029_PHONE_GPS_FASE1.md for the fase split and what fase 2 (real persistence) still needs.
+// SW-029: "GPS del teléfono" toggle in the driver's own view (vista móvil conductor) — a demo/tour
+// mode that shows the phone's real position on the map instead of the simulated one, with no real
+// backend/session required. Deliberately separate from shared/browser-geolocation.js (the existing
+// "Compartir mi ubicación real" flow, roadmap item 3), which already writes to Supabase via
+// createTelemetryIngestionAdapter (source: 'browser_geolocation', requires an authenticated driver
+// session + route_run_id) and is VERIFIED_REAL (docs/TECHNICAL_DEBT_REGISTER.md item #20) — that's
+// the flow the real pilot (SW-041) will use once it starts.
 //
 // Pure, no DOM/navigator access here, so this is testable without a browser — same separation
 // shared/browser-geolocation.js and shared/osrm-routing.js already use.
 //
-// Decision confirmed with the Project Owner: 'phone' and 'browser_geolocation' will coexist as two
-// separate real telemetry sources going forward — 'phone' is not a planned successor/replacement of
-// 'browser_geolocation'. Fase 2 of this hito connects this module's pings to their own persistence
-// path with source: 'phone'; it does not migrate or retire the existing browser_geolocation flow.
+// Closure decision confirmed with the Project Owner (2026-09-27, docs/SW029_PHONE_GPS_FASE1.md):
+// this module is demo/tour-only by permanent design, not a fase 1 of something completed later.
+// There is no fase 2 — no Supabase persistence, no 'phone' added to TELEMETRY_SOURCES or the
+// vehicle_positions CHECK constraint. The real GPS need is already solved by browser_geolocation;
+// what's still pending is the pilot itself starting (SW-041), not more engineering here.
 
 // A garbage truck's own GPS reading worse than this is unreliable enough to skip rather than draw
 // a misleading position on the map — the caller (frontend/app.js) shows a "señal débil" message for
@@ -35,7 +35,7 @@ export function shouldSendPhonePing(lastSentAt, now, minIntervalMs = 4500) {
 // Converts a browser GeolocationPosition into the shape shared/telemetry-simulator.js's
 // createDemoPositionHistory().record() already expects (see frontend/app.js's tickDriverTelemetry(),
 // which records DeviceSimulator.emit()'s output into the same store) — no municipality_id/
-// route_run_id required, since this fase never reaches validateTelemetryPosition()/ingest().
+// route_run_id required, since this mode never reaches validateTelemetryPosition()/ingest().
 export function buildPhoneGpsPing(geoPosition, { vehicle_id, device_id = 'phone-browser' } = {}) {
   const { latitude, longitude, accuracy, speed, heading } = geoPosition.coords;
   return {
