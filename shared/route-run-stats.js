@@ -24,6 +24,13 @@ function summarizeGroup(runs) {
   return {
     runsCount: runs.length,
     completedRunsCount: runs.length,
+    // SW-030 (Codex review, PR #88, P1): a run counts toward runsCount as soon as it has
+    // started_at/completed_at — distance_meters can still be null (no GPS trail recorded for it).
+    // totalDistanceKm silently sums to 0 when every run lacks distance, indistinguishable from "0km
+    // really measured" — callers that need to tell those apart (e.g. shared/impact-center.js's
+    // buildRealComparison(), which must show "pendiente de datos" instead of a fabricated 0km) use
+    // this count, not runsCount, to decide whether the distance figures mean anything.
+    distanceMeasuredRunsCount: distanceMeters.length,
     totalDurationMinutes: durations.reduce((total, n) => total + n, 0),
     totalDistanceMeters: distanceMeters.reduce((total, n) => total + n, 0),
     totalDistanceKm: Math.round(distanceMeters.reduce((total, n) => total + n, 0) / 100) / 10,
@@ -82,6 +89,7 @@ export function summarizeRouteRunsForMunicipality(routeRuns, month) {
   return {
     runsCount: summary.runsCount,
     completedRunsCount: summary.completedRunsCount,
+    distanceMeasuredRunsCount: summary.distanceMeasuredRunsCount,
     totalDurationMinutes: summary.totalDurationMinutes,
     totalDistanceMeters: summary.totalDistanceMeters,
     totalDistanceKm: summary.totalDistanceKm,

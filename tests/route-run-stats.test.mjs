@@ -54,10 +54,23 @@ assert.deepEqual(summarizeRouteRunsByDriver([]), []);
 assert.deepEqual(summarizeRouteRunsForMunicipality(routeRuns), {
   runsCount: 3,
   completedRunsCount: 3,
+  distanceMeasuredRunsCount: 2,
   totalDurationMinutes: 160,
   totalDistanceMeters: 10400,
   totalDistanceKm: 10.4,
 });
+
+// SW-030: distanceMeasuredRunsCount must reflect only runs that actually have distance_meters, not
+// runsCount — a caller (shared/impact-center.js's buildRealComparison()) needs to tell "some runs
+// measured, none had GPS distance" apart from "no runs at all".
+const noDistanceRuns = [
+  { route_id: 'A', driver_id: 'X', started_at: '2026-08-20T08:00:00Z', completed_at: '2026-08-20T08:50:00Z', distance_meters: null },
+  { route_id: 'A', driver_id: 'X', started_at: '2026-08-21T08:00:00Z', completed_at: '2026-08-21T09:10:00Z', distance_meters: null }
+];
+const noDistanceSummary = summarizeRouteRunsForMunicipality(noDistanceRuns);
+assert.equal(noDistanceSummary.runsCount, 2, 'both runs are measured (have started_at/completed_at)');
+assert.equal(noDistanceSummary.distanceMeasuredRunsCount, 0, 'neither run has a distance_meters value');
+assert.equal(noDistanceSummary.totalDistanceKm, 0);
 
 // Month filtering uses the explicit year and month from started_at, never the current year.
 const multiMonthRuns = [
@@ -68,6 +81,7 @@ const multiMonthRuns = [
 assert.deepEqual(summarizeRouteRunsForMunicipality(multiMonthRuns, '2026-09'), {
   runsCount: 1,
   completedRunsCount: 1,
+  distanceMeasuredRunsCount: 1,
   totalDurationMinutes: 40,
   totalDistanceMeters: 3000,
   totalDistanceKm: 3,
