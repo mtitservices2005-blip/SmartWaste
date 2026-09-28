@@ -56,7 +56,10 @@ export function calculateImpactMetrics(assumptions = defaultImpactAssumptions, f
   const plannedSectors = filters.sector ? 1 : sectors.length;
   const distanceKm = round(sum(filteredRoutes, (route) => route.distanceKm), 1);
   const productiveKm = round(distanceKm * 0.82, 1);
-  const baselineKm = Number(assumptions.baseDistanceKm || defaultImpactAssumptions.baseDistanceKm);
+  // Codex review (PR #88, P2): baseDistanceKm is a municipality-configured cost parameter where 0 is
+  // a valid (if unusual) value — `||` would silently discard it and fall back to the demo default,
+  // same class of bug as the distanceMeasuredRunsCount fix above.
+  const baselineKm = Number(assumptions.baseDistanceKm ?? defaultImpactAssumptions.baseDistanceKm);
   const currentKm = filters.sector || filters.route ? distanceKm : Number(assumptions.currentDistanceKm || distanceKm);
   const avoidedKm = Math.max(0, round(baselineKm - currentKm, 1));
   const fuelSavedLiters = round(avoidedKm / Number(assumptions.fuelEfficiency || 1), 2);
@@ -116,16 +119,27 @@ function buildRealComparison({ assumptions, operational, routeSavings }) {
 
   let operationalComparison = null;
   if (operational && operational.runsCount > 0) {
-    const realDistanceKm = operational.totalDistanceKm;
     const realHours = round(operational.totalDurationMinutes / 60, 2);
+    // Codex review (PR #88, P1): runsCount only means "has started_at/completed_at" — a run can be
+    // measured (counts here) with distance_meters still null (no GPS trail for it, e.g. a route
+    // completed without GPS — shared/route-run-stats.js's summarizeGroup()). Without this check,
+    // totalDistanceKm silently summing to 0 across such runs was indistinguishable from "0km really
+    // measured", reporting a real 0 instead of "pendiente de datos".
+    const hasMeasuredDistance = operational.distanceMeasuredRunsCount > 0;
+    const realDistanceKm = operational.totalDistanceKm;
     const baselineFuelLiters = round(baselineDistanceKm / fuelEfficiency, 2);
     const realFuelLiters = round(realDistanceKm / fuelEfficiency, 2);
     operationalComparison = {
       runsCount: operational.runsCount,
-      distance: comparison('Kilómetros recorridos (medidos)', baselineDistanceKm, realDistanceKm, 'km'),
+      distanceMeasuredRunsCount: operational.distanceMeasuredRunsCount,
       hours: comparison('Horas operativas (medidas)', baselineHours, realHours, 'h'),
-      fuelLiters: comparison('Consumo de combustible (medido)', baselineFuelLiters, realFuelLiters, 'L'),
-      fuelCost: comparison('Costo de combustible (medido)', round(baselineFuelLiters * fuelPrice, 2), round(realFuelLiters * fuelPrice, 2), 'RD$')
+      distance: hasMeasuredDistance ? comparison('Kilómetros recorridos (medidos)', baselineDistanceKm, realDistanceKm, 'km') : null,
+      // Codex review (PR #88, P1): even when the distance itself is real/measured, these two rows
+      // are still calculated from the configured fuelEfficiency/fuelPrice assumptions, not from any
+      // actual fuel or expense telemetry (none exists) — labeling them "(medido)" like distance/hours
+      // would present modeled consumption/cost as a real measurement.
+      fuelLiters: hasMeasuredDistance ? comparison('Consumo de combustible estimado (según distancia medida)', baselineFuelLiters, realFuelLiters, 'L') : null,
+      fuelCost: hasMeasuredDistance ? comparison('Costo de combustible estimado (según distancia medida)', round(baselineFuelLiters * fuelPrice, 2), round(realFuelLiters * fuelPrice, 2), 'RD$') : null
     };
   }
 

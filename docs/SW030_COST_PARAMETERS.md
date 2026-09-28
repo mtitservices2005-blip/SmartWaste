@@ -91,6 +91,16 @@ cualquiera de los 2 municipios demo (`laguna-salada-rd`, `mun-norte`), sin tocar
   ampliado.
 - Conectar el resto del formulario ciudadano/otros paneles a estos mismos parámetros: fuera de
   alcance, no pedido.
+- **"Manual" en b) es el orden de paradas tal como quedó guardado (`listRouteStops()`), no
+  necesariamente el trazo original que un despachador dibujó a mano** (hallazgo Codex, PR #88, P2).
+  Si esas paradas ya pasaron por algún ajuste/snapping previo a guardarse, la comparación mide
+  "orden guardado vs. orden que produciría `optimizeWaypointOrder()`", que es una pregunta útil pero
+  distinta de "cuánto ahorraría optimizar lo que el despachador trazó a mano". No se reescribe el
+  pipeline de guardado de paradas para resolver esto aquí — es una decisión de arquitectura mayor
+  (¿debe persistirse el trazo original sin snapping, además del guardado actual?) fuera del alcance
+  de este hito; se deja documentada para que el Project Owner decida si abre un hito propio. Mientras
+  tanto, la UI (`frontend/app.js`, `renderRouteSavingsComparison()`) etiqueta la fila como "orden
+  guardado" en vez de "trazo manual" para no sobreafirmar qué se está comparando.
 
 ## Evidencia automática
 

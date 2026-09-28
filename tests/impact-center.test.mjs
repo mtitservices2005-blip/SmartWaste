@@ -62,7 +62,7 @@ assert.equal(metrics.realComparison.routeSavings, null);
 // populated, uses the configured baseline assumptions (baseDistanceKm/baselineOperatingHours) vs the
 // real measured figures, and derives fuel liters/cost from the real distance and the configured
 // fuelEfficiency/fuelPrice — never from the demo currentDistanceKm.
-const withOperational = calculateImpactMetrics(defaultImpactAssumptions, {}, { operational: { runsCount: 3, totalDistanceKm: 42, totalDurationMinutes: 300 } });
+const withOperational = calculateImpactMetrics(defaultImpactAssumptions, {}, { operational: { runsCount: 3, distanceMeasuredRunsCount: 3, totalDistanceKm: 42, totalDurationMinutes: 300 } });
 assert.ok(withOperational.realComparison.operational, 'real operational data passed in -> comparison must be populated');
 assert.equal(withOperational.realComparison.operational.runsCount, 3);
 assert.equal(withOperational.realComparison.operational.distance.before, defaultImpactAssumptions.baseDistanceKm);
@@ -74,8 +74,18 @@ assert.equal(withOperational.realComparison.operational.fuelCost.after, Number((
 
 // runsCount: 0 (an empty/zeroed summary, e.g. no measured runs this month) must still read as
 // "pendiente de datos", not as "zero real distance measured".
-const withZeroRuns = calculateImpactMetrics(defaultImpactAssumptions, {}, { operational: { runsCount: 0, totalDistanceKm: 0, totalDurationMinutes: 0 } });
+const withZeroRuns = calculateImpactMetrics(defaultImpactAssumptions, {}, { operational: { runsCount: 0, distanceMeasuredRunsCount: 0, totalDistanceKm: 0, totalDurationMinutes: 0 } });
 assert.equal(withZeroRuns.realComparison.operational, null);
+
+// SW-030 (Codex review, PR #88, P1): runsCount > 0 but distanceMeasuredRunsCount === 0 (every
+// measured run lacked a GPS distance) must still populate hours (a real measurement) while showing
+// distance/fuelLiters/fuelCost as "pendiente de datos" (null), never a fabricated 0km.
+const withRunsButNoDistance = calculateImpactMetrics(defaultImpactAssumptions, {}, { operational: { runsCount: 2, distanceMeasuredRunsCount: 0, totalDistanceKm: 0, totalDurationMinutes: 120 } });
+assert.ok(withRunsButNoDistance.realComparison.operational, 'runsCount > 0 -> comparison object must still be populated for hours');
+assert.equal(withRunsButNoDistance.realComparison.operational.hours.after, Number((120 / 60).toFixed(2)));
+assert.equal(withRunsButNoDistance.realComparison.operational.distance, null, 'no run had a measured distance -> must not show a fabricated 0km');
+assert.equal(withRunsButNoDistance.realComparison.operational.fuelLiters, null);
+assert.equal(withRunsButNoDistance.realComparison.operational.fuelCost, null);
 
 // With route savings data (e.g. from aggregateRouteSavings()): populated, derives km/fuel from
 // meters using the configured fuelEfficiency/fuelPrice.

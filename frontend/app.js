@@ -143,6 +143,12 @@ let impactCostParameters = { ...defaultImpactAssumptions };
 let impactCostParametersConfigured = false;
 let impactRealData = { operational: null, routeSavings: null };
 const costParametersStore = createDemoCostParametersStore();
+// SW-030 (Codex review, PR #88, P1): real municipalities (real uuid `id`, from the `municipalities`
+// table) Master Admin can edit cost parameters for — see renderMasterCostParametersSection()/
+// hydrateMasterRealMunicipalities() below. Starts empty; only ever populated by a real fetch, never
+// backfilled with the demo municipalities' slugs (those aren't valid municipality_settings.municipality_id
+// values).
+let masterRealMunicipalities = [];
 // Roadmap item 3 ("GPS real"): the signed-in session's context (user_id/municipality_id, from
 // initAuthGate()/bootstrapRealBackend() below), kept around so the driver GPS button can resolve
 // "my own real vehicle" on demand. driverGpsWatchId is the navigator.geolocation.watchPosition()
@@ -1080,12 +1086,23 @@ function readCostParameterFields(container) {
 function renderRealOperationalComparison(m) {
   const c = m.realComparison.operational;
   if (!c) return '<p class="demo">Pendiente de datos operativos reales — todavía no hay corridas medidas para este municipio.</p>';
-  return `<p>${c.runsCount} corrida(s) medida(s).</p><div class="comparison-table">${[c.distance, c.hours, c.fuelLiters, c.fuelCost].map((row) => `<div class="row"><span>${row.label}</span><span>${num(row.before)} → ${num(row.after)} ${row.unit}</span></div>`).join('')}</div>`;
+  // SW-030 (Codex review, PR #88, P1): distance/fuelLiters/fuelCost are now individually nullable
+  // (a run can be measured — counts toward runsCount — without a recorded GPS distance), while hours
+  // stays populated whenever runsCount > 0. Each missing sub-metric shows its own "pendiente de
+  // datos" line instead of assuming the whole object is all-or-nothing.
+  const rows = [c.hours, c.distance, c.fuelLiters, c.fuelCost].map((row) => row
+    ? `<div class="row"><span>${row.label}</span><span>${num(row.before)} → ${num(row.after)} ${row.unit}</span></div>`
+    : '').join('');
+  const pendingNote = !c.distance ? '<p class="demo">Kilómetros/combustible pendientes — ninguna corrida medida tiene distancia GPS registrada todavía.</p>' : '';
+  return `<p>${c.runsCount} corrida(s) medida(s).</p><div class="comparison-table">${rows}</div>${pendingNote}`;
 }
 function renderRouteSavingsComparison(m) {
   const c = m.realComparison.routeSavings;
   if (!c) return '<p class="demo">Pendiente de datos — no hay rutas reales con paradas suficientes para comparar (mínimo 3 paradas por ruta).</p>';
-  return `<p>${c.routesCompared} ruta(s) real(es) comparada(s).</p><p><b>${num(c.savedKm, ' km')}</b> (${c.savedPercent}%) potencialmente evitados optimizando el orden de paradas · <b>${num(c.savedFuelLiters, ' L')}</b> / <b>${money(c.savedFuelCost)}</b> potencial.</p><p class="demo">Manual: ${num(c.manualDistanceKm, ' km')} · Optimizada: ${num(c.optimizedDistanceKm, ' km')}</p>`;
+  // Codex review (PR #88, P2): "guardado" en vez de "manual" — el orden comparado es el que quedó
+  // persistido en listRouteStops(), no necesariamente el trazo original sin ajustes de un despachador
+  // (ver docs/SW030_COST_PARAMETERS.md, sección "Fuera de alcance / pendiente").
+  return `<p>${c.routesCompared} ruta(s) real(es) comparada(s).</p><p><b>${num(c.savedKm, ' km')}</b> (${c.savedPercent}%) potencialmente evitados optimizando el orden de paradas · <b>${num(c.savedFuelLiters, ' L')}</b> / <b>${money(c.savedFuelCost)}</b> potencial.</p><p class="demo">Orden guardado: ${num(c.manualDistanceKm, ' km')} · Optimizada: ${num(c.optimizedDistanceKm, ' km')}</p>`;
 }
 function renderImpactCenter(assumptions = defaultImpactAssumptions, filters = {}) {
   const metrics = calculateImpactMetrics(assumptions, filters, impactRealData);
@@ -1147,7 +1164,21 @@ function renderBeforeAfter(m){return `<div class="comparison-table">${m.beforeAf
 // bypass — see shared/cost-parameters.js's header comment), not by this UI: a municipal_admin
 // session never sees this section at all (role-gated), and even if it somehow reached this markup,
 // the real write would be rejected by tenant_update_staff for any municipality_id that isn't theirs.
-function renderMaster() { return `<section id="master" class="section card"><h2>Master Admin MT IT Services</h2><p class="demo">${demoNotice}</p><div class="panel-grid">${municipalities.map((m) => `<article class="card"><h3>${m.name}</h3><p>Plan: ${m.plan}</p><p>Camiones: ${m.trucks} · Rutas: ${m.routes} · Usuarios: ${m.users}</p>${pill(m.status.toLowerCase().includes('operativo') ? 'active' : 'assigned')}<button class="btn-primary" data-onboarding="${m.id}">Onboarding demo</button><p class="demo" data-onboarding-status="${m.id}"></p><details class="cost-parameters-toggle" data-cost-parameters-toggle="${m.id}"><summary>Parámetros de costo (Impacto y Ahorros)</summary><div class="cost-parameters-form" data-cost-parameters-form="${m.id}"><p class="demo">Cargando…</p></div></details></article>`).join('')}</div><h3>Arquitectura futura</h3><p>${pilotMunicipality.integrationsReady.join(' · ')}</p></section>`; }
+// Codex review (PR #88, P1): this used to render the cost-parameters <details> inside the demo
+// municipality cards above, keyed by shared/demo-data.js's slugs ('laguna-salada-rd', 'mun-norte').
+// In a connected mt_superadmin session those slugs are not real municipality_settings.municipality_id
+// values (that column is a uuid, see supabase/migrations/202607150001_sw007_foundation.sql) — opening
+// the form for either demo card would send a slug to a uuid filter and fail, and any actually
+// onboarded real municipality was never listed at all. Split into its own section, populated from
+// the real `municipalities` table (mt_superadmin already has a read policy on it —
+// 202607150004_sw014_auth_rls_policies.sql's municipalities_member_read) via
+// hydrateMasterRealMunicipalities() below, independent of the demo cards (which keep their
+// slug-keyed onboarding button/stats exactly as before — unrelated concern, unchanged).
+function renderMasterCostParametersSection() {
+  if (!masterRealMunicipalities.length) return '<p class="demo" id="masterCostParametersEmpty">Sin municipios reales para editar todavía — conectate con una sesión real o espera a que se onboarde uno.</p>';
+  return masterRealMunicipalities.map((m) => `<article class="card"><h3>${escapeHtml(m.name)}</h3><details class="cost-parameters-toggle" data-cost-parameters-toggle="${m.id}"><summary>Parámetros de costo (Impacto y Ahorros)</summary><div class="cost-parameters-form" data-cost-parameters-form="${m.id}"><p class="demo">Cargando…</p></div></details></article>`).join('');
+}
+function renderMaster() { return `<section id="master" class="section card"><h2>Master Admin MT IT Services</h2><p class="demo">${demoNotice}</p><div class="panel-grid">${municipalities.map((m) => `<article class="card"><h3>${m.name}</h3><p>Plan: ${m.plan}</p><p>Camiones: ${m.trucks} · Rutas: ${m.routes} · Usuarios: ${m.users}</p>${pill(m.status.toLowerCase().includes('operativo') ? 'active' : 'assigned')}<button class="btn-primary" data-onboarding="${m.id}">Onboarding demo</button><p class="demo" data-onboarding-status="${m.id}"></p></article>`).join('')}</div><h3>Parámetros de costo por municipio real</h3><div class="panel-grid" id="masterCostParametersSection">${renderMasterCostParametersSection()}</div><h3>Arquitectura futura</h3><p>${pilotMunicipality.integrationsReady.join(' · ')}</p></section>`; }
 
 // SW-049 (roadmap SW-048's opción E, evaluada y confirmada con el Project Owner): preferencia de
 // operador, no un dato del municipio — se guarda en localStorage del navegador, no en Supabase, así
@@ -2427,6 +2458,25 @@ async function loadMasterCostParameters(municipalityId) {
   if (!result.ok) { container.innerHTML = `<p class="demo">No se pudieron cargar los parámetros: ${result.error.message}</p>`; container.dataset.loaded = ''; return; }
   container.innerHTML = `<p class="demo">${result.configured ? 'Parámetros guardados para este municipio.' : 'Estimado, ajustá con los datos reales de este municipio — todavía no se configuró nada.'}</p>${renderCostParameterFields(result.values)}<div class="controls"><button type="button" class="btn-primary" data-save-cost-parameters="${municipalityId}">Guardar parámetros</button></div><p class="demo" data-cost-params-save-status></p>`;
 }
+// SW-030 (Codex review, PR #88, P1): real municipalities, for Master Admin's cost-parameters
+// section — mt_superadmin already has a read policy on `municipalities` (municipalities_member_read,
+// 202607150004_sw014_auth_rls_policies.sql's has_platform_role('mt_superadmin') branch); nothing
+// read that table before this. Never falls back to the demo municipalities list — a slug isn't a
+// valid municipality_settings.municipality_id, so pretending one is real would just move the bug.
+async function fetchRealMunicipalities(client) {
+  if (!client?.from) return { ok: false, error: { code: 'SUPABASE_CLIENT_MISSING', message: 'No hay backend real configurado.' } };
+  const result = await client.from('municipalities').select('id, name').order('name');
+  if (result.error) return { ok: false, error: { code: result.error.code ?? 'SUPABASE_ERROR', message: result.error.message } };
+  return { ok: true, data: result.data };
+}
+async function hydrateMasterRealMunicipalities() {
+  const client = getAuthClient();
+  const result = await fetchRealMunicipalities(client);
+  if (!result.ok || !result.data.length) return; // no client, no permission, or nothing onboarded yet — keep the "sin municipios reales" placeholder
+  masterRealMunicipalities = result.data;
+  const el = document.getElementById('masterCostParametersSection');
+  if (el) el.innerHTML = renderMasterCostParametersSection();
+}
 async function bootstrapRealBackend(ctx) {
   const client = getAuthClient();
   if (!client || !ctx?.municipality_id) return;
@@ -2500,4 +2550,4 @@ async function bootstrapRealBackend(ctx) {
 // SW-030: hydrateCostParameters() is the same "must work with no session at all" shape —
 // currentMunicipalityId() falls back to the deployment's static config or the bundled demo
 // municipality when there's no signed-in municipal session.
-initAuthGate().then((ctx) => { if (ctx) bootstrapRealBackend(ctx); hydrateRealCitizenSectors(); hydrateCostParameters(); });
+initAuthGate().then((ctx) => { if (ctx) bootstrapRealBackend(ctx); hydrateRealCitizenSectors(); hydrateCostParameters(); hydrateMasterRealMunicipalities(); });
