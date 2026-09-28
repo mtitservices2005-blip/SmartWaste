@@ -8,6 +8,7 @@ import { fetchRoadRoute } from '../shared/osrm-routing.js';
 import { fetchBuildingCount, estimateCollectionMinutes } from '../shared/overpass-buildings.js';
 import { optimizeWaypointOrder } from '../shared/route-optimizer.js';
 import { positionFromGeolocationEvent, shouldSendPosition } from '../shared/browser-geolocation.js';
+import { isAccuracyAcceptable, shouldSendPhonePing, buildPhoneGpsPing } from '../shared/phone-gps.js';
 import { suggestReoptimizedOrder } from '../shared/route-reoptimizer.js';
 import { summarizeRouteRunsByRoute, summarizeRouteRunsByDriver } from '../shared/route-run-stats.js';
 import { routeReadinessStage, ROUTE_READINESS_LABELS } from '../shared/route-readiness.js';
@@ -138,6 +139,17 @@ let driverGpsWatchId = null;
 // SW-062: completion must wait until every in-flight GPS insert has settled; otherwise the final
 // sample can land after completeRoute() has already counted points and calculated distance.
 const driverGpsPendingWrites = new Set();
+// SW-029 fase 1: "Simulado" vs "GPS del teléfono" toggle in the driver's own view — see
+// shared/phone-gps.js and docs/SW029_PHONE_GPS_FASE1.md. Independent of driverGpsWatchId/
+// backendMode above (that's the dispatcher-facing, Supabase-writing "Compartir mi ubicación real"
+// flow); this one works in DEMO_ONLY too, and never touches Supabase in this fase.
+let driverGpsMode = 'simulado';
+let phoneGpsWatchId = null;
+let lastPhonePingAt = 0;
+let phoneWakeLock = null;
+// Vehicles currently in "GPS del teléfono" mode — tickDriverTelemetry() (below) skips advancing
+// their DeviceSimulator while active, so simulated and real points never mix in the same trail.
+const phoneGpsActiveVehicleIds = new Set();
 // Onboarding en vacío (pedido del Project Owner): un municipio real recién conectado a Supabase, sin
 // ningún vehículo/chofer/ruta real todavía, no debería ver los 5 datos demo como si fueran
 // operación real — bootstrapRealBackend() (más abajo) detecta ese caso, vacía los arrays demo, y
@@ -203,6 +215,9 @@ let driverTrailLayer = null;
 let driverCurrentMarker = null;
 let driverPollTimer = null;
 let driverStopsLayer = null;
+// SW-029 fase 1: accuracy circle around the current point, only drawn in "GPS del teléfono" mode
+// (simulated points have no meaningful accuracy to show).
+let driverAccuracyLayer = null;
 const DRIVER_POLL_INTERVAL_MS = 7000; // dentro del rango pedido de 5-10s
 // SW-036: mismo orden de magnitud que DRIVER_POLL_INTERVAL_MS — Realtime queda descartado por no
 // determinístico (ver docs/TECHNICAL_DEBT_REGISTER.md #14), así que el mapa del despachador también
@@ -275,6 +290,10 @@ function tickDriverTelemetry() {
     // (shared/demo-data.js), and 'offline'/'completed' aren't reporting either; advancing the
     // simulator for any of those would move a marker that's supposed to be stationary.
     if (!truck || (truck.state !== 'active' && truck.state !== 'delayed')) return;
+    // SW-029 fase 1: this vehicle's own driver switched to "GPS del teléfono" — startPhoneGps()
+    // records real pings into positionHistory directly; advancing the simulator too would mix
+    // fake and real points into the same trail.
+    if (phoneGpsActiveVehicleIds.has(truckId)) return;
     const path = routeGeometry(truck.routeId);
     // emit() reads path[index % path.length] then increments index, so index === path.length is the
     // first tick that would wrap back to the route's first point. Stop there — this still records
@@ -874,8 +893,19 @@ function renderDriverMobile() {
     <p id="driverStopsProgress"></p>
     <div id="driverMap" class="real-map driver-map" role="application" aria-label="Posición y trazo del vehículo (demo)"></div>
     <p class="demo">${simulationNotice} · trazo histórico vía polling cada ${DRIVER_POLL_INTERVAL_MS / 1000}s (sin Realtime, ver docs/TECHNICAL_DEBT_REGISTER.md #14)</p>
+    ${renderPhoneGpsModeControl()}
     ${backendMode !== 'DEMO_ONLY' ? renderDriverGpsControl() : ''}
   </div>`;
+}
+// SW-029 fase 1: available regardless of backendMode (unlike renderDriverGpsControl() below,
+// gated to a real backend) — this toggle only ever touches the local demo positionHistory store,
+// never Supabase, so it works the same in DEMO_ONLY. "Simulado" stays the default option/selected
+// state on every render, so a page load/re-render never silently switches a driver into phone mode.
+function renderPhoneGpsModeControl() {
+  return `<div class="controls"><label>Posición <select id="driverGpsModeSelect" aria-label="Modo de posición del conductor">
+    <option value="simulado" ${driverGpsMode === 'simulado' ? 'selected' : ''}>Simulado</option>
+    <option value="phone" ${driverGpsMode === 'phone' ? 'selected' : ''}>GPS del teléfono</option>
+  </select></label></div><p id="phoneGpsStatus" class="demo"></p>`;
 }
 function renderDriverGpsControl() {
   return `<div class="controls"><button type="button" class="btn-primary" data-driver-gps="${driverGpsWatchId ? 'stop' : 'start'}">${driverGpsWatchId ? 'Detener GPS real' : 'Compartir mi ubicación real'}</button></div><p id="driverGpsStatus" class="demo"></p>`;
@@ -927,6 +957,100 @@ async function stopDriverGps({ flush = false } = {}) {
   if (flush && driverGpsPendingWrites.size) await Promise.allSettled([...driverGpsPendingWrites]);
   const button = document.querySelector('[data-driver-gps]');
   if (button) { button.dataset.driverGps = 'start'; button.textContent = 'Compartir mi ubicación real'; }
+}
+// SW-029 fase 1: best-effort Wake Lock while "GPS del teléfono" is active, so the phone's screen
+// doesn't sleep mid-route and drop the watchPosition() callback. Feature-detected — silently no-ops
+// on a browser without support (Safari/iOS as of this writing), never surfaced as an error to the
+// driver (rule 5: this must never block the rest of the view).
+async function requestPhoneWakeLock() {
+  if (!('wakeLock' in navigator)) return;
+  try { phoneWakeLock = await navigator.wakeLock.request('screen'); }
+  catch { phoneWakeLock = null; }
+}
+async function releasePhoneWakeLock() {
+  if (!phoneWakeLock) return;
+  try { await phoneWakeLock.release(); } catch { /* already released (e.g. tab hidden) — fine */ }
+  phoneWakeLock = null;
+}
+// SW-029 fase 1: "GPS del teléfono" for the driver's own map — see shared/phone-gps.js and
+// docs/SW029_PHONE_GPS_FASE1.md. Unlike startDriverGps() above (dispatcher-facing, writes to
+// Supabase), this only ever records into the local positionHistory demo store — same adapter path
+// drawDriverPositions()/tickDriverTelemetry() already use for the simulated trail — so it works
+// with no backend configured at all. Never persists to vehicle_positions in this fase (explicit,
+// see point 9 of the fase-1 scope in docs/SW029_PHONE_GPS_FASE1.md).
+function startPhoneGps() {
+  const status = $('#phoneGpsStatus');
+  const truck = trucks.find((item) => item.id === driverVehicleId);
+  if (!truck) return;
+  if (!navigator.geolocation) {
+    if (status) status.textContent = 'Este navegador no soporta geolocalización — se mantiene el modo simulado.';
+    driverGpsMode = 'simulado';
+    syncDriverGpsModeSelect();
+    return;
+  }
+  phoneGpsActiveVehicleIds.add(truck.id);
+  requestPhoneWakeLock();
+  if (status) status.textContent = 'Buscando señal GPS…';
+  phoneGpsWatchId = navigator.geolocation.watchPosition((geoPosition) => {
+    const currentStatus = $('#phoneGpsStatus');
+    const accuracy = geoPosition.coords.accuracy;
+    // Discard rather than draw a misleading position — the driver still sees why nothing moved.
+    if (!isAccuracyAcceptable(accuracy)) {
+      const detail = Number.isFinite(accuracy) ? `precisión ${Math.round(accuracy)}m` : 'sin dato de precisión';
+      if (currentStatus) currentStatus.textContent = `Señal débil (${detail}) — esperando mejor señal…`;
+      return;
+    }
+    const now = Date.now();
+    if (!shouldSendPhonePing(lastPhonePingAt, now)) return;
+    lastPhonePingAt = now;
+    positionHistory.record(buildPhoneGpsPing(geoPosition, { vehicle_id: truck.id }));
+    if (currentStatus) currentStatus.textContent = `GPS activo · precisión ${Math.round(accuracy)}m`;
+    if (driverVehicleId === truck.id) drawDriverPositions();
+  }, (error) => {
+    const currentStatus = $('#phoneGpsStatus');
+    if (!currentStatus) return;
+    // Explicit per-case messages (point 3 of the fase-1 scope) instead of one generic failure —
+    // these are the 3 standard GeolocationPositionError codes, same numbering the spec defines.
+    if (error.code === 1) {
+      currentStatus.textContent = 'Permiso de ubicación denegado. Habilitalo en la configuración del navegador para usar el GPS del teléfono.';
+      // Codex review (PR #87, P2): PERMISSION_DENIED is terminal — the browser stops calling this
+      // watch back at all once denied, so leaving driverGpsMode/phoneGpsActiveVehicleIds/the Wake
+      // Lock as "active" would strand the simulator paused and the screen held awake for a watch
+      // that can never produce another position, with the selector still claiming phone mode is on.
+      // POSITION_UNAVAILABLE/TIMEOUT (below) aren't torn down: watchPosition keeps retrying those on
+      // its own and can still recover.
+      stopPhoneGps();
+      driverGpsMode = 'simulado';
+      syncDriverGpsModeSelect();
+      drawDriverPositions();
+    }
+    else if (error.code === 2) currentStatus.textContent = 'GPS no disponible en este momento (sin señal).';
+    else if (error.code === 3) currentStatus.textContent = 'Tiempo de espera agotado buscando señal GPS.';
+    else currentStatus.textContent = `No se pudo obtener tu ubicación: ${error.message}`;
+  }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 });
+}
+function stopPhoneGps() {
+  if (phoneGpsWatchId != null) navigator.geolocation.clearWatch(phoneGpsWatchId);
+  phoneGpsWatchId = null;
+  phoneGpsActiveVehicleIds.clear();
+  releasePhoneWakeLock();
+  if (driverAccuracyLayer) { driverAccuracyLayer.remove(); driverAccuracyLayer = null; }
+}
+// A page re-render (e.g. switching driver vehicle) rebuilds #driverGpsModeSelect from
+// driverGpsMode — this only matters for the one case where startPhoneGps() itself forces the mode
+// back to 'simulado' (no geolocation support) without a full re-render already having happened.
+function syncDriverGpsModeSelect() {
+  const select = document.getElementById('driverGpsModeSelect');
+  if (select) select.value = driverGpsMode;
+}
+function setDriverGpsMode(mode) {
+  if (mode === driverGpsMode) return;
+  stopPhoneGps();
+  driverGpsMode = mode;
+  if (mode === 'phone') startPhoneGps();
+  const status = $('#phoneGpsStatus');
+  if (mode === 'simulado' && status) status.textContent = '';
+  drawDriverPositions(); // immediate redraw — marker color/accuracy circle shouldn't wait up to DRIVER_POLL_INTERVAL_MS
 }
 // Ítem #12 de docs/TECHNICAL_DEBT_REGISTER.md: la vista móvil del conductor vivía embebida como un
 // <div class="mobile"> de unas pocas líneas dentro de renderMunicipal() — sin sección propia ni
@@ -1187,7 +1311,15 @@ function drawDriverPositions() {
   if (driverPlannedLayer) driverPlannedLayer.remove();
   driverPlannedLayer = L.polyline(routeGeometry(truck.routeId), { color: '#94a3b8', weight: 4, opacity: .6, dashArray: '6 8' }).addTo(driverMap);
 
-  const history = positionHistory.listPositions(driverVehicleId);
+  // Codex review (PR #87, P2): positionHistory accumulates both the simulator's seed/backfill/tick
+  // points (source: 'simulator' or absent, see the module-init backfill loop) and real phone pings
+  // (source: 'phone', buildPhoneGpsPing()) for the same vehicle — reading the raw array here drew
+  // one mixed trail (a line jumping between the planned route and the handset) and derived stop
+  // status from whichever points happened to exist, regardless of which mode is actually showing.
+  // Filtering by source, not clearing/partitioning the store itself, keeps both histories intact so
+  // switching modes back and forth never loses either one.
+  const rawHistory = positionHistory.listPositions(driverVehicleId);
+  const history = driverGpsMode === 'phone' ? rawHistory.filter((point) => point.source === 'phone') : rawHistory.filter((point) => point.source !== 'phone');
   const trail = history.map((point) => [point.latitude, point.longitude]);
   if (driverTrailLayer) driverTrailLayer.remove();
   driverTrailLayer = trail.length > 1 ? L.polyline(trail, { color: '#0f7b4f', weight: 5, opacity: .9 }).addTo(driverMap) : null;
@@ -1211,9 +1343,18 @@ function drawDriverPositions() {
   }
 
   if (driverCurrentMarker) driverCurrentMarker.remove();
+  if (driverAccuracyLayer) { driverAccuracyLayer.remove(); driverAccuracyLayer = null; }
   const last = history[history.length - 1];
   if (last) {
-    driverCurrentMarker = L.circleMarker([last.latitude, last.longitude], { radius: 9, color: '#155eef', weight: 3, fillColor: '#155eef', fillOpacity: .9 }).addTo(driverMap);
+    // SW-029 fase 1: a real phone GPS point gets its own marker color (distinct from the simulated
+    // blue) plus an accuracy circle — same trail/planned-route layers above already work for either
+    // source, since both are just points in positionHistory.
+    const isPhoneReal = driverGpsMode === 'phone' && last.source === 'phone';
+    const markerColor = isPhoneReal ? '#dc2626' : '#155eef';
+    driverCurrentMarker = L.circleMarker([last.latitude, last.longitude], { radius: 9, color: markerColor, weight: 3, fillColor: markerColor, fillOpacity: .9 }).addTo(driverMap);
+    if (isPhoneReal && last.accuracy) {
+      driverAccuracyLayer = L.circle([last.latitude, last.longitude], { radius: last.accuracy, color: markerColor, weight: 1, fillColor: markerColor, fillOpacity: .12 }).addTo(driverMap);
+    }
     driverMap.panTo([last.latitude, last.longitude]);
   }
 }
@@ -1514,6 +1655,11 @@ async function driverCompleteRoute(routeId) {
   // Stop producing samples, then wait for the last accepted browser event to reach Supabase before
   // completeRoute() calculates distance and stamps the final GPS metrics on route_runs.
   await stopDriverGps({ flush: true });
+  // Codex review (PR #87, P2): this only stopped the real GPS-sharing watch above — a driver who
+  // had switched to "GPS del teléfono" (SW-029, demo/tour mode) kept that watch, its Wake Lock, and
+  // positionHistory recording running after finishing the route, with no way back to "Simulado"
+  // short of manually toggling the selector.
+  if (driverGpsMode === 'phone') { setDriverGpsMode('simulado'); syncDriverGpsModeSelect(); }
   await completeRouteManually(routeId);
 }
 async function completeRouteManually(routeId) {
@@ -2020,8 +2166,18 @@ $('#evidence').addEventListener('change', (event) => {
   $('#evidencePreview').textContent = result.ok ? `${file?.name ?? 'Sin archivo'} · ${result.reason === 'no_file' ? 'sin archivo' : uploadNote}` : `Evidencia rechazada: ${result.reason}`;
 });
 $('#driverVehicleSelect').addEventListener('change', (event) => {
+  // SW-029 fase 1: a phone GPS watch is tied to whichever vehicle was selected when it started —
+  // switching vehicles while it's active would keep recording pings for the old one while the
+  // driver looks at a different vehicle's trail. Reset to "Simulado" on every vehicle switch;
+  // there's no legitimate reason to keep a real GPS watch pointed at a vehicle you've navigated
+  // away from in the demo's vehicle picker.
+  setDriverGpsMode('simulado');
+  syncDriverGpsModeSelect();
   driverVehicleId = event.target.value;
   drawDriverPositions(); // also refreshes #driverRouteInfo for the newly selected vehicle
+});
+document.addEventListener('change', (event) => {
+  if (event.target.id === 'driverGpsModeSelect') setDriverGpsMode(event.target.value);
 });
 function requestGeolocation() { const target = $('#geoStatus'); if (!navigator.geolocation) { target.textContent = 'Ubicación no disponible en este navegador.'; return; } target.textContent = 'Solicitando permiso de ubicación...'; navigator.geolocation.getCurrentPosition((pos) => { target.textContent = `Ubicación recibida localmente: ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)} (no enviada)`; }, (err) => { target.textContent = `Permiso denegado, timeout o ubicación no disponible: ${err.message}`; }, { enableHighAccuracy:true, timeout:8000, maximumAge:60000 }); }
 if (!redirectLegacyHash()) showSection(sectionFromHash());
