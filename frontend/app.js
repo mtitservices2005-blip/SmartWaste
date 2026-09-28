@@ -1011,7 +1011,19 @@ function startPhoneGps() {
     if (!currentStatus) return;
     // Explicit per-case messages (point 3 of the fase-1 scope) instead of one generic failure —
     // these are the 3 standard GeolocationPositionError codes, same numbering the spec defines.
-    if (error.code === 1) currentStatus.textContent = 'Permiso de ubicación denegado. Habilitalo en la configuración del navegador para usar el GPS del teléfono.';
+    if (error.code === 1) {
+      currentStatus.textContent = 'Permiso de ubicación denegado. Habilitalo en la configuración del navegador para usar el GPS del teléfono.';
+      // Codex review (PR #87, P2): PERMISSION_DENIED is terminal — the browser stops calling this
+      // watch back at all once denied, so leaving driverGpsMode/phoneGpsActiveVehicleIds/the Wake
+      // Lock as "active" would strand the simulator paused and the screen held awake for a watch
+      // that can never produce another position, with the selector still claiming phone mode is on.
+      // POSITION_UNAVAILABLE/TIMEOUT (below) aren't torn down: watchPosition keeps retrying those on
+      // its own and can still recover.
+      stopPhoneGps();
+      driverGpsMode = 'simulado';
+      syncDriverGpsModeSelect();
+      drawDriverPositions();
+    }
     else if (error.code === 2) currentStatus.textContent = 'GPS no disponible en este momento (sin señal).';
     else if (error.code === 3) currentStatus.textContent = 'Tiempo de espera agotado buscando señal GPS.';
     else currentStatus.textContent = `No se pudo obtener tu ubicación: ${error.message}`;
@@ -1299,7 +1311,15 @@ function drawDriverPositions() {
   if (driverPlannedLayer) driverPlannedLayer.remove();
   driverPlannedLayer = L.polyline(routeGeometry(truck.routeId), { color: '#94a3b8', weight: 4, opacity: .6, dashArray: '6 8' }).addTo(driverMap);
 
-  const history = positionHistory.listPositions(driverVehicleId);
+  // Codex review (PR #87, P2): positionHistory accumulates both the simulator's seed/backfill/tick
+  // points (source: 'simulator' or absent, see the module-init backfill loop) and real phone pings
+  // (source: 'phone', buildPhoneGpsPing()) for the same vehicle — reading the raw array here drew
+  // one mixed trail (a line jumping between the planned route and the handset) and derived stop
+  // status from whichever points happened to exist, regardless of which mode is actually showing.
+  // Filtering by source, not clearing/partitioning the store itself, keeps both histories intact so
+  // switching modes back and forth never loses either one.
+  const rawHistory = positionHistory.listPositions(driverVehicleId);
+  const history = driverGpsMode === 'phone' ? rawHistory.filter((point) => point.source === 'phone') : rawHistory.filter((point) => point.source !== 'phone');
   const trail = history.map((point) => [point.latitude, point.longitude]);
   if (driverTrailLayer) driverTrailLayer.remove();
   driverTrailLayer = trail.length > 1 ? L.polyline(trail, { color: '#0f7b4f', weight: 5, opacity: .9 }).addTo(driverMap) : null;
@@ -1635,6 +1655,11 @@ async function driverCompleteRoute(routeId) {
   // Stop producing samples, then wait for the last accepted browser event to reach Supabase before
   // completeRoute() calculates distance and stamps the final GPS metrics on route_runs.
   await stopDriverGps({ flush: true });
+  // Codex review (PR #87, P2): this only stopped the real GPS-sharing watch above — a driver who
+  // had switched to "GPS del teléfono" (SW-029, demo/tour mode) kept that watch, its Wake Lock, and
+  // positionHistory recording running after finishing the route, with no way back to "Simulado"
+  // short of manually toggling the selector.
+  if (driverGpsMode === 'phone') { setDriverGpsMode('simulado'); syncDriverGpsModeSelect(); }
   await completeRouteManually(routeId);
 }
 async function completeRouteManually(routeId) {
