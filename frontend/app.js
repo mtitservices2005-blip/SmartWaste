@@ -670,7 +670,23 @@ function renderDriverList() {
 // a driver created here has no access account yet, only a record.
 // SW-054: driver list moved out to renderFlotaPanel() (now lives alongside the vehicle list, both
 // below the forms) — this function is creation-only now, matching its own heading.
+// SW-063 (encontrado probando el cutover en staging real): OPS_SUBVIEW_ROLES.flota (auth-gate.js)
+// incluye a 'driver' para que pueda VER la flota (p. ej. su propio vehículo asignado), pero este
+// formulario de alta no tenía ningún gating propio — se renderizaba igual para cualquier rol que
+// viera la sub-vista. docs/ROLE_PERMISSION_MATRIX.md nunca le dio a 'driver' permiso de crear
+// vehículos/choferes (eso es 'dispatcher'/'municipal_admin'), y con el cutover de SW-063 la base
+// real ahora rechaza esa escritura con un error de RLS en vez de fallar en silencio — pero un
+// chofer real segía viendo el botón como si pudiera usarlo. Con backend real conectado y rol
+// 'driver', se oculta el formulario en vez de dejar que el usuario choque contra un error de
+// permisos que la UI ya podía haber evitado. Sin backend real (demo/local) no cambia nada —
+// driverAuthContext solo existe una vez que bootstrapRealBackend() resolvió una sesión real.
 function renderFleetManagement() {
+  if (driverAuthContext?.role === 'driver') {
+    return `<div class="card" id="fleetManagement">
+      <h3>Registrar nuevo vehículo o chofer</h3>
+      <p class="demo">Solo dispatcher o municipal_admin pueden dar de alta vehículos o choferes.</p>
+    </div>`;
+  }
   return `<div class="card" id="fleetManagement">
     <h3>Registrar nuevo vehículo o chofer</h3>
     <p class="demo">${demoNotice} · El chofer queda registrado sin cuenta de acceso todavía.</p>
