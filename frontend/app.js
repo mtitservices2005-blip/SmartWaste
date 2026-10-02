@@ -717,6 +717,15 @@ function refreshFleetSelects() {
   // outerHTML (not innerHTML) since routeFocusSelect() also decides whether the element is disabled.
   const simVehicleSelect = $('#simVehicle');
   if (simVehicleSelect) simVehicleSelect.outerHTML = routeFocusSelect();
+  // SW-063 (bug encontrado probando en staging real): renderFlotaPanel()/renderFleetManagement()
+  // solo corren UNA VEZ, al construir el HTML estático inicial — antes de que initAuthGate() resuelva
+  // la sesión real. driverAuthContext todavía es null en ese momento, así que el gating por rol de
+  // renderFleetManagement() (agregado más arriba) nunca se re-evaluaba después del login: un chofer
+  // real seguía viendo el formulario de alta aunque el código ya "supiera" que debía ocultarlo.
+  // refreshFleetSelects() ya se llama desde bootstrapRealBackend() tras resolver la sesión, así que
+  // es el lugar correcto para también re-dibujar esta tarjeta con el rol ya conocido.
+  const fleetManagement = $('#fleetManagement');
+  if (fleetManagement) fleetManagement.outerHTML = renderFleetManagement();
 }
 // SW-063 (cutover a producción, ver docs/TECHNICAL_DEBT_REGISTER.md): cuando hay backend real
 // configurado, deja de ser un espejo "mejor esfuerzo" — es la única fuente de verdad. Si la
