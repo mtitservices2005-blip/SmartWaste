@@ -670,7 +670,23 @@ function renderDriverList() {
 // a driver created here has no access account yet, only a record.
 // SW-054: driver list moved out to renderFlotaPanel() (now lives alongside the vehicle list, both
 // below the forms) — this function is creation-only now, matching its own heading.
+// SW-063 (encontrado probando el cutover en staging real): OPS_SUBVIEW_ROLES.flota (auth-gate.js)
+// incluye a 'driver' para que pueda VER la flota (p. ej. su propio vehículo asignado), pero este
+// formulario de alta no tenía ningún gating propio — se renderizaba igual para cualquier rol que
+// viera la sub-vista. docs/ROLE_PERMISSION_MATRIX.md nunca le dio a 'driver' permiso de crear
+// vehículos/choferes (eso es 'dispatcher'/'municipal_admin'), y con el cutover de SW-063 la base
+// real ahora rechaza esa escritura con un error de RLS en vez de fallar en silencio — pero un
+// chofer real segía viendo el botón como si pudiera usarlo. Con backend real conectado y rol
+// 'driver', se oculta el formulario en vez de dejar que el usuario choque contra un error de
+// permisos que la UI ya podía haber evitado. Sin backend real (demo/local) no cambia nada —
+// driverAuthContext solo existe una vez que bootstrapRealBackend() resolvió una sesión real.
 function renderFleetManagement() {
+  if (driverAuthContext?.role === 'driver') {
+    return `<div class="card" id="fleetManagement">
+      <h3>Registrar nuevo vehículo o chofer</h3>
+      <p class="demo">Solo dispatcher o municipal_admin pueden dar de alta vehículos o choferes.</p>
+    </div>`;
+  }
   return `<div class="card" id="fleetManagement">
     <h3>Registrar nuevo vehículo o chofer</h3>
     <p class="demo">${demoNotice} · El chofer queda registrado sin cuenta de acceso todavía.</p>
@@ -701,23 +717,33 @@ function refreshFleetSelects() {
   // outerHTML (not innerHTML) since routeFocusSelect() also decides whether the element is disabled.
   const simVehicleSelect = $('#simVehicle');
   if (simVehicleSelect) simVehicleSelect.outerHTML = routeFocusSelect();
+  // SW-063 (bug encontrado probando en staging real): renderFlotaPanel()/renderFleetManagement()
+  // solo corren UNA VEZ, al construir el HTML estático inicial — antes de que initAuthGate() resuelva
+  // la sesión real. driverAuthContext todavía es null en ese momento, así que el gating por rol de
+  // renderFleetManagement() (agregado más arriba) nunca se re-evaluaba después del login: un chofer
+  // real seguía viendo el formulario de alta aunque el código ya "supiera" que debía ocultarlo.
+  // refreshFleetSelects() ya se llama desde bootstrapRealBackend() tras resolver la sesión, así que
+  // es el lugar correcto para también re-dibujar esta tarjeta con el rol ya conocido.
+  const fleetManagement = $('#fleetManagement');
+  if (fleetManagement) fleetManagement.outerHTML = renderFleetManagement();
 }
-// SW-034: best-effort mirror of a mutation to the real adapter, on top of the existing demo-
-// adapter write every mutation handler already does first (unchanged, so the UI still updates
-// instantly regardless of network latency or whether Supabase is configured at all). Appends a
-// note to the given status element only on failure — success stays silent since the optimistic
-// demo update already told the user it worked. Returns the real row's data on success (null
-// otherwise) so callers that need the real id (e.g. to later link a driver's login account) can
-// keep it — the demo id and the real id are never the same value.
-async function mirrorToRealAdapter(promise, status) {
-  if (!realAdapter) return null;
+// SW-063 (cutover a producción, ver docs/TECHNICAL_DEBT_REGISTER.md): cuando hay backend real
+// configurado, deja de ser un espejo "mejor esfuerzo" — es la única fuente de verdad. Si la
+// escritura real falla, el error se muestra al usuario y la función que llamó a esto NO debe crear
+// ni actualizar ningún objeto demo como si hubiera funcionado. Devuelve { ok:true, data } o
+// { ok:false }. Sin backend real configurado (demo/local), el comportamiento no cambia en absoluto
+// — este helper directamente no se usa en ese camino, es decisión de cada caller.
+async function requireRealAdapter(promise, status, failureMessage) {
   try {
     const result = await promise;
-    if (!result?.ok) { if (status) status.textContent += ` (no se pudo sincronizar con Supabase: ${result?.error?.message ?? 'error desconocido'})`; return null; }
-    return result.data;
+    if (!result?.ok) {
+      if (status) status.textContent = failureMessage(result?.error?.message ?? 'error desconocido');
+      return { ok: false };
+    }
+    return { ok: true, data: result.data };
   } catch (error) {
-    if (status) status.textContent += ` (no se pudo sincronizar con Supabase: ${error.message})`;
-    return null;
+    if (status) status.textContent = failureMessage(error.message);
+    return { ok: false };
   }
 }
 // Extraído de createVehicleFromForm/createDriverFromForm (antes duplicaban la escritura dual +
@@ -725,28 +751,46 @@ async function mirrorToRealAdapter(promise, status) {
 // más abajo) pueda crear el primer vehículo/chofer sin reimplementar esa lógica ni depender de los
 // ids del formulario de Flota, que viven en otro panel del DOM.
 async function createVehicle({ unit, plate = '', maxStops = DEFAULT_MAX_STOPS }, status) {
+  // SW-063: con backend real configurado, la base real manda — si falla, no se crea nada en
+  // pantalla (antes: el objeto demo se creaba igual y el fallo del espejo era un texto chiquito).
+  if (realAdapter) {
+    const result = await requireRealAdapter(
+      realAdapter.createVehicle({ code: unit, plate, max_stops: maxStops }),
+      status,
+      (message) => `No se pudo crear el vehículo en la base real: ${message}`
+    );
+    if (!result.ok) return null;
+    const created = operationsAdapter.createVehicle({ unit, name: unit, plate, max_stops: maxStops });
+    created.real_id = result.data.id;
+    trucks.push(created);
+    refreshFleetSelects();
+    return created;
+  }
   const created = operationsAdapter.createVehicle({ unit, name: unit, plate, max_stops: maxStops });
   trucks.push(created);
   refreshFleetSelects();
-  // Same real-id linking as createDriver() below — a real vehicles row gets its own Postgres id,
-  // kept on the demo-shaped truck object so a later route assignment can reference the real row too.
-  const realVehicle = await mirrorToRealAdapter(realAdapter?.createVehicle({ code: unit, plate, max_stops: maxStops }), status);
-  if (realVehicle) created.real_id = realVehicle.id;
   return created;
 }
 async function createDriver({ name, phone = '', email } = {}, status) {
+  // SW-063: mismo cambio que createVehicle() — ver ese comentario. El id real sigue siendo
+  // necesario para que createDriverAccount() pueda llamar a la Edge Function sobre una fila que
+  // de verdad existe en Supabase (SW-050: el email también se persiste ahí, no solo en memoria).
+  if (realAdapter) {
+    const result = await requireRealAdapter(
+      realAdapter.createDriver({ display_name: name, email }),
+      status,
+      (message) => `No se pudo crear el chofer en la base real: ${message}`
+    );
+    if (!result.ok) return null;
+    const created = operationsAdapter.createDriver({ name, phone, email });
+    created.real_id = result.data.id;
+    drivers.push(created);
+    refreshFleetSelects();
+    return created;
+  }
   const created = operationsAdapter.createDriver({ name, phone, email });
   drivers.push(created);
   refreshFleetSelects();
-  // The real drivers row gets its own id (a Postgres uuid, never the same as the demo id above) —
-  // createDriverAccount() needs THAT id to call the Edge Function against a row that actually
-  // exists in Supabase, so it's kept on the demo-shaped object rather than discarded.
-  // SW-050: email is now persisted on the real drivers row too (supabase/migrations/
-  // 202607150014_sw050_driver_email.sql) — before this it only lived on `created` above, in this
-  // browser tab's memory, so "Crear cuenta de acceso" silently stopped being possible forever the
-  // moment the page reloaded and re-hydrated this driver from Supabase without an email.
-  const realDriver = await mirrorToRealAdapter(realAdapter?.createDriver({ display_name: name, email }), status);
-  if (realDriver) created.real_id = realDriver.id;
   return created;
 }
 async function createVehicleFromForm() {
@@ -754,6 +798,7 @@ async function createVehicleFromForm() {
   const unit = unitInput?.value.trim();
   if (!unit) { if (status) status.textContent = 'Ingresa una unidad para el vehículo.'; return; }
   const created = await createVehicle({ unit, plate: plateInput?.value.trim() ?? '', maxStops: Number(maxStopsInput?.value) || DEFAULT_MAX_STOPS }, status);
+  if (!created) return; // requireRealAdapter() ya puso el mensaje de error en `status`
   if (unitInput) unitInput.value = ''; if (plateInput) plateInput.value = ''; if (maxStopsInput) maxStopsInput.value = '20';
   if (status) status.textContent = `Vehículo "${created.unit}" registrado.`;
 }
@@ -762,6 +807,7 @@ async function createDriverFromForm() {
   const name = nameInput?.value.trim();
   if (!name) { if (status) status.textContent = 'Ingresa un nombre para el chofer.'; return; }
   const created = await createDriver({ name, phone: phoneInput?.value.trim() ?? '', email: emailInput?.value.trim() || undefined }, status);
+  if (!created) return; // requireRealAdapter() ya puso el mensaje de error en `status`
   if (nameInput) nameInput.value = ''; if (phoneInput) phoneInput.value = ''; if (emailInput) emailInput.value = '';
   if (status) status.textContent = `Chofer "${created.name}" registrado (sin cuenta de acceso todavía).`;
 }
@@ -814,6 +860,7 @@ async function onboardDriverStep() {
   // acceso" (renderDriverList(), requiere driver.email) nunca aparecía para un chofer dado de alta
   // acá, a diferencia del formulario normal de Flota (createDriverFromForm()) que sí lo pide.
   onboardingDriver = await createDriver({ name, phone: phoneInput?.value.trim() ?? '', email: emailInput?.value.trim() || undefined }, status);
+  if (!onboardingDriver) { const overlay = $('#onboardingOverlay'); if (overlay) overlay.outerHTML = renderOnboardingOverlay(); return; } // requireRealAdapter() ya puso el error en `status`
   finishOnboardingHandoff();
 }
 // Cierra el wizard y entrega el control al flujo de "Crear ruta" que ya existe (mismo mapa/OSRM/
@@ -1557,7 +1604,20 @@ async function assignTruckToRoute(route, truck) {
   // synchronously, uncaught here, silently killing this whole async function with nothing visible
   // to the user ("Asignar vehículo" does nothing). Same as assignDriverToTruck()/
   // startRouteManually()/completeRouteManually() already do.
-  if (!route.real_id) operationsAdapter.assignVehicle(route.id, truck.id);
+  // SW-063: con vehículo real, la base real manda — se llama ANTES de mutar nada local, y si falla
+  // no se asigna nada en pantalla (antes: se asignaba local siempre, el espejo al final era mudo).
+  if (truck.real_id) {
+    const realRouteId = route.real_id ?? route.id;
+    try {
+      const result = await realAdapter.assignVehicle(realRouteId, truck.real_id);
+      if (!result?.ok) { showToast(`No se pudo asignar ${truck.unit} en la base real: ${result?.error?.message ?? 'error desconocido'}`, { type: 'error' }); return; }
+    } catch (error) {
+      showToast(`No se pudo asignar ${truck.unit} en la base real: ${error.message}`, { type: 'error' });
+      return;
+    }
+  } else {
+    operationsAdapter.assignVehicle(route.id, truck.id);
+  }
   route.truckId = truck.unit;
   // SW-052: real routes repeat 2-3x/week with the same vehicle — the backend already opens a
   // brand-new route_run when one gets (re)assigned after the previous one finished
@@ -1578,10 +1638,6 @@ async function assignTruckToRoute(route, truck) {
   truck.routeId = route.id; truck.state = 'active'; truck.positionIndex = 0; truck.progress = 0; truck.sector = route.sector ?? truck.sector; truck.updatedAt = 'Recién asignado';
   simState[truck.id] = { index: 0, progress: 0 };
   registerDriverSimulator(truck);
-  if (truck.real_id) {
-    const realRouteId = route.real_id ?? route.id;
-    await mirrorToRealAdapter(realAdapter?.assignVehicle(realRouteId, truck.real_id));
-  }
 }
 // Triggered from renderRouteDetail()'s "Asignar vehículo" action (route created without one).
 async function assignVehicleToExistingRoute(routeId, vehicleId) {
@@ -1660,8 +1716,17 @@ async function assignDriverToTruck(vehicleId, driverId) {
     // SW-055: a real truck paired with a driver that hasn't finished syncing (no real_id yet) used
     // to silently skip the actual Supabase write here — the local assignment below would still look
     // successful forever. Now says so instead of looking identical to a real success.
-    if (driver.real_id) { await mirrorToRealAdapter(realAdapter?.assignDriverToVehicle(truck.real_id, driver.real_id)); showToast(`${driver.name} asignado a ${truck.unit}.`); }
-    else showToast(`"${driver.name}" todavía no terminó de sincronizarse — la asignación quedó solo local, no en el servidor.`, { type: 'error' });
+    if (!driver.real_id) { showToast(`"${driver.name}" todavía no terminó de sincronizarse — no se puede asignar todavía.`, { type: 'error' }); return; }
+    // SW-063: la base real manda ANTES de mutar nada local — si falla, no se asigna nada en
+    // pantalla (antes: el espejo era mudo y la asignación local quedaba igual aunque fallara).
+    try {
+      const result = await realAdapter.assignDriverToVehicle(truck.real_id, driver.real_id);
+      if (!result?.ok) { showToast(`No se pudo asignar ${driver.name} en la base real: ${result?.error?.message ?? 'error desconocido'}`, { type: 'error' }); return; }
+    } catch (error) {
+      showToast(`No se pudo asignar ${driver.name} en la base real: ${error.message}`, { type: 'error' });
+      return;
+    }
+    showToast(`${driver.name} asignado a ${truck.unit}.`);
   } else {
     operationsAdapter.assignDriverToVehicle(truck.id, driver.id);
     showToast(`${driver.name} asignado a ${truck.unit}.`);
@@ -1739,9 +1804,24 @@ function previewRouteReoptimization(routeId) {
 async function startRouteManually(routeId) {
   const route = routeById(routeId);
   if (!route) return;
-  if (!route.real_id) operationsAdapter.startRoute(routeId);
+  // SW-063: con ruta real, la base real manda ANTES de mutar nada local — si falla, no se marca
+  // "iniciada" en pantalla (antes: se marcaba igual, optimista, y el fallo del espejo solo avisaba
+  // después sin revertir nada).
+  let startedAt = route.started_at ?? new Date().toISOString();
+  if (route.real_id) {
+    try {
+      const result = await realAdapter.startRoute(route.real_id);
+      if (!result?.ok) { showToast(`No se pudo iniciar "${route.name}" en la base real: ${result?.error?.message ?? 'error desconocido'}`, { type: 'error' }); return; }
+      if (result.data?.started_at) startedAt = result.data.started_at; // el timestamp real gana sobre el sello local optimista
+    } catch (error) {
+      showToast(`No se pudo iniciar "${route.name}" en la base real: ${error.message}`, { type: 'error' });
+      return;
+    }
+  } else {
+    operationsAdapter.startRoute(routeId);
+  }
   route.status = 'started';
-  if (!route.started_at) route.started_at = new Date().toISOString();
+  if (!route.started_at) route.started_at = startedAt;
   showToast(`Ruta "${route.name}" iniciada.`);
   // Only re-opens the route detail drawer if it's already showing this route (admin/dispatcher
   // clicking "Iniciar ruta" there) — this is also reachable from the driver's own Conductor view
@@ -1753,12 +1833,6 @@ async function startRouteManually(routeId) {
   if (driverStartControl && driverTruck?.routeId === routeId) driverStartControl.innerHTML = driverRouteLifecycleControl(driverTruck);
   $('#routeList').innerHTML = renderRoutes(routes);
   refreshResumen();
-  if (realAdapter) {
-    const realRouteId = route.real_id ?? routeId;
-    const updated = await mirrorToRealAdapter(realAdapter.startRoute(realRouteId));
-    if (!updated) showToast(`"${route.name}" se inició localmente, pero no se pudo confirmar con el servidor.`, { type: 'error' });
-    if (updated?.started_at) route.started_at = updated.started_at; // el timestamp real gana sobre el sello local optimista
-  }
 }
 // SW-044 (revisión tras pruebas en staging): ties the driver's own route lifecycle buttons
 // (driverRouteLifecycleControl()) to their GPS sharing automatically — one tap to start the route
@@ -1784,19 +1858,36 @@ async function driverCompleteRoute(routeId) {
 async function completeRouteManually(routeId) {
   const route = routeById(routeId);
   if (!route) return;
+  // SW-063: con ruta real, la base real manda ANTES de mutar nada local — si falla, no se marca
+  // "completada" en pantalla. Como consecuencia, ya no hace falta re-renderizar el detalle dos
+  // veces (antes: una vez optimista mientras la escritura real seguía en vuelo, y otra después para
+  // corregir la carrera documentada en el bug de SW-045/staging — esa carrera ya no existe porque
+  // ahora se espera la confirmación real antes de la única mutación/render local).
+  let updated;
+  if (route.real_id) {
+    try {
+      const result = await realAdapter.completeRoute(route.real_id);
+      if (!result?.ok) { showToast(`No se pudo completar "${route.name}" en la base real: ${result?.error?.message ?? 'error desconocido'}`, { type: 'error' }); return; }
+      updated = result.data;
+    } catch (error) {
+      showToast(`No se pudo completar "${route.name}" en la base real: ${error.message}`, { type: 'error' });
+      return;
+    }
+  } else {
+    operationsAdapter.completeRoute(routeId);
+  }
   route.status = 'completed'; route.progress = 100;
   // SW-044: only stamps if this route was actually started via startRouteManually() above —
   // completing without starting first stays possible (unchanged from before this hito, e.g.
   // skipping straight to "Completar"), it just means no measured duration, same as any demo route.
-  if (route.started_at && !route.completed_at) route.completed_at = new Date().toISOString();
-  // SW-055 (encontrado en vivo verificando el toast de esta misma ruta): faltaba el mismo guard que
-  // ya tienen startRouteManually()/assignTruckToRoute() — operationsAdapter (el clon demo, que nunca
-  // aprende sobre una ruta real hidratada) tiraba "Route not found" sin capturar, matando el resto de
-  // esta función en silencio para CUALQUIER ruta real: nunca llegaba a escribir en Supabase, nunca
-  // mostraba el aviso nuevo. El dato local (route.completed_at arriba) sí quedaba puesto, por eso la
-  // pantalla mostraba "medido" aunque el servidor nunca se enterara — la causa real detrás de lo que
-  // SW-053 solo corrigió a medias.
-  if (!route.real_id) operationsAdapter.completeRoute(routeId);
+  if (route.started_at && !route.completed_at) route.completed_at = updated?.completed_at ?? new Date().toISOString();
+  // SW-045: distance_meters solo llega si hubo suficiente rastro de GPS real durante la corrida —
+  // ausente para una ruta demo o una real sin GPS activo, y ahí se sigue mostrando la distancia
+  // estimada del trazo dibujado (route.distanceKm), sin cambios.
+  if (updated?.distance_meters != null) route.real_distance_meters = updated.distance_meters;
+  if (updated?.gps_points_count != null) route.gps_points_count = updated.gps_points_count;
+  if (updated?.gps_started_at) route.gps_started_at = updated.gps_started_at;
+  if (updated?.gps_ended_at) route.gps_ended_at = updated.gps_ended_at;
   const truck = trucks.find((item) => item.routeId === routeId);
   if (truck) { truck.state = 'completed'; truck.progress = 100; }
   // SW-055: found repeatedly in staging — completing a route silently frees its vehicle
@@ -1816,25 +1907,6 @@ async function completeRouteManually(routeId) {
   // was true when #supervisor was last rendered, even though route.status just changed above.
   refreshSupervisor();
   refreshResumen();
-  if (realAdapter) {
-    const realRouteId = route.real_id ?? routeId;
-    const updated = await mirrorToRealAdapter(realAdapter.completeRoute(realRouteId));
-    if (!updated) showToast(`"${route.name}" se completó localmente, pero no se pudo confirmar con el servidor.`, { type: 'error' });
-    if (updated?.completed_at) route.completed_at = updated.completed_at; // el timestamp real gana sobre el sello local optimista
-    // SW-045: distance_meters solo llega si hubo suficiente rastro de GPS real durante la corrida —
-    // ausente para una ruta demo o una real sin GPS activo, y ahí se sigue mostrando la distancia
-    // estimada del trazo dibujado (route.distanceKm), sin cambios.
-    if (updated?.distance_meters != null) route.real_distance_meters = updated.distance_meters;
-    if (updated?.gps_points_count != null) route.gps_points_count = updated.gps_points_count;
-    if (updated?.gps_started_at) route.gps_started_at = updated.gps_started_at;
-    if (updated?.gps_ended_at) route.gps_ended_at = updated.gps_ended_at;
-    // Bug real encontrado en staging: refreshRouteDurationHistory() (disparado desde selectRoute()
-    // más arriba) corría ANTES de que esta escritura terminara, así que la consulta de histórico
-    // llegaba a Supabase antes de que completed_at existiera — mostraba "medido" en la fila de
-    // duración (dato local optimista) pero "sin corridas medidas" en el histórico (leído de la base
-    // vieja) al mismo tiempo. Repetir la consulta acá, ya con la escritura confirmada, corrige eso.
-    if (selectedRouteId === routeId) selectRoute(routeId);
-  }
 }
 // SW-039 audit: Supervisor's "Verificar" button used to only set route.status directly — it never
 // even called the demo adapter's own verifyRoute(), let alone mirrored to a real backend, unlike
@@ -1843,14 +1915,22 @@ async function completeRouteManually(routeId) {
 async function verifyRouteManually(routeId) {
   const route = routeById(routeId);
   if (!route) return;
+  // SW-063: con ruta real, la base real manda ANTES de mutar nada local — si falla, no se marca
+  // "verificada" en pantalla.
+  if (route.real_id) {
+    try {
+      const result = await realAdapter.verifyRoute(route.real_id);
+      if (!result?.ok) { showToast(`No se pudo verificar "${route.name}" en la base real: ${result?.error?.message ?? 'error desconocido'}`, { type: 'error' }); return; }
+    } catch (error) {
+      showToast(`No se pudo verificar "${route.name}" en la base real: ${error.message}`, { type: 'error' });
+      return;
+    }
+  } else {
+    operationsAdapter.verifyRoute(routeId);
+  }
   route.status = 'verified';
-  // SW-055: same missing guard just found/fixed in completeRouteManually() — operationsAdapter (demo
-  // clone) throws "Route not found" uncaught for any real/hydrated route, silently killing the rest
-  // of this function (refreshSupervisor/refreshResumen/the real mirror write below never ran).
-  if (!route.real_id) operationsAdapter.verifyRoute(routeId);
   refreshSupervisor();
   refreshResumen();
-  if (realAdapter) await mirrorToRealAdapter(realAdapter.verifyRoute(route.real_id ?? routeId));
   showToast(`Ruta "${route.name}" verificada.`);
 }
 // SW-058: unlike the demo `incidents` "Marcar resuelta" handler (pure local mutation, no adapter),
@@ -2023,12 +2103,29 @@ async function finishCreateRoute() {
   const vehicleId = vehicleSelect?.value;
   const truck = vehicleId ? trucks.find((item) => item.id === vehicleId) : null;
 
+  // SW-063: con backend real, la escritura a Supabase manda — si falla, no se crea nada en
+  // pantalla (antes: se creaba la ruta local igual, y el espejo real podía fallar en silencio).
+  // operationsAdapter.createRoute()/savePathPoints()/saveRouteStops() más abajo NO son parte de
+  // este cutover: son el caché local que alimenta routeGeometry()/el mapa/el simulador para
+  // CUALQUIER ruta, real o demo (SW-033, también usado por hydrateRoutes() para rutas hidratadas) —
+  // se siguen llamando siempre, con el mismo routeId demo de siempre.
+  let realRoute;
+  if (realAdapter) {
+    try {
+      const createResult = await realAdapter.createRoute({ name });
+      if (!createResult?.ok) { if (status) status.textContent = `No se pudo crear la ruta en la base real: ${createResult?.error?.message ?? 'error desconocido'}`; return; }
+      realRoute = createResult.data;
+      const pathResult = await realAdapter.savePathPoints(realRoute.id, path.map(([latitude, longitude], index) => ({ sequence: index + 1, latitude, longitude })));
+      if (!pathResult?.ok) { if (status) status.textContent = `No se pudo guardar el trazo en la base real: ${pathResult?.error?.message ?? 'error desconocido'}`; return; }
+      const stopsResult = await realAdapter.saveRouteStops(realRoute.id, stopPoints);
+      if (!stopsResult?.ok) { if (status) status.textContent = `No se pudieron guardar las paradas en la base real: ${stopsResult?.error?.message ?? 'error desconocido'}`; return; }
+    } catch (error) {
+      if (status) status.textContent = `No se pudo crear la ruta en la base real: ${error.message}`;
+      return;
+    }
+  }
+
   operationsAdapter.createRoute({ id: routeId, name, municipality_id: pilotMunicipality.id, sectors: ['Ruta personalizada'], sector: 'Ruta personalizada' });
-  // SW-033/item 16 (resolved): every consumer in this file reads geometry via routeGeometry()/
-  // operationsAdapter.listPathPoints() — savePathPoints() below is what makes that work for a drawn
-  // route. DeviceSimulator no longer needs a routePaths[routeId] runtime mutation either — it now
-  // takes its path lazily via the getPath option (see registerDriverSimulator()/module-init above),
-  // so this dictionary is never touched for hand-drawn routes at all anymore.
   operationsAdapter.savePathPoints(routeId, path.map(([latitude, longitude], index) => ({ sequence: index + 1, latitude, longitude })));
   operationsAdapter.saveRouteStops(routeId, stopPoints);
 
@@ -2038,21 +2135,14 @@ async function finishCreateRoute() {
     distanceKm: Math.round((distanceMeters / 1000) * 10) / 10, estimatedMinutes: '—',
     stops: stopPoints.length, covered: 0, pending: stopPoints.length, incidents: []
   };
+  // Real route ids never match their demo counterparts (see createVehicleFromForm/
+  // createDriverFromForm above) — set this before assignTruckToRoute() (below) needs it.
+  if (realRoute) newRoute.real_id = realRoute.id;
   routes.push(newRoute);
   // Codex review on PR #32: initialRouteProgress was captured once at module load from the original
   // demo routes, so resetSimulation() silently skipped any route created afterward through here —
   // its truck reset to 0% but the route itself kept whatever progress the simulation had reached.
   initialRouteProgress[routeId] = 0;
-
-  // Real route ids never match their demo counterparts (see createVehicleFromForm/
-  // createDriverFromForm above) — resolve this first so real_id is already on newRoute by the time
-  // assignTruckToRoute() (below) needs it to mirror the assignment too.
-  const realRoute = await mirrorToRealAdapter(realAdapter?.createRoute({ name }), status);
-  if (realRoute) {
-    newRoute.real_id = realRoute.id;
-    await mirrorToRealAdapter(realAdapter.savePathPoints(realRoute.id, path.map(([latitude, longitude], index) => ({ sequence: index + 1, latitude, longitude }))), status);
-    await mirrorToRealAdapter(realAdapter.saveRouteStops(realRoute.id, stopPoints), status);
-  }
 
   if (truck) await assignTruckToRoute(newRoute, truck);
   // UX cleanup (SW-037): a route created without a vehicle used to leave the Project Owner staring
