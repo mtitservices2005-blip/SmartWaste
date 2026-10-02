@@ -1,6 +1,6 @@
 # Registro de deuda técnica — SmartWaste Alpha
 
-> Datos demo · no producción. Basado en `docs/CURRENT_STATE_AUDIT.md` (2026-07-29).
+> Datos demo · no producción. Este registro se actualiza ítem por ítem en cada hito (llega a SW-062 al 2026-10-02) — a diferencia de `docs/CURRENT_STATE_AUDIT.md`, cuya tabla de clasificación principal sí quedó congelada en SW-020 hasta la sección "Actualización SW-021–SW-062" agregada el 2026-10-02.
 
 Severidad: **Alta** (bloquea el siguiente hito o representa riesgo de seguridad/tenancy), **Media** (debe resolverse antes de piloto real), **Baja** (limpieza / higiene, no bloqueante).
 

@@ -2,7 +2,7 @@
 
 > Datos demo · no producción — este documento audita, no modifica, el estado descrito.
 
-Fecha de auditoría: 2026-07-29 (revisión de correcciones: 2026-07-29; verificación real SW-020: 2026-07-30 — ver sección dedicada al final). Alcance: `README.md`, `docs/`, `shared/`, `backend/`, `supabase/`, `tests/`, `frontend/`, historial git completo (13 commits, 6 sustantivos). Metodología: lectura completa de código y documentación + ejecución local de los 13 archivos de test, cada uno como proceso `node` independiente (`for test_file in tests/*.test.mjs; do node "$test_file"; done`, sin instalar dependencias, sin tocar Supabase). El comando `node tests/*.test.mjs` (sin loop) **no** ejecuta los 13 archivos — el shell expande el glob y `node` solo ejecuta el primero, pasando el resto como argumentos; este documento usa exclusivamente el resultado del loop verificado. No se ejecutó nada contra un backend o base de datos real.
+Fecha de auditoría: 2026-07-29 (revisión de correcciones: 2026-07-29; verificación real SW-020: 2026-07-30 — ver sección dedicada al final; **relectura de código 2026-10-02 hasta SW-062 — ver sección "Actualización SW-021–SW-062" más abajo; la tabla de clasificación de la sección siguiente quedó desactualizada para varias filas, no la tomes como vigente sin leer esa sección primero**). Alcance: `README.md`, `docs/`, `shared/`, `backend/`, `supabase/`, `tests/`, `frontend/`, historial git completo (13 commits, 6 sustantivos). Metodología: lectura completa de código y documentación + ejecución local de los 13 archivos de test, cada uno como proceso `node` independiente (`for test_file in tests/*.test.mjs; do node "$test_file"; done`, sin instalar dependencias, sin tocar Supabase). El comando `node tests/*.test.mjs` (sin loop) **no** ejecuta los 13 archivos — el shell expande el glob y `node` solo ejecuta el primero, pasando el resto como argumentos; este documento usa exclusivamente el resultado del loop verificado. No se ejecutó nada contra un backend o base de datos real.
 
 ## Resumen ejecutivo
 
@@ -130,6 +130,36 @@ Finished supabase db reset on branch sw-020/supabase-local-activation.
 **10. Suite completa de tests**: los 13 archivos originales + los 2 nuevos (`rls-adversarial.test.mjs`, `operational-cycle.test.mjs`) se corrieron cada uno como proceso `node` independiente. Resultado: 15/15 con salida `... ok` y `exit_code=0`. Los tests de integración requieren `npx supabase start` corriendo primero; si Supabase local no está activo, fallan explícitamente con un mensaje claro en vez de dar falso positivo.
 
 **Fuera de alcance confirmado, no ejecutado**: vista supervisor/móvil de conductor, conexión de `auth-context.js`/login a `frontend/`, cualquier ejecución contra Supabase remoto/producción, cambios en MTIT-OS/`ayuntamiento-Chatbot`. `git commit`/`push`/PR no se ejecutaron — cambios preparados en la rama `sw-020/supabase-local-activation`, pendientes de autorización explícita del Project Owner.
+
+## Actualización SW-021–SW-062 (2026-10-02) — relectura directa de código
+
+> Relectura de código en este entorno (sin Docker/Supabase local disponible aquí — ver ítem #15 de `docs/TECHNICAL_DEBT_REGISTER.md` — así que nada de lo siguiente se re-ejecutó contra Postgres real en esta sesión; donde el repo ya tiene esa evidencia real de otra sesión, se cita el ítem del registro de deuda que la documenta en vez de repetirla). HEAD revisado: `0c17f98` (rama `main`), hito más reciente en el árbol: SW-062.
+
+**Corrección a esta misma auditoría**: a diferencia de este documento, `docs/TECHNICAL_DEBT_REGISTER.md` **sí se mantuvo actualizado ítem por ítem** en cada hito desde SW-020 (llega al ítem #31, SW-058–SW-062 incluidos) — su banner de encabezado decía "Basado en `docs/CURRENT_STATE_AUDIT.md` (2026-07-29)", lo cual sugería que también estaba congelado en SW-020; no era así, y se corrige ese banner en el mismo commit que esta sección. Para evidencia ítem-por-ítem, el registro de deuda es la fuente más viva del repo; esta sección resume la arquitectura resultante, no repite esa evidencia.
+
+### El patrón que define el estado real hoy: dual-write, demo como primario
+
+Desde SW-034 (conexión de `frontend/app.js` a Supabase real) el repo no migró de "demo" a "real" — construyó un patrón consistente de **doble escritura**: `shared/operations-adapter.js`'s `createDemoOperationsAdapter()` (arrays en memoria) sigue siendo la fuente primaria para todo el render síncrono de la UI; cuando hay `window.SMARTWASTE_SUPABASE_CONFIG`, cada mutación relevante (asignar vehículo/chofer, iniciar/completar/verificar ruta, crear vehículo/chofer, reportes ciudadanos) también escribe al `realAdapter` (`createSupabaseOperationsAdapter`) con el mismo payload, mejor esfuerzo, sin rollback si el espejo falla. Al cargar la página, `hydrateVehiclesAndDrivers()`/`hydrateRoutes()`/`hydrateRealCitizenSectors()`/`hydrateCitizenReports()` traen de vuelta lo real y lo mezclan en los mismos arrays demo. Esto reclasifica casi todas las filas `DEMO_ONLY`/`PLACEHOLDER` de la tabla original (sección anterior) a `PARTIAL`: el camino real existe y corre, pero no es la única fuente de verdad ni la ruta exclusiva — nunca hay una build "100% real, cero demo" salvo con `SUPABASE_HIDE_DEMO=true` (ítem #31 del registro de deuda), que solo oculta los arrays demo visualmente, no cambia el patrón de escritura.
+
+### Clasificación por área (reemplaza, para estas filas, a la tabla de la sección anterior)
+
+| Área | Clasificación hoy | Evidencia |
+|---|---|---|
+| Adapter de operaciones (rutas/vehículos/choferes) | `PARTIAL` | Dual-write descrito arriba; `frontend/app.js` (`mirrorToRealAdapter`, `bootstrapRealBackend()`), `shared/operations-adapter.js` |
+| Login / gating por rol en UI | `REAL_READY` (opt-in) | `frontend/auth-gate.js` (login real contra Supabase Auth, gating por `SECTION_ROLES`), importado en `frontend/app.js`; sin `window.SMARTWASTE_SUPABASE_CONFIG` no hace nada — no es una regresión, es el mismo comportamiento de siempre (regla 5) |
+| Alta de cuenta de chofer + contraseña propia obligatoria | `REAL_READY` | `supabase/functions/create-driver-account/index.ts` (service-role real); CORS corregido en staging (ítem #30 del registro de deuda) |
+| GPS real del conductor (navegador) | `VERIFIED_REAL` (único ítem con esa etiqueta fuera de SW-020) | Verificado interactivamente en staging contra Supabase real por el Project Owner — ítem #20 del registro de deuda, con bug de UUID encontrado y corregido en el camino |
+| GPS del teléfono (modo demo/tour, SW-029) y vista móvil de conductor (telemetría) | `DEMO_ONLY` | `shared/telemetry-simulator.js`/`shared/phone-gps.js`; el propio `docs/SW029_PHONE_GPS_FASE1.md` lo describe como modo demo/tour, no reemplaza al GPS real de arriba |
+| Persistencia de recorrido GPS y métricas de ruta (SW-062) | `REAL_READY`, con prueba contra Supabase local documentada (no reejecutada aquí) | `docs/SW062_GPS_ROUTE_METRICS.md`, `tests/gps-route-metrics.test.mjs`, migración `202607150017_sw062_gps_route_metrics.sql` — distingue explícitamente muestras `source='simulator'` (no cuentan como evidencia) de las reales |
+| Parámetros de costo (Centro de Impacto, SW-030) | `PARTIAL` | `shared/cost-parameters.js` persiste contra Supabase cuando hay municipio real configurado; `shared/impact-center.js` sigue calculando sobre los mismos arrays `routes`/`trucks` que mezclan demo + real una vez hidratados (sin frontera limpia entre ambos en el cálculo) |
+| Portal ciudadano + sectores reales | `PARTIAL` | Un selector (reportar incidencia) ya lee sectores reales por municipio onboarded (`anon_read_sectors`, SW-060); el otro (consulta de recogida) sigue siendo demo estático por decisión de alcance, no por descuido — ítem #23 del registro de deuda |
+| Alta de municipios por `mt_superadmin` (SW-061) | `REAL_READY` | `supabase/functions/create-municipality-account/`, probada con clientes simulados |
+| `backend/` | `PLACEHOLDER`, sin cambios | Sigue siendo solo `README.md` con módulos futuros listados, cero código de servidor |
+| Supabase Realtime (`vehicle_positions`) | `REAL_NOT_RUN` (investigado a fondo, no resuelto) | Ítem #14 del registro de deuda — comportamiento no determinístico encontrado con acceso directo a Postgres/logs de Realtime, no atribuible a config de RLS/JWT |
+| Migraciones | 17 archivos (eran 6 en SW-020) | Última: `202607150017_sw062_gps_route_metrics.sql`; políticas RLS nuevas en sw027/sw039/sw060 además de las de SW-020 |
+| CI | En uso desde SW-020 (ítem #8 del registro de deuda) | `.github/workflows/tests.yml`: `unit-tests` (sin Supabase) + `integration-tests` (con Supabase local vía Docker) en cada PR — no reproducible en este contenedor por el bloqueo de red del ítem #15 |
+
+**No verificado en esta sesión** (requiere Docker/Supabase local, bloqueado aquí — ítem #15 del registro de deuda): cualquier aserción de "VERIFIED_REAL" nueva. Las etiquetas de arriba que dicen `VERIFIED_REAL`/`REAL_READY` citan evidencia ya registrada por el Project Owner en staging/LabPC en sesiones anteriores, no una re-ejecución de esta relectura.
 
 ## Numeración SW-001–SW-019
 
