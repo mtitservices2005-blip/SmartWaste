@@ -47,11 +47,37 @@ El CLI usa únicamente `auth.admin.inviteUserByEmail`: no crea contraseña inici
 1. busca/reutiliza el municipio por `slug`;
 2. busca/reutiliza el usuario Auth por correo; si ya existe, **no** reenvía una invitación;
 3. upserta `profiles` por `id` y `memberships` por `(municipality_id, profile_id)`;
-4. si algo falla, imprime el estado de municipio/Auth/perfil/membresía sin secretos ni tokens.
+4. **solo para el rol `driver`**, crea/reutiliza la fila correspondiente en la tabla `drivers`
+   (`municipality_id`, `display_name`, `profile_id`, `status` por defecto) de forma análoga a la
+   Edge Function `create-driver-account`: busca primero por la relación fuerte `profile_id` y, si
+   no existe, por `municipality_id` + `display_name` (una fila creada por otra vía sin `profile_id`
+   se vincula en lugar de duplicarse). Es idempotente: reintentar reutiliza la fila, nunca duplica.
+   Para los demás roles no se crea ninguna fila en `drivers`;
+5. si algo falla, imprime el estado de municipio/Auth/perfil/membresía (y `driver` cuando aplica)
+   sin secretos ni tokens.
 
-Repetir exactamente el mismo comando termina los pasos pendientes. No hay rollback intencional. Para reenviar una invitación de una cuenta Auth ya existente se requiere explícitamente `--resend-invite`; úselo solo tras validar el correo y la solicitud del usuario.
+Repetir exactamente el mismo comando termina los pasos pendientes. No hay rollback intencional.
+
+### Cambio de rol y reenvío de invitación (flags explícitos)
+
+- Para reenviar una invitación de una cuenta Auth ya existente se requiere explícitamente
+  `--resend-invite`; úselo solo tras validar el correo y la solicitud del usuario.
+- Por defecto el CLI **no** cambia el rol de una membresía existente: si ya hay una membresía activa
+  para `(municipality_id, profile_id)` con un rol distinto al solicitado, el comando falla con un
+  mensaje que nombra el rol actual y pide `--change-role`. Esto evita que un reintento o un alta mal
+  dirigida degrade silenciosamente a un supervisor a driver. Pase `--change-role` **solo** cuando el
+  cambio de rol sea intencional y aprobado; con ese flag la membresía sí se actualiza.
+- Si `--resend-invite` falla porque el usuario Auth ya completó su registro (ya estableció su
+  contraseña), no hay invitación que reenviar: el paso se reporta como `auth=resend_failed` sin
+  exponer ningún enlace ni token. En ese caso pida a la persona que use **"olvidé mi contraseña"**
+  en el login; para un `driver` que ya tiene cuenta, use la Edge Function existente
+  **`resend-driver-invite`**.
+
+### Mecanismos existentes reutilizados
 
 El frontend actual no ofrece una invitación genérica para supervisor, dispatcher y driver; por eso el camino operativo es este CLI. La ruta UI existente de `Flota y personal` → `Crear cuenta de acceso` aplica solo a `driver` y llama a la Edge Function histórica `create-driver-account`, que entrega una contraseña temporal; no es la invitación sin contraseña aprobada para SW-070 y no se amplió la UI en este hito.
+
+Para reenviar acceso a un `driver` que **ya** fue provisionado por la UI histórica de `Flota y personal` existe la Edge Function `resend-driver-invite`: restablece la contraseña del usuario Auth del driver (que ya tiene cuenta, es decir `drivers.profile_id` seteado) usando `auth.admin.updateUserById` con una contraseña temporal. **Nunca genera, imprime ni devuelve un enlace de invitación** — por los problemas de confiabilidad de `auth.admin.generateLink` documentados en esa función. Requiere que quien la invoca sea `municipal_admin`/`dispatcher` con membresía activa en el municipio del driver.
 
 ### Convención segura para altas masivas
 
