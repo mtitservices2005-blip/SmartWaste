@@ -24,11 +24,18 @@ function createSimulatedClient({ failProfileUpsertOnce = false, failInviteOnce =
     return {
       select() {
         const filters = [];
+        const matches = () => rows.filter((row) => filters.every(([column, value]) => row[column] === value));
         return {
           eq(column, value) { filters.push([column, value]); return this; },
           async maybeSingle() {
-            const matches = rows.filter((row) => filters.every(([column, value]) => row[column] === value));
-            return result(matches[0] ?? null);
+            return result(matches()[0] ?? null);
+          },
+          // Collection resolution: awaiting the builder returns every matching row as {data, error},
+          // exactly like supabase-js. `then` makes the chain a thenable so
+          // `await ...select('*').eq().eq()` works — needed by ensureDriverRecord's homonym fallback,
+          // which must tolerate 2+ rows (maybeSingle would error on that).
+          then(resolve) {
+            resolve({ data: matches(), error: null });
           }
         };
       },
@@ -316,6 +323,52 @@ try {
     assert.equal(result.value.steps.driverRecord, 'reused', 'una fila sin profile_id debe vincularse, no duplicarse');
     assert.equal(client.state.drivers.length, 1);
     assert.equal(client.state.drivers[0].profile_id, result.value.user.id, 'la fila heredada debe quedar vinculada al perfil');
+  }
+
+  // (e) DOS filas homónimas preexistentes (mismo municipio + display_name) ya ligadas a OTROS
+  //     profile_id: la tabla no garantiza unicidad de esa combinación y el fallback debe tolerar
+  //     múltiples resultados. Provisionar un TERCER homónimo debe salir ok, crear una fila nueva y
+  //     dejar intactas las dos originales (antes, un maybeSingle() habría fallado con 2+ filas).
+  {
+    const client = createSimulatedClient();
+    client.state.municipalities.push({ id: 'municipality-multi', slug: 'multi-town', name: 'Multi Town' });
+    client.state.drivers.push({ id: 'driver-a', municipality_id: 'municipality-multi', display_name: 'Pilot Driver', profile_id: 'other-profile-a' });
+    client.state.drivers.push({ id: 'driver-b', municipality_id: 'municipality-multi', display_name: 'Pilot Driver', profile_id: 'other-profile-b' });
+    const result = await capture((logger) => provisionMunicipality({
+      client,
+      municipality: { slug: 'multi-town', name: 'Multi Town' },
+      user: { email: 'driver@example.test', name: 'Pilot Driver', role: 'driver' },
+      logger
+    }));
+    assert.equal(result.value.ok, true, 'provisionar un tercer homónimo debe salir ok');
+    assert.equal(result.value.steps.driverRecord, 'created', 'ninguna fila homónima ajena debe reutilizarse');
+    assert.equal(client.state.drivers.length, 3, 'deben quedar tres filas: las dos originales más la nueva');
+    assert.equal(client.state.drivers[0].profile_id, 'other-profile-a', 'la primera fila ajena no debe modificarse');
+    assert.equal(client.state.drivers[1].profile_id, 'other-profile-b', 'la segunda fila ajena no debe modificarse');
+    const created = client.state.drivers.find((row) => row.profile_id === result.value.user.id);
+    assert.ok(created, 'debe existir una fila ligada al profile_id solicitado');
+    assert.equal(created.municipality_id, 'municipality-multi');
+  }
+
+  // (f) Varios homónimos en el municipio y SOLO UNA fila sin profile_id: se vincula esa única fila
+  //     y NO se crea ninguna otra (idempotente), dejando intactas las filas ajenas.
+  {
+    const client = createSimulatedClient();
+    client.state.municipalities.push({ id: 'municipality-mix', slug: 'mix-town', name: 'Mix Town' });
+    client.state.drivers.push({ id: 'driver-owned', municipality_id: 'municipality-mix', display_name: 'Pilot Driver', profile_id: 'other-profile-x' });
+    client.state.drivers.push({ id: 'driver-legacy-mix', municipality_id: 'municipality-mix', display_name: 'Pilot Driver', profile_id: null });
+    const result = await capture((logger) => provisionMunicipality({
+      client,
+      municipality: { slug: 'mix-town', name: 'Mix Town' },
+      user: { email: 'driver@example.test', name: 'Pilot Driver', role: 'driver' },
+      logger
+    }));
+    assert.equal(result.value.ok, true);
+    assert.equal(result.value.steps.driverRecord, 'reused', 'debe vincular la fila sin profile_id, no crear otra');
+    assert.equal(client.state.drivers.length, 2, 'no debe crearse una fila adicional');
+    const legacy = client.state.drivers.find((row) => row.id === 'driver-legacy-mix');
+    assert.equal(legacy.profile_id, result.value.user.id, 'la fila sin owner debe quedar ligada al perfil');
+    assert.equal(client.state.drivers.find((row) => row.id === 'driver-owned').profile_id, 'other-profile-x', 'la fila ajena debe quedar intacta');
   }
 
   // Hallazgo 2: no se cambia el rol de una membresía existente sin --change-role explícito.

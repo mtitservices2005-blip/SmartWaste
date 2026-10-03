@@ -153,23 +153,22 @@ async function ensureDriverRecord(client, municipality, resolvedUser) {
   const foundByProfile = resultError(byProfile, 'No se pudo consultar la tabla drivers.');
   if (foundByProfile) return { driver: foundByProfile, outcome: 'reused' };
 
+  // Fallback by municipality_id + display_name. The `drivers` table does NOT guarantee uniqueness
+  // on that combination: two homonym drivers in the same municipality are valid rows, so this must
+  // be a COLLECTION select (not maybeSingle, which errors on 2+ matches and would break the alta of
+  // the third homonym). Deterministically take the FIRST row returned that has no profile_id and
+  // link it in place; rows already owned by another profile are never hijacked, and rows from
+  // another municipality are never considered.
   const byName = await client.from('drivers').select('*')
     .eq('municipality_id', municipality.id)
-    .eq('display_name', municipality.user.name)
-    .maybeSingle();
-  const foundByName = resultError(byName, 'No se pudo consultar la tabla drivers.');
-  if (foundByName) {
-    if (!foundByName.profile_id) {
-      // Legacy row with no owner: linking it to this profile is safe and idempotent.
-      const linked = await client.from('drivers').update({ profile_id: resolvedUser.id }).eq('id', foundByName.id).select('*').single();
-      resultError(linked, 'No se pudo vincular el driver existente.');
-      return { driver: foundByName, outcome: 'reused' };
-    }
-    if (foundByName.profile_id === resolvedUser.id) {
-      return { driver: foundByName, outcome: 'reused' };
-    }
-    // Same display_name but owned by a DIFFERENT profile_id in this municipality: not our row.
-    // Fall through and create a distinct row for the requested profile instead of hijacking it.
+    .eq('display_name', municipality.user.name);
+  const candidates = resultError(byName, 'No se pudo consultar la tabla drivers.') ?? [];
+  const linkable = candidates.find((row) => !row.profile_id);
+  if (linkable) {
+    // Legacy row with no owner: linking it to this profile is safe and idempotent.
+    const linked = await client.from('drivers').update({ profile_id: resolvedUser.id }).eq('id', linkable.id).select('*').single();
+    resultError(linked, 'No se pudo vincular el driver existente.');
+    return { driver: linked.data ?? linkable, outcome: 'reused' };
   }
 
   const created = await client.from('drivers').insert({
