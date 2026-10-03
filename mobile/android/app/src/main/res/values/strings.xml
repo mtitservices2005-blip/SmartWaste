@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">SmartWaste Conductor</string>
+    <string name="title_activity_main">SmartWaste Conductor</string>
+    <string name="package_name">com.mtitservices.smartwaste.driver</string>
+    <string name="custom_url_scheme">com.mtitservices.smartwaste.driver</string>
+</resources>
