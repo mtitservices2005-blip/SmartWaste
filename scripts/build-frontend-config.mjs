@@ -68,8 +68,24 @@ for (const file of readdirSync(DIST_DIR)) {
 
 const url = process.env.SUPABASE_URL;
 const anonKey = process.env.SUPABASE_ANON_KEY;
+
+// SW-070 (CA3): strict mode for real staging/production builds. Activation:
+//   - VERCEL_ENV === 'production'   → always strict (a production deploy must never ship a
+//     silent demo-only dist/ because a variable was forgotten); or
+//   - SUPABASE_BUILD_STRICT === 'true' → explicit opt-in for staging builds and manual runs.
+// Previews (VERCEL_ENV='preview') and local/demo runs stay lenient unless the flag is set, so the
+// demo path keeps behaving exactly as before (CLAUDE.md rule 5).
+const strictBuild = process.env.VERCEL_ENV === 'production' || process.env.SUPABASE_BUILD_STRICT === 'true';
 if (!url || !anonKey) {
-  console.warn('\n⚠️  SUPABASE_URL/SUPABASE_ANON_KEY no configuradas — dist/ queda en modo demo puro (sin backend real). Configuralas en las variables de entorno del hosting si esta build es para staging real.\n');
+  if (strictBuild) {
+    const missing = [];
+    if (!url) missing.push('SUPABASE_URL');
+    if (!anonKey) missing.push('SUPABASE_ANON_KEY');
+    console.error(`\n❌ Build estricto (staging/producción): falta ${missing.join(' y ')}. Defínalas en el entorno de Vercel antes de compilar, o quite SUPABASE_BUILD_STRICT=true (y no use VERCEL_ENV=production) para producir un dist/ en modo demo. No se escribió la config de Supabase en dist/index.html.\n`);
+    process.exitCode = 1;
+  } else {
+    console.warn('\n⚠️  SUPABASE_URL/SUPABASE_ANON_KEY no configuradas — dist/ queda en modo demo puro (sin backend real). Configúrelas en las variables de entorno del hosting si esta build es para staging real.\n');
+  }
 } else {
   // SW-044: opt-in, deployment-level — hides the bundled demo trucks/routes/drivers/incidents
   // permanently on this deployment (frontend/app.js), even once a municipality has real data of
