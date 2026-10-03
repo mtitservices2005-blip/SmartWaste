@@ -138,11 +138,18 @@ async function ensureMembership(client, municipality, user, { changeRole = false
 
 // SW-070 (revisión): provisioning a `driver` role must also leave a `drivers` row bound to that
 // user, exactly like supabase/functions/create-driver-account/index.ts does for the historical
-// "Flota y personal" UI. Idempotent: reuse an existing row (looked up by the strong profile_id
-// relation first, then by municipality_id + display_name for rows created by another path before
-// profile_id was set) and never insert a duplicate.
+// "Flota y personal" UI. Idempotent per (municipality_id, profile_id):
+//   1. strong search by BOTH profile_id and municipality_id — a row for this profile in a
+//      different municipality must never be reused for the pilot municipality;
+//   2. fallback by municipality_id + display_name only for rows created by another path before
+//      profile_id was set (link them in place) — but a same-name row owned by ANOTHER profile is
+//      not ours and is left untouched, a new row is created for the requested profile;
+//   3. otherwise create a fresh row.
 async function ensureDriverRecord(client, municipality, resolvedUser) {
-  const byProfile = await client.from('drivers').select('*').eq('profile_id', resolvedUser.id).maybeSingle();
+  const byProfile = await client.from('drivers').select('*')
+    .eq('profile_id', resolvedUser.id)
+    .eq('municipality_id', municipality.id)
+    .maybeSingle();
   const foundByProfile = resultError(byProfile, 'No se pudo consultar la tabla drivers.');
   if (foundByProfile) return { driver: foundByProfile, outcome: 'reused' };
 
@@ -153,10 +160,16 @@ async function ensureDriverRecord(client, municipality, resolvedUser) {
   const foundByName = resultError(byName, 'No se pudo consultar la tabla drivers.');
   if (foundByName) {
     if (!foundByName.profile_id) {
+      // Legacy row with no owner: linking it to this profile is safe and idempotent.
       const linked = await client.from('drivers').update({ profile_id: resolvedUser.id }).eq('id', foundByName.id).select('*').single();
       resultError(linked, 'No se pudo vincular el driver existente.');
+      return { driver: foundByName, outcome: 'reused' };
     }
-    return { driver: foundByName, outcome: 'reused' };
+    if (foundByName.profile_id === resolvedUser.id) {
+      return { driver: foundByName, outcome: 'reused' };
+    }
+    // Same display_name but owned by a DIFFERENT profile_id in this municipality: not our row.
+    // Fall through and create a distinct row for the requested profile instead of hijacking it.
   }
 
   const created = await client.from('drivers').insert({
@@ -299,9 +312,19 @@ export function parseArguments(args) {
   return { command, options };
 }
 
-function printDryRun(command, options, users, logger) {
-  logger.log(`Simulación SW-070: ${command}; no se creará cliente ni se escribirá en Supabase.`);
-  logger.log(`Se validarían ${users.length} alta(s), se reutilizaría el municipio por slug y se crearían/reutilizarían Auth, perfil y membresía.`);
+function printDryRun(command, options, municipality, users, logger) {
+  // The dry run never reads SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY, never builds a client and never
+  // writes: it only describes, by name, exactly what a real run would attempt (CLAUDE.md rule 8).
+  logger.log(`Simulación SW-070 (${command}): no se crea cliente y no se escribe en Supabase; no se lee SUPABASE_URL ni SUPABASE_SERVICE_ROLE_KEY.`);
+  logger.log(`Municipio (slug): ${municipality.slug}. Se reutilizaría por slug si ya existe (no se cambiaría su nombre).`);
+  logger.log(`Cuentas solicitadas (${users.length}):`);
+  for (const user of users) {
+    logger.log(`  - ${user.email} → rol ${user.role} (nombre: ${user.name}).`);
+    if (user.role === 'driver') {
+      logger.log(`    Driver ${user.email}: se crearía o reutilizaría su fila en la tabla drivers (municipality_id + display_name, vinculada a su profile_id); cuál de los dos ocurriría solo se sabe al conectarse.`);
+    }
+  }
+  logger.log('Por cada cuenta se buscaría/reutilizaría el usuario Auth por correo y se upsertarían profiles y memberships (sin cambiar un rol existente sin --change-role).');
   if (options['resend-invite']) logger.log('Se solicitaría el reenvío explícito de invitaciones para usuarios Auth existentes.');
   else logger.log('No se reenviará ninguna invitación existente sin --resend-invite.');
   if (options['change-role']) logger.log('Se permitiría explícitamente cambiar el rol de una membresía existente (--change-role).');
@@ -330,7 +353,7 @@ async function main() {
   }
 
   if (options['dry-run']) {
-    printDryRun(command, options, users, console);
+    printDryRun(command, options, municipality, users, console);
     return;
   }
   const apiUrl = process.env.SUPABASE_URL;
