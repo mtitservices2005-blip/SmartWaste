@@ -16,6 +16,8 @@ import { IMPACT_DEMO_NOTICE, IMPACT_SCENARIO_NOTICE, defaultImpactAssumptions, m
 import { COST_PARAMETER_KEYS, validateCostParameters, fetchCostParameters, saveCostParameters, createDemoCostParametersStore } from '../shared/cost-parameters.js';
 import { aggregateRouteSavings } from '../shared/route-savings.js';
 import { initAuthGate, readSupabaseConfig, getAuthClient } from './auth-gate.js';
+import { createDriverTelemetrySession, createPersistentTelemetryQueue } from '../shared/driver-app-telemetry.js';
+import { createDriverBackgroundBridge, getOrCreateDriverDeviceId } from '../shared/driver-app-background.js';
 
 const $ = (selector) => document.querySelector(selector);
 const app = $('#app');
@@ -156,6 +158,9 @@ let masterRealMunicipalities = [];
 // handle while GPS sharing is active, null otherwise.
 let driverAuthContext = null;
 let driverGpsWatchId = null;
+let driverBackgroundBridge = null;
+let driverTelemetrySession = null;
+let driverOnlineHandler = null;
 // SW-030: which municipality's cost parameters the current session should read/write — the signed-
 // in municipal session's own municipality_id when there is one, else whatever the deployment's
 // static config points at (citizen-portal-only sessions), else the bundled demo municipality. Master
@@ -981,7 +986,7 @@ function renderPhoneGpsModeControl() {
   </select></label></div><p id="phoneGpsStatus" class="demo"></p>`;
 }
 function renderDriverGpsControl() {
-  return `<div class="controls"><button type="button" class="btn-primary" data-driver-gps="${driverGpsWatchId ? 'stop' : 'start'}">${driverGpsWatchId ? 'Detener GPS real' : 'Compartir mi ubicación real'}</button></div><p id="driverGpsStatus" class="demo"></p>`;
+  return `<div class="controls"><button type="button" class="btn-primary" data-driver-gps="${driverGpsWatchId ? 'stop' : 'start'}">${driverGpsWatchId ? 'Detener GPS' : 'Compartir mi ubicación real'}</button></div><p id="driverGpsStatus" class="demo"></p>`;
 }
 // Roadmap item 3 ("GPS real"): opt-in — only reachable via the button above, which only renders
 // once a real backend is configured (backendMode !== 'DEMO_ONLY'). Persists the driver's own
@@ -990,6 +995,62 @@ function renderDriverGpsControl() {
 // showing real GPS on a live map is a separate, later milestone).
 async function startDriverGps() {
   const status = $('#driverGpsStatus');
+  if (driverGpsWatchId != null || driverBackgroundBridge) return;
+  const nativePlugin = globalThis.SmartWasteBackgroundGeolocation;
+  if (nativePlugin) {
+    if (!realAdapter || !driverAuthContext) { if (status) status.textContent = 'El GPS requiere una sesión conectada a Supabase.'; return; }
+    let notificationPermission;
+    try { notificationPermission = await globalThis.SmartWasteLocalNotifications?.requestPermissions?.(); }
+    catch (error) { if (status) status.textContent = `No se pudo solicitar permiso de notificaciones: ${error.message}`; return; }
+    if (notificationPermission && notificationPermission.display !== 'granted') {
+      if (status) status.textContent = 'Activa las notificaciones de SmartWaste para registrar el recorrido en segundo plano.';
+      return;
+    }
+    if (status) status.textContent = 'Buscando tu vehículo asignado…';
+    const queue = createPersistentTelemetryQueue({ storage: localStorage });
+    const deviceId = getOrCreateDriverDeviceId(localStorage);
+    const telemetry = createTelemetryIngestionAdapter(getAuthClient(), { municipality_id: driverAuthContext.municipality_id });
+    const session = await createDriverTelemetrySession({
+      profileId: driverAuthContext.user_id,
+      municipalityId: driverAuthContext.municipality_id,
+      deviceId,
+      operationsAdapter: realAdapter,
+      ingestionAdapter: telemetry,
+      queue
+    });
+    if (!session.ok) { if (status) status.textContent = session.error.code === 'NO_ACTIVE_ROUTE_ASSIGNED' ? 'No tienes un vehículo asignado en una ruta activa. Contacta a tu supervisor.' : `No se pudo activar el GPS: ${session.error.message}`; return; }
+    driverTelemetrySession = session;
+    driverBackgroundBridge = createDriverBackgroundBridge({
+      plugin: nativePlugin,
+      onLocation: async (location) => {
+        const result = await session.capture(location, { correlation_id: crypto.randomUUID() });
+        if (result.ok && result.queued) await session.reconnect();
+        const currentStatus = $('#driverGpsStatus');
+        if (currentStatus) currentStatus.textContent = result.ok ? 'GPS activo · recorrido registrándose en segundo plano.' : `No se pudo guardar la ubicación: ${result.error?.message ?? 'error desconocido'}`;
+      },
+      onError: (error) => {
+        const currentStatus = $('#driverGpsStatus');
+        if (currentStatus) currentStatus.textContent = `No se pudo obtener tu ubicación: ${error.message ?? error.code ?? 'error desconocido'}`;
+        if (error.code === 'NOT_AUTHORIZED') stopDriverGps();
+      }
+    });
+    try {
+      await session.reconnect();
+      driverGpsWatchId = await driverBackgroundBridge.start();
+    } catch (error) {
+      await driverBackgroundBridge.stop();
+      driverBackgroundBridge = null;
+      driverTelemetrySession = null;
+      if (status) status.textContent = `No se pudo activar el GPS en segundo plano: ${error.message}`;
+      return;
+    }
+    driverOnlineHandler = () => driverTelemetrySession?.reconnect();
+    window.addEventListener('online', driverOnlineHandler);
+    if (status) status.textContent = 'GPS activo · recorrido registrándose en segundo plano.';
+    const button = document.querySelector('[data-driver-gps]');
+    if (button) { button.dataset.driverGps = 'stop'; button.textContent = 'Detener GPS'; }
+    return;
+  }
   if (!navigator.geolocation) { if (status) status.textContent = 'Este navegador no soporta geolocalización.'; return; }
   if (!realAdapter || !driverAuthContext) { if (status) status.textContent = 'GPS real requiere una sesión conectada a Supabase.'; return; }
   if (status) status.textContent = 'Buscando tu vehículo asignado…';
@@ -1022,10 +1083,17 @@ async function startDriverGps() {
     stopDriverGps();
   }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 });
   const button = document.querySelector('[data-driver-gps]');
-  if (button) { button.dataset.driverGps = 'stop'; button.textContent = 'Detener GPS real'; }
+  if (button) { button.dataset.driverGps = 'stop'; button.textContent = 'Detener GPS'; }
 }
 async function stopDriverGps({ flush = false } = {}) {
-  if (driverGpsWatchId != null) navigator.geolocation.clearWatch(driverGpsWatchId);
+  if (driverBackgroundBridge) {
+    await driverBackgroundBridge.stop({ flush });
+    if (flush) await driverTelemetrySession?.reconnect();
+    driverBackgroundBridge = null;
+    driverTelemetrySession = null;
+    if (driverOnlineHandler) window.removeEventListener('online', driverOnlineHandler);
+    driverOnlineHandler = null;
+  } else if (driverGpsWatchId != null) navigator.geolocation.clearWatch(driverGpsWatchId);
   driverGpsWatchId = null;
   if (flush && driverGpsPendingWrites.size) await Promise.allSettled([...driverGpsPendingWrites]);
   const button = document.querySelector('[data-driver-gps]');
