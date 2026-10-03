@@ -49,8 +49,13 @@ jobs:
           java-version: '21'
           cache: gradle
 
+      # Google retired the legacy `tools` SDK package (see android-actions/setup-android#537).
+      # setup-android@v3 requested it by default and failed with "Failed to find package 'tools'".
+      # Use @v4, whose default no longer includes `tools`, and pin the packages we actually need.
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
 
       - name: Install Android SDK packages
         run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
