@@ -68,8 +68,23 @@ for (const file of readdirSync(DIST_DIR)) {
 
 const url = process.env.SUPABASE_URL;
 const anonKey = process.env.SUPABASE_ANON_KEY;
+
+// SW-070 (CA3): opt-in strict mode for real staging builds. When SUPABASE_BUILD_STRICT=true, a
+// missing required variable is a hard failure (exit code 1) instead of a warning, so a
+// misconfigured staging deploy fails visibly rather than silently shipping a demo-only dist/.
+// Deliberately opt-in (not the default) and env-driven (not a CLI flag) so the local/demo path
+// keeps behaving exactly as before — see CLAUDE.md rule 5.
+const strictBuild = process.env.SUPABASE_BUILD_STRICT === 'true';
 if (!url || !anonKey) {
-  console.warn('\n⚠️  SUPABASE_URL/SUPABASE_ANON_KEY no configuradas — dist/ queda en modo demo puro (sin backend real). Configuralas en las variables de entorno del hosting si esta build es para staging real.\n');
+  if (strictBuild) {
+    const missing = [];
+    if (!url) missing.push('SUPABASE_URL');
+    if (!anonKey) missing.push('SUPABASE_ANON_KEY');
+    console.error(`\n❌ Build estricto de staging: falta ${missing.join(' y ')}. Definila(s) en el entorno antes de buildear staging, o quitá SUPABASE_BUILD_STRICT=true para producir un dist/ en modo demo. No se escribió la config de Supabase en dist/index.html.\n`);
+    process.exitCode = 1;
+  } else {
+    console.warn('\n⚠️  SUPABASE_URL/SUPABASE_ANON_KEY no configuradas — dist/ queda en modo demo puro (sin backend real). Configuralas en las variables de entorno del hosting si esta build es para staging real.\n');
+  }
 } else {
   // SW-044: opt-in, deployment-level — hides the bundled demo trucks/routes/drivers/incidents
   // permanently on this deployment (frontend/app.js), even once a municipality has real data of

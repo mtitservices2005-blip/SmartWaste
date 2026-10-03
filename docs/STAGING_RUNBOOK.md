@@ -29,8 +29,16 @@ Este procedimiento lo ejecuta Miguel o un operador autorizado desde una terminal
 4. Confirmar que el build es `node scripts/build-frontend-config.mjs`, que la salida es `dist`, y desplegar preview desde la rama aprobada:
 
    ```sh
+   SUPABASE_BUILD_STRICT=true node scripts/build-frontend-config.mjs
    vercel deploy
    ```
+
+   El build real de staging DEBE ejecutarse con `SUPABASE_BUILD_STRICT=true` (como arriba). En ese
+   modo, si falta `SUPABASE_URL` o `SUPABASE_ANON_KEY` el comando falla con código de salida distinto
+   de cero y un mensaje que nombra la variable faltante — así el deploy se detiene de forma visible
+   en vez de producir silenciosamente un `dist/` en modo demo. Sin `SUPABASE_BUILD_STRICT=true` (por
+   ejemplo al abrir/compilar localmente) el comportamiento no cambia: el script solo advierte y
+   genera `dist/` en modo demo, sin fallar nunca (regla 5 de `CLAUDE.md`).
 
 ## Modelo de provisión SW-070
 
