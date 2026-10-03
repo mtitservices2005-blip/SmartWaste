@@ -1,3 +1,11 @@
 node_modules/
 .claude/
 dist/
+
+# Secretos y credenciales locales (nunca al repo)
+.env*
+!.env.example
+Supabase*.txt
+*secret*
+*.key
+.vercel/
