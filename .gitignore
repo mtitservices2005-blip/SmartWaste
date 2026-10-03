@@ -9,3 +9,4 @@ Supabase*.txt
 *secret*
 *.key
 .vercel/
+*.bak
