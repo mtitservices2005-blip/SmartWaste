@@ -54,7 +54,14 @@ async function findAuthUserByEmail(client, email) {
 }
 
 function logProgress(logger, steps) {
-  logger.log(`Pasos: municipio=${steps.municipality}; auth=${steps.authUser}; perfil=${steps.profile}; membresía=${steps.membership}.`);
+  const parts = [
+    `municipio=${steps.municipality}`,
+    `auth=${steps.authUser}`,
+    `perfil=${steps.profile}`,
+    `membresía=${steps.membership}`
+  ];
+  if (steps.driverRecord !== undefined) parts.push(`driver=${steps.driverRecord}`);
+  logger.log(`Pasos: ${parts.join('; ')}.`);
 }
 
 async function ensureMunicipality(client, municipality) {
@@ -78,7 +85,22 @@ async function ensureUser(client, user, { resendInvite }) {
   if (existing && !resendInvite) return { user: existing, outcome: 'reused' };
 
   const invited = await client.auth.admin.inviteUserByEmail(user.email, { data: { display_name: user.name } });
-  const invitedUser = resultError(invited, 'No se pudo enviar la invitación de Supabase Auth.');
+  if (invited?.error) {
+    // Resend path: the Auth user already exists, so a failed re-invite (typically because the user
+    // already confirmed the original invitation and set a password) is not a transient crash that
+    // a plain retry fixes — and, per CLAUDE.md rule 8, it must never surface a generated link or
+    // token. Report a distinct, link-free status so the operator knows to use "olvidé mi
+    // contraseña" on the login form, or the resend-driver-invite Edge Function for drivers.
+    if (existing) {
+      return {
+        user: existing,
+        outcome: 'resend_failed',
+        error: 'No se pudo reenviar la invitación: la cuenta ya podría estar confirmada o tener contraseña establecida; no hay enlace de invitación que reenviar. Use "olvidé mi contraseña" en el login o, para drivers, la Edge Function resend-driver-invite.'
+      };
+    }
+    throw new Error('No se pudo enviar la invitación de Supabase Auth.');
+  }
+  const invitedUser = invited?.data;
   if (!invitedUser?.user?.id) throw new Error('Supabase Auth no devolvió un usuario para la invitación.');
   return { user: invitedUser.user, outcome: existing ? 'resent' : 'invited' };
 }
@@ -92,7 +114,19 @@ async function ensureProfile(client, municipality, user) {
   return resultError(profile, 'No se pudo upsertar el perfil.');
 }
 
-async function ensureMembership(client, municipality, user) {
+async function ensureMembership(client, municipality, user, { changeRole = false } = {}) {
+  // A pre-existing membership for the same (municipality_id, profile_id) must never be silently
+  // overwritten with a different role: a mistargeted alta or a retry could otherwise demote a
+  // supervisor to driver without anyone asking. Only an explicit --change-role allows it.
+  const existing = await client.from('memberships').select('*')
+    .eq('municipality_id', municipality.id)
+    .eq('profile_id', user.id)
+    .maybeSingle();
+  const found = resultError(existing, 'No se pudo consultar la membresía.');
+  if (found && found.role !== municipality.user.role && !changeRole) {
+    throw new Error(`La membresía de este usuario ya existe con el rol ${found.role}; use --change-role para cambiarla a ${municipality.user.role} explícitamente.`);
+  }
+
   const membership = await client.from('memberships').upsert({
     municipality_id: municipality.id,
     profile_id: user.id,
@@ -102,7 +136,38 @@ async function ensureMembership(client, municipality, user) {
   return resultError(membership, 'No se pudo upsertar la membresía.');
 }
 
-export async function provisionMunicipality({ client, municipality, user, resendInvite = false, logger = console }) {
+// SW-070 (revisión): provisioning a `driver` role must also leave a `drivers` row bound to that
+// user, exactly like supabase/functions/create-driver-account/index.ts does for the historical
+// "Flota y personal" UI. Idempotent: reuse an existing row (looked up by the strong profile_id
+// relation first, then by municipality_id + display_name for rows created by another path before
+// profile_id was set) and never insert a duplicate.
+async function ensureDriverRecord(client, municipality, resolvedUser) {
+  const byProfile = await client.from('drivers').select('*').eq('profile_id', resolvedUser.id).maybeSingle();
+  const foundByProfile = resultError(byProfile, 'No se pudo consultar la tabla drivers.');
+  if (foundByProfile) return { driver: foundByProfile, outcome: 'reused' };
+
+  const byName = await client.from('drivers').select('*')
+    .eq('municipality_id', municipality.id)
+    .eq('display_name', municipality.user.name)
+    .maybeSingle();
+  const foundByName = resultError(byName, 'No se pudo consultar la tabla drivers.');
+  if (foundByName) {
+    if (!foundByName.profile_id) {
+      const linked = await client.from('drivers').update({ profile_id: resolvedUser.id }).eq('id', foundByName.id).select('*').single();
+      resultError(linked, 'No se pudo vincular el driver existente.');
+    }
+    return { driver: foundByName, outcome: 'reused' };
+  }
+
+  const created = await client.from('drivers').insert({
+    municipality_id: municipality.id,
+    display_name: municipality.user.name,
+    profile_id: resolvedUser.id
+  }).select('*').single();
+  return { driver: resultError(created, 'No se pudo crear la fila de driver.'), outcome: 'created' };
+}
+
+export async function provisionMunicipality({ client, municipality, user, resendInvite = false, changeRole = false, logger = console }) {
   const requestedMunicipality = {
     slug: requiredText(municipality?.slug, 'un slug de municipio'),
     name: requiredText(municipality?.name, 'un nombre de municipio')
@@ -113,6 +178,7 @@ export async function provisionMunicipality({ client, municipality, user, resend
     role: validateRole(user?.role)
   };
   const steps = { municipality: 'pending', authUser: 'pending', profile: 'pending', membership: 'pending' };
+  if (requestedUser.role === 'driver') steps.driverRecord = 'pending';
   let resolvedMunicipality;
   let resolvedUser;
 
@@ -120,46 +186,61 @@ export async function provisionMunicipality({ client, municipality, user, resend
     const result = await ensureMunicipality(client, requestedMunicipality);
     resolvedMunicipality = result.municipality;
     steps.municipality = result.outcome;
-  } catch {
+  } catch (error) {
     steps.municipality = 'failed';
     logProgress(logger, steps);
-    return { ok: false, steps };
+    return { ok: false, steps, error: error.message };
   }
 
   try {
     const result = await ensureUser(client, requestedUser, { resendInvite });
     resolvedUser = result.user;
     steps.authUser = result.outcome;
-  } catch {
+    if (result.outcome === 'resend_failed') {
+      logProgress(logger, steps);
+      return { ok: false, steps, municipality: resolvedMunicipality, user: resolvedUser, error: result.error };
+    }
+  } catch (error) {
     steps.authUser = 'failed';
     logProgress(logger, steps);
-    return { ok: false, steps, municipality: resolvedMunicipality };
+    return { ok: false, steps, municipality: resolvedMunicipality, error: error.message };
   }
 
   const context = { ...resolvedMunicipality, user: requestedUser };
   try {
     await ensureProfile(client, context, resolvedUser);
     steps.profile = 'upserted';
-  } catch {
+  } catch (error) {
     steps.profile = 'failed';
     logProgress(logger, steps);
-    return { ok: false, steps, municipality: resolvedMunicipality, user: resolvedUser };
+    return { ok: false, steps, municipality: resolvedMunicipality, user: resolvedUser, error: error.message };
   }
 
   try {
-    await ensureMembership(client, context, resolvedUser);
+    await ensureMembership(client, context, resolvedUser, { changeRole });
     steps.membership = 'upserted';
-  } catch {
+  } catch (error) {
     steps.membership = 'failed';
     logProgress(logger, steps);
-    return { ok: false, steps, municipality: resolvedMunicipality, user: resolvedUser };
+    return { ok: false, steps, municipality: resolvedMunicipality, user: resolvedUser, error: error.message };
+  }
+
+  if (requestedUser.role === 'driver') {
+    try {
+      const result = await ensureDriverRecord(client, context, resolvedUser);
+      steps.driverRecord = result.outcome;
+    } catch (error) {
+      steps.driverRecord = 'failed';
+      logProgress(logger, steps);
+      return { ok: false, steps, municipality: resolvedMunicipality, user: resolvedUser, error: error.message };
+    }
   }
 
   logProgress(logger, steps);
   return { ok: true, steps, municipality: resolvedMunicipality, user: resolvedUser };
 }
 
-export async function addMunicipalityUsers({ client, municipalitySlug, users, resendInvite = false, logger = console }) {
+export async function addMunicipalityUsers({ client, municipalitySlug, users, resendInvite = false, changeRole = false, logger = console }) {
   const slug = requiredText(municipalitySlug, 'el slug del municipio');
   const lookup = await client.from('municipalities').select('*').eq('slug', slug).maybeSingle();
   const municipality = resultError(lookup, 'No se pudo consultar el municipio.');
@@ -172,6 +253,7 @@ export async function addMunicipalityUsers({ client, municipalitySlug, users, re
       municipality: { slug: municipality.slug, name: municipality.name },
       user: rawUser,
       resendInvite,
+      changeRole,
       logger
     });
     results.push(result);
@@ -206,7 +288,7 @@ export function parseArguments(args) {
   const options = {};
   for (let index = 0; index < rest.length; index += 1) {
     const token = rest[index];
-    if (token === '--dry-run' || token === '--resend-invite') options[token.slice(2)] = true;
+    if (token === '--dry-run' || token === '--resend-invite' || token === '--change-role') options[token.slice(2)] = true;
     else if (token.startsWith('--')) {
       const value = rest[index + 1];
       if (!value || value.startsWith('--')) throw new Error(`Falta valor para ${token}.`);
@@ -222,15 +304,23 @@ function printDryRun(command, options, users, logger) {
   logger.log(`Se validarían ${users.length} alta(s), se reutilizaría el municipio por slug y se crearían/reutilizarían Auth, perfil y membresía.`);
   if (options['resend-invite']) logger.log('Se solicitaría el reenvío explícito de invitaciones para usuarios Auth existentes.');
   else logger.log('No se reenviará ninguna invitación existente sin --resend-invite.');
+  if (options['change-role']) logger.log('Se permitiría explícitamente cambiar el rol de una membresía existente (--change-role).');
 }
 
 async function main() {
   const { command, options } = parseArguments(process.argv.slice(2));
   const municipality = { slug: options['municipality-slug'], name: options['municipality-name'] };
-  const users = options['from-file']
+  let users = options['from-file']
     ? loadBulkUsers(options['from-file'])
     : [{ email: options.email, role: command === 'municipality' ? 'municipal_admin' : options.role, name: options.name }];
-  users.forEach((user) => ({ ...user, email: normalizedEmail(user.email), name: requiredText(user.name, 'un nombre de usuario'), role: validateRole(user.role) }));
+  // Normalize in place so the validated/normalized array is what the rest of main() actually uses
+  // (the previous forEach built throwaway objects and discarded the normalized values).
+  users = users.map((user) => ({
+    ...user,
+    email: normalizedEmail(user.email),
+    name: requiredText(user.name, 'un nombre de usuario'),
+    role: validateRole(user.role)
+  }));
   if (command === 'municipality') {
     requiredText(municipality.slug, 'un slug de municipio');
     requiredText(municipality.name, 'un nombre de municipio');
@@ -248,8 +338,8 @@ async function main() {
   if (!apiUrl || !serviceRoleKey) throw new Error('Faltan SUPABASE_URL y/o SUPABASE_SERVICE_ROLE_KEY en el entorno protegido.');
   const client = await createRemoteServiceClient(apiUrl, serviceRoleKey);
   const result = command === 'municipality'
-    ? await provisionMunicipality({ client, municipality, user: users[0], resendInvite: Boolean(options['resend-invite']) })
-    : await addMunicipalityUsers({ client, municipalitySlug: municipality.slug, users, resendInvite: Boolean(options['resend-invite']) });
+    ? await provisionMunicipality({ client, municipality, user: users[0], resendInvite: Boolean(options['resend-invite']), changeRole: Boolean(options['change-role']) })
+    : await addMunicipalityUsers({ client, municipalitySlug: municipality.slug, users, resendInvite: Boolean(options['resend-invite']), changeRole: Boolean(options['change-role']) });
   if (!result.ok) process.exitCode = 1;
 }
 

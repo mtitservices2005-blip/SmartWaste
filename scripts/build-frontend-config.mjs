@@ -80,10 +80,10 @@ if (!url || !anonKey) {
     const missing = [];
     if (!url) missing.push('SUPABASE_URL');
     if (!anonKey) missing.push('SUPABASE_ANON_KEY');
-    console.error(`\n❌ Build estricto de staging: falta ${missing.join(' y ')}. Definila(s) en el entorno antes de buildear staging, o quitá SUPABASE_BUILD_STRICT=true para producir un dist/ en modo demo. No se escribió la config de Supabase en dist/index.html.\n`);
+    console.error(`\n❌ Build estricto de staging: falta ${missing.join(' y ')}. Defínalas en el entorno antes de compilar staging, o quite SUPABASE_BUILD_STRICT=true para producir un dist/ en modo demo. No se escribió la config de Supabase en dist/index.html.\n`);
     process.exitCode = 1;
   } else {
-    console.warn('\n⚠️  SUPABASE_URL/SUPABASE_ANON_KEY no configuradas — dist/ queda en modo demo puro (sin backend real). Configuralas en las variables de entorno del hosting si esta build es para staging real.\n');
+    console.warn('\n⚠️  SUPABASE_URL/SUPABASE_ANON_KEY no configuradas — dist/ queda en modo demo puro (sin backend real). Configúrelas en las variables de entorno del hosting si esta build es para staging real.\n');
   }
 } else {
   // SW-044: opt-in, deployment-level — hides the bundled demo trucks/routes/drivers/incidents

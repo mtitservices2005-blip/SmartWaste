@@ -9,6 +9,7 @@ function createSimulatedClient({ failProfileUpsertOnce = false, failInviteOnce =
     users: [],
     profiles: [],
     memberships: [],
+    drivers: [],
     inviteCalls: 0,
     failProfileUpsertOnce,
     failInviteOnce
@@ -36,10 +37,28 @@ function createSimulatedClient({ failProfileUpsertOnce = false, failInviteOnce =
           select() {
             return {
               async single() {
-                if (name !== 'municipalities') throw new Error(`unexpected insert into ${name}`);
-                const row = { id: `municipality-${rows.length + 1}`, ...payload };
+                if (name !== 'municipalities' && name !== 'drivers') throw new Error(`unexpected insert into ${name}`);
+                const idPrefix = name === 'drivers' ? 'driver' : 'municipality';
+                const row = { id: `${idPrefix}-${rows.length + 1}`, ...payload };
                 rows.push(row);
                 return result(row);
+              }
+            };
+          }
+        };
+      },
+      update(payload) {
+        return {
+          eq(column, value) {
+            return {
+              select() {
+                return {
+                  async single() {
+                    const match = rows.find((row) => row[column] === value);
+                    if (match) Object.assign(match, payload);
+                    return result(match ?? null);
+                  }
+                };
               }
             };
           }
@@ -190,6 +209,100 @@ try {
     });
     assert.equal(withResend.steps.authUser, 'resent');
     assert.equal(client.state.inviteCalls, 1, 'resend requires an explicit flag');
+  }
+
+  // Hallazgo 1: el rol driver también crea/reutiliza idempotentemente la fila en `drivers`.
+  {
+    const client = createSimulatedClient();
+    client.state.municipalities.push({ id: 'municipality-driver', slug: 'driver-town', name: 'Driver Town' });
+    const first = await capture((logger) => provisionMunicipality({
+      client,
+      municipality: { slug: 'driver-town', name: 'Driver Town' },
+      user: { email: 'driver@example.test', name: 'Pilot Driver', role: 'driver' },
+      logger
+    }));
+    assert.equal(first.value.ok, true);
+    assert.deepEqual(first.value.steps, { municipality: 'reused', authUser: 'invited', profile: 'upserted', membership: 'upserted', driverRecord: 'created' });
+    assert.equal(client.state.drivers.length, 1, 'provisioning a driver must create exactly one drivers row');
+    assert.equal(client.state.drivers[0].municipality_id, 'municipality-driver');
+    assert.equal(client.state.drivers[0].profile_id, first.value.user.id);
+    assert.equal(client.state.drivers[0].display_name, 'Pilot Driver');
+
+    const retry = await capture((logger) => provisionMunicipality({
+      client,
+      municipality: { slug: 'driver-town', name: 'Driver Town' },
+      user: { email: 'driver@example.test', name: 'Pilot Driver', role: 'driver' },
+      logger
+    }));
+    assert.equal(retry.value.ok, true);
+    assert.equal(retry.value.steps.driverRecord, 'reused');
+    assert.equal(client.state.drivers.length, 1, 'retrying must reuse the drivers row, never duplicate it');
+  }
+
+  // Hallazgo 1: un rol distinto de driver no crea ninguna fila en `drivers`.
+  {
+    const client = createSimulatedClient();
+    client.state.municipalities.push({ id: 'municipality-sup', slug: 'sup-town', name: 'Sup Town' });
+    const result = await provisionMunicipality({
+      client,
+      municipality: { slug: 'sup-town', name: 'Sup Town' },
+      user: { email: 'supervisor@example.test', name: 'Pilot Supervisor', role: 'supervisor' },
+      logger: { log() {}, error() {} }
+    });
+    assert.equal(result.ok, true);
+    assert.equal('driverRecord' in result.steps, false, 'non-driver roles must not track a drivers step');
+    assert.equal(client.state.drivers.length, 0, 'non-driver roles must not create a drivers row');
+  }
+
+  // Hallazgo 2: no se cambia el rol de una membresía existente sin --change-role explícito.
+  {
+    const client = createSimulatedClient();
+    client.state.municipalities.push({ id: 'municipality-role', slug: 'role-town', name: 'Role Town' });
+    client.state.users.push({ id: 'user-role', email: 'member@example.test' });
+    client.state.profiles.push({ id: 'user-role', display_name: 'Member', email: 'member@example.test' });
+    client.state.memberships.push({ id: 'membership-role', municipality_id: 'municipality-role', profile_id: 'user-role', role: 'supervisor', status: 'active' });
+
+    const blocked = await capture((logger) => provisionMunicipality({
+      client,
+      municipality: { slug: 'role-town', name: 'Role Town' },
+      user: { email: 'member@example.test', name: 'Member', role: 'driver' },
+      logger
+    }));
+    assert.equal(blocked.value.ok, false, 'a role change without --change-role must fail');
+    assert.equal(blocked.value.steps.membership, 'failed');
+    assert.match(String(blocked.value.error), /--change-role/, 'the failure must name --change-role explicitly');
+    assert.equal(client.state.memberships[0].role, 'supervisor', 'a role change without --change-role must not modify the membership');
+
+    const changed = await provisionMunicipality({
+      client,
+      municipality: { slug: 'role-town', name: 'Role Town' },
+      user: { email: 'member@example.test', name: 'Member', role: 'driver' },
+      changeRole: true,
+      logger: { log() {}, error() {} }
+    });
+    assert.equal(changed.ok, true);
+    assert.equal(changed.steps.membership, 'upserted');
+    assert.equal(client.state.memberships[0].role, 'driver', 'changeRole:true must update the membership role');
+  }
+
+  // Hallazgo 3: reenviar una invitación a una cuenta ya confirmada falla de forma clara y sin
+  // exponer ningún enlace/token; nunca se lanza una excepción genérica que oculte el contexto.
+  {
+    const client = createSimulatedClient({ failInviteOnce: true });
+    client.state.municipalities.push({ id: 'municipality-resendfail', slug: 'resend-fail-town', name: 'Resend Fail Town' });
+    client.state.users.push({ id: 'user-confirmed', email: 'confirmed@example.test' });
+    const result = await capture((logger) => provisionMunicipality({
+      client,
+      municipality: { slug: 'resend-fail-town', name: 'Resend Fail Town' },
+      user: { email: 'confirmed@example.test', name: 'Confirmed Member', role: 'dispatcher' },
+      resendInvite: true,
+      logger
+    }));
+    assert.equal(result.value.ok, false);
+    assert.equal(result.value.steps.authUser, 'resend_failed', 'a failed resend must be reported distinctly');
+    assert.equal(typeof result.value.error, 'string');
+    assert.equal(/http/i.test(result.value.error), false, 'the resend failure message must not contain any link/token');
+    assert.equal(result.output.includes('http'), false, 'progress output must not expose a link');
   }
 
   console.log('SW-070 resumable provisioning tests passed.');
