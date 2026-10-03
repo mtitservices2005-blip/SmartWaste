@@ -46,6 +46,7 @@ import { join, extname } from 'node:path';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const FRONTEND_DIR = join(ROOT, 'frontend');
 const DIST_DIR = join(ROOT, 'dist');
+const MOBILE_DIR = join(ROOT, 'mobile');
 const BUILD_SCRIPT = fileURLToPath(new URL('../scripts/build-frontend-config.mjs', import.meta.url));
 const INDEX_HTML = join(DIST_DIR, 'index.html');
 
@@ -179,7 +180,9 @@ try {
   assert.ok(existsSync(INDEX_HTML), 'el build debe producir dist/index.html');
 
   // a. El estado actual del repo (frontend/ + dist/ recién construido) no debe tener hallazgos.
-  for (const [label, dir] of [['frontend/', FRONTEND_DIR], ['dist/', DIST_DIR]]) {
+  // mobile/ belongs to a later SW-074 task. scanTree() intentionally treats an absent directory
+  // as empty so this security gate is already active without forcing this task to create it.
+  for (const [label, dir] of [['frontend/', FRONTEND_DIR], ['dist/', DIST_DIR], ['mobile/', MOBILE_DIR]]) {
     const findings = scanTree(dir);
     assert.equal(
       findings.length,
@@ -227,7 +230,7 @@ try {
   assert.ok(jwtFindings.some((f) => f.rule === 'R2-jwt'), 'R2 debe rechazar un JWT con forma eyJ...');
 
   console.log('frontend-no-service-role ok');
-  console.log(`  · built dist/ (env ficticio explícito) y escaneado frontend/ + dist/: 0 hallazgos`);
+  console.log(`  · built dist/ (env ficticio explícito) y escaneado frontend/ + dist/ + mobile/ (si existe): 0 hallazgos`);
   console.log(`  · política: R1 service_role con valor / identificador *_SERVICE_ROLE_KEY (código, comentarios excluidos); R2 JWT eyJ... (cualquier parte)`);
 } catch (error) {
   console.error(error);
