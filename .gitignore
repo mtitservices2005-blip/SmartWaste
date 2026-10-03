@@ -2,7 +2,12 @@ node_modules/
 .claude/
 dist/
 
-# Secretos y credenciales locales (nunca al repo)
+# Local pilot-member source lists can contain personal contact data; never commit them.
+.pilot-provisioning/
+*.pilot-members.csv
+*.pilot-members.json
+
+# Secretos, credenciales e identidades operativas locales (nunca al repo)
 .env*
 !.env.example
 Supabase*.txt
@@ -10,3 +15,4 @@ Supabase*.txt
 *.key
 .vercel/
 *.bak
+.pipeline/
