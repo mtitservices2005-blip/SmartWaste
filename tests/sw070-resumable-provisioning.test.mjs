@@ -254,6 +254,70 @@ try {
     assert.equal(client.state.drivers.length, 0, 'non-driver roles must not create a drivers row');
   }
 
+  // Hallazgo 1 (revisión 3): ensureDriverRecord debe vincularse a (municipality_id, profile_id).
+  // (a) mismo profile + municipio reutiliza — cubierto arriba: el retry en 'driver-town' devuelve
+  //     driverRecord 'reused' y no duplica la fila.
+
+  // (b) otro perfil con el MISMO display_name en el mismo municipio: NO se reutiliza, se crea una
+  //     segunda fila para el perfil solicitado y la ajena queda intacta.
+  {
+    const client = createSimulatedClient();
+    client.state.municipalities.push({ id: 'municipality-dupname', slug: 'dup-name-town', name: 'Dup Name Town' });
+    client.state.drivers.push({ id: 'driver-other', municipality_id: 'municipality-dupname', display_name: 'Pilot Driver', profile_id: 'other-profile' });
+    const result = await capture((logger) => provisionMunicipality({
+      client,
+      municipality: { slug: 'dup-name-town', name: 'Dup Name Town' },
+      user: { email: 'driver@example.test', name: 'Pilot Driver', role: 'driver' },
+      logger
+    }));
+    assert.equal(result.value.ok, true);
+    assert.equal(result.value.steps.driverRecord, 'created', 'una fila homónima de otro profile_id no debe reutilizarse');
+    assert.equal(client.state.drivers.length, 2, 'debe crearse una segunda fila para el perfil solicitado');
+    const created = client.state.drivers.find((row) => row.profile_id === result.value.user.id);
+    assert.ok(created, 'debe existir una fila ligada al profile_id solicitado');
+    assert.equal(created.municipality_id, 'municipality-dupname');
+    assert.equal(client.state.drivers[0].profile_id, 'other-profile', 'la fila del otro perfil no debe modificarse');
+  }
+
+  // (c) fila del MISMO profile en OTRO municipio: NO se toma como reusable; se crea la fila del
+  //     municipio solicitado y la del otro municipio queda intacta.
+  {
+    const client = createSimulatedClient();
+    client.state.municipalities.push({ id: 'municipality-target', slug: 'target-town', name: 'Target Town' });
+    client.state.users.push({ id: 'user-cross', email: 'cross@example.test' });
+    client.state.drivers.push({ id: 'driver-cross', municipality_id: 'municipality-other', display_name: 'Cross Driver', profile_id: 'user-cross' });
+    const result = await capture((logger) => provisionMunicipality({
+      client,
+      municipality: { slug: 'target-town', name: 'Target Town' },
+      user: { email: 'cross@example.test', name: 'Cross Driver', role: 'driver' },
+      logger
+    }));
+    assert.equal(result.value.ok, true);
+    assert.equal(result.value.steps.driverRecord, 'created', 'una fila del mismo profile en otro municipio no debe reutilizarse');
+    assert.equal(client.state.drivers.length, 2, 'debe crearse la fila del municipio solicitado');
+    const created = client.state.drivers.find((row) => row.municipality_id === 'municipality-target');
+    assert.ok(created, 'debe existir la fila del municipio solicitado');
+    assert.equal(created.profile_id, 'user-cross');
+    assert.equal(client.state.drivers[0].municipality_id, 'municipality-other', 'la fila del otro municipio no debe modificarse');
+  }
+
+  // (d) fila homónima sin profile_id en el municipio solicitado: se vincula de forma idempotente.
+  {
+    const client = createSimulatedClient();
+    client.state.municipalities.push({ id: 'municipality-legacy', slug: 'legacy-town', name: 'Legacy Town' });
+    client.state.drivers.push({ id: 'driver-legacy', municipality_id: 'municipality-legacy', display_name: 'Pilot Driver', profile_id: null });
+    const result = await capture((logger) => provisionMunicipality({
+      client,
+      municipality: { slug: 'legacy-town', name: 'Legacy Town' },
+      user: { email: 'driver@example.test', name: 'Pilot Driver', role: 'driver' },
+      logger
+    }));
+    assert.equal(result.value.ok, true);
+    assert.equal(result.value.steps.driverRecord, 'reused', 'una fila sin profile_id debe vincularse, no duplicarse');
+    assert.equal(client.state.drivers.length, 1);
+    assert.equal(client.state.drivers[0].profile_id, result.value.user.id, 'la fila heredada debe quedar vinculada al perfil');
+  }
+
   // Hallazgo 2: no se cambia el rol de una membresía existente sin --change-role explícito.
   {
     const client = createSimulatedClient();

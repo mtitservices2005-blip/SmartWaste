@@ -6,7 +6,7 @@ Este procedimiento lo ejecuta Miguel o un operador autorizado desde una terminal
 
 | Ámbito | Variables |
 | --- | --- |
-| Build de staging | `SUPABASE_URL`, `SUPABASE_ANON_KEY` |
+| Build de staging | `SUPABASE_URL`, `SUPABASE_ANON_KEY`; **obligatorio** `SUPABASE_BUILD_STRICT=true` |
 | Configuración opcional del frontend | `SUPABASE_MUNICIPALITY_ID`, `SUPABASE_HIDE_DEMO` |
 | Provisión desde terminal protegida | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` |
 
@@ -25,7 +25,7 @@ Este procedimiento lo ejecuta Miguel o un operador autorizado desde una terminal
    ```
 
    No usar `supabase db reset` contra staging. Detenerse si el plan no coincide con las migraciones versionadas.
-3. En Vercel staging, configurar por interfaz o CLI `SUPABASE_URL` y `SUPABASE_ANON_KEY`; configurar las dos variables opcionales únicamente si el piloto lo necesita. Verificar el build con esas variables antes de desplegar.
+3. En Vercel staging, configurar por interfaz o CLI `SUPABASE_URL` y `SUPABASE_ANON_KEY`; configurar las dos variables opcionales únicamente si el piloto lo necesita. **Paso obligatorio de Miguel:** en el Environment de **staging de Vercel** definir además `SUPABASE_BUILD_STRICT=true` (junto con `SUPABASE_URL` y `SUPABASE_ANON_KEY`). Sin `SUPABASE_BUILD_STRICT=true` un staging sin credenciales no fallaría: produciría silenciosamente un `dist/` en modo demo. Verificar el build con esas variables antes de desplegar.
 4. Confirmar que el build es `node scripts/build-frontend-config.mjs`, que la salida es `dist`, y desplegar preview desde la rama aprobada:
 
    ```sh
@@ -33,12 +33,15 @@ Este procedimiento lo ejecuta Miguel o un operador autorizado desde una terminal
    vercel deploy
    ```
 
-   El build real de staging DEBE ejecutarse con `SUPABASE_BUILD_STRICT=true` (como arriba). En ese
-   modo, si falta `SUPABASE_URL` o `SUPABASE_ANON_KEY` el comando falla con código de salida distinto
-   de cero y un mensaje que nombra la variable faltante — así el deploy se detiene de forma visible
-   en vez de producir silenciosamente un `dist/` en modo demo. Sin `SUPABASE_BUILD_STRICT=true` (por
-   ejemplo al abrir/compilar localmente) el comportamiento no cambia: el script solo advierte y
-   genera `dist/` en modo demo, sin fallar nunca (regla 5 de `CLAUDE.md`).
+   El build real de staging DEBE ejecutarse con `SUPABASE_BUILD_STRICT=true` (como arriba; en Vercel
+   esto se garantiza definiendo la variable en el Environment de staging, además de las credenciales).
+   En ese modo, si falta `SUPABASE_URL` o `SUPABASE_ANON_KEY` el comando falla con código de salida
+   distinto de cero y un mensaje que nombra la variable faltante — así el deploy se detiene de forma
+   visible en vez de producir silenciosamente un `dist/` en modo demo. El build estricto se activa
+   cuando `SUPABASE_BUILD_STRICT=true` **o** cuando `VERCEL_ENV=production`: un deploy de
+   **producción** en Vercel es estricto automáticamente, sin configurar nada extra. Los **previews**
+   (`VERCEL_ENV=preview`) y las compilaciones locales se mantienen en modo demo (solo advierten, nunca
+   fallan) salvo que se defina explícitamente `SUPABASE_BUILD_STRICT=true` (regla 5 de `CLAUDE.md`).
 
 ## Modelo de provisión SW-070
 
@@ -162,6 +165,8 @@ Tras revisar cada simulación, ejecutar el mismo comando **sin** `--dry-run` des
 
 ```sh
 node tests/sw070-resumable-provisioning.test.mjs
+node tests/sw070-dry-run.test.mjs
+node tests/build-frontend-config.test.mjs
 set -e
 skip_list="tests/rls-adversarial.test.mjs tests/operational-cycle.test.mjs tests/telemetry-persistence.test.mjs tests/telemetry-realtime-diagnosis.test.mjs tests/route-stops-persistence.test.mjs tests/route-paths-persistence.test.mjs tests/rls-coverage.test.mjs tests/gps-route-metrics.test.mjs"
 for f in tests/*.test.mjs; do
