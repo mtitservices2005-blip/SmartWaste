@@ -132,11 +132,21 @@ export async function createDriverTelemetrySession({
 }) {
   const assignment = await operationsAdapter.findOwnVehicleAssignment(profileId);
   if (!assignment.ok) {
+    if (assignment.error?.code === 'NO_ACTIVE_ROUTE_ASSIGNED') {
+      return {
+        ok: false,
+        error: {
+          ...assignment.error,
+          message: 'No tienes un vehiculo asignado en una ruta activa.'
+        }
+      };
+    }
     return {
       ok: false,
       error: {
-        code: assignment.error?.code ?? 'NO_ACTIVE_ROUTE_ASSIGNED',
-        message: 'No tienes un vehiculo asignado en una ruta activa.'
+        ...assignment.error,
+        code: assignment.error?.code ?? 'ASSIGNMENT_LOOKUP_FAILED',
+        message: assignment.error?.message ?? 'No se pudo consultar tu asignacion de ruta.'
       }
     };
   }

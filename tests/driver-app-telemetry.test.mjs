@@ -82,6 +82,27 @@ assert.match(noVehicle.error.message, /vehiculo asignado/i);
 assert.equal(enqueueCalls, 0);
 assert.equal(ingestCalls, 0);
 
+// Operational lookup failures retain their real cause instead of being presented as an absent
+// assignment, and likewise cannot create a queue entry or reach ingestion.
+const lookupFailure = await createDriverTelemetrySession({
+  profileId: 'profile-query-failure', municipalityId: 'mun-1', deviceId: 'android-abc',
+  operationsAdapter: { findOwnVehicleAssignment: async () => ({
+    ok: false,
+    error: { code: '42501', message: 'permission denied for table route_runs', correlation_id: 'lookup-1' }
+  }) },
+  ingestionAdapter: { ingest: async () => { ingestCalls += 1; return { ok: true }; } },
+  queue: { enqueue: async () => { enqueueCalls += 1; }, flush: async () => ({ ok: true }) }
+});
+assert.equal(lookupFailure.ok, false);
+assert.deepEqual(lookupFailure.error, {
+  code: '42501',
+  message: 'permission denied for table route_runs',
+  correlation_id: 'lookup-1'
+});
+assert.doesNotMatch(lookupFailure.error.message, /vehiculo asignado/i);
+assert.equal(enqueueCalls, 0);
+assert.equal(ingestCalls, 0);
+
 // Happy session connects assignment -> queue -> the existing ingestion adapter contract.
 const sessionStorage = memoryStorage();
 const sessionQueue = createPersistentTelemetryQueue({ storage: sessionStorage });
