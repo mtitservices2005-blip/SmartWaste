@@ -10,7 +10,8 @@ import { optimizeWaypointOrder } from '../shared/route-optimizer.js';
 import { positionFromGeolocationEvent, shouldSendPosition } from '../shared/browser-geolocation.js';
 import { isAccuracyAcceptable, shouldSendPhonePing, buildPhoneGpsPing } from '../shared/phone-gps.js';
 import { suggestReoptimizedOrder } from '../shared/route-reoptimizer.js';
-import { summarizeRouteRunsByRoute, summarizeRouteRunsByDriver, summarizeRouteRunsForMunicipality } from '../shared/route-run-stats.js';
+import { summarizeRouteRunsByRoute, summarizeRouteRunsByDriver, summarizeRouteRunsByVehicle, summarizeRouteRunsForMunicipality } from '../shared/route-run-stats.js';
+import { calculateEnvironmentalImpact, countCompletedStops } from '../shared/environmental-impact.js';
 import { routeReadinessStage, ROUTE_READINESS_LABELS } from '../shared/route-readiness.js';
 import { IMPACT_DEMO_NOTICE, IMPACT_SCENARIO_NOTICE, defaultImpactAssumptions, metricReadiness, calculateImpactMetrics } from '../shared/impact-center.js';
 import { COST_PARAMETER_KEYS, validateCostParameters, fetchCostParameters, saveCostParameters, createDemoCostParametersStore } from '../shared/cost-parameters.js';
@@ -142,7 +143,7 @@ let realSectors = [];
 // route_stops, never fabricates a placeholder number (rule 6).
 let impactCostParameters = { ...defaultImpactAssumptions };
 let impactCostParametersConfigured = false;
-let impactRealData = { operational: null, routeSavings: null };
+let impactRealData = { operational: null, routeSavings: null, environmental: null };
 const costParametersStore = createDemoCostParametersStore();
 // SW-030 (Codex review, PR #88, P1): real municipalities (real uuid `id`, from the `municipalities`
 // table) Master Admin can edit cost parameters for — see renderMasterCostParametersSection()/
@@ -587,16 +588,19 @@ function renderIncidenciasPanel() {
 function renderEstadisticasPanel() {
   return `<h2>Estadísticas</h2><p class="demo">${demoNotice} · Eficiencia por ruta y chofer, calculada sobre corridas con duración/distancia medida real.</p>
     <h3>Por ruta</h3><div id="statsByRoute" class="list"><p class="demo">Cargando…</p></div>
-    <h3>Por chofer</h3><div id="statsByDriver" class="list"><p class="demo">Cargando…</p></div>`;
+    <h3>Por chofer</h3><div id="statsByDriver" class="list"><p class="demo">Cargando…</p></div>
+    <h3>Por camión</h3><div id="statsByVehicle" class="list"><p class="demo">Cargando…</p></div>`;
 }
 async function refreshEfficiencyDashboard() {
   const byRouteEl = document.getElementById('statsByRoute');
   const byDriverEl = document.getElementById('statsByDriver');
-  if (!byRouteEl || !byDriverEl) return;
+  const byVehicleEl = document.getElementById('statsByVehicle');
+  if (!byRouteEl || !byDriverEl || !byVehicleEl) return;
   if (!realAdapter) {
     const message = '<p class="demo">Requiere un backend real conectado — la demo no acumula corridas persistidas.</p>';
     byRouteEl.innerHTML = message;
     byDriverEl.innerHTML = message;
+    byVehicleEl.innerHTML = message;
     return;
   }
   const result = await realAdapter.listRouteRuns();
@@ -604,10 +608,12 @@ async function refreshEfficiencyDashboard() {
   if (!result.ok) {
     byRouteEl.innerHTML = '<p class="demo">No se pudo cargar el histórico de corridas.</p>';
     byDriverEl.innerHTML = '<p class="demo">No se pudo cargar el histórico de corridas.</p>';
+    byVehicleEl.innerHTML = '<p class="demo">No se pudo cargar el histórico de corridas.</p>';
     return;
   }
   const byRoute = summarizeRouteRunsByRoute(result.data);
   const byDriver = summarizeRouteRunsByDriver(result.data);
+  const byVehicle = summarizeRouteRunsByVehicle(result.data);
   byRouteEl.innerHTML = byRoute.length
     ? byRoute.map((stat) => {
         const route = routes.find((r) => r.real_id === stat.routeId);
@@ -618,6 +624,13 @@ async function refreshEfficiencyDashboard() {
     ? byDriver.map((stat) => {
         const driver = drivers.find((d) => d.real_id === stat.driverId);
         return `<div class="row"><span>${driver?.name ?? 'Chofer eliminado'}<br><small>${stat.runsCount} corrida(s)</small></span><span>${formatMinutes(stat.avgDurationMinutes)} prom. · última ${formatMinutes(stat.lastDurationMinutes)}${stat.avgDistanceKm != null ? ` · ${stat.avgDistanceKm} km prom.` : ''}</span></div>`;
+      }).join('')
+    : '<p class="demo">Todavía no hay corridas con duración medida.</p>';
+  // SW-075: per-vehicle totals, same measured-run rules as the per-driver list above.
+  byVehicleEl.innerHTML = byVehicle.length
+    ? byVehicle.map((stat) => {
+        const truck = trucks.find((t) => t.real_id === stat.vehicleId);
+        return `<div class="row"><span>${truck?.unit ?? 'Vehículo eliminado'}<br><small>${stat.runsCount} corrida(s)</small></span><span>${formatMinutes(stat.avgDurationMinutes)} prom. · ${stat.distanceMeasuredRunsCount > 0 ? `${stat.totalDistanceKm} km en total` : 'sin distancia GPS registrada'}</span></div>`;
       }).join('')
     : '<p class="demo">Todavía no hay corridas con duración medida.</p>';
 }
@@ -1275,6 +1288,15 @@ function renderRouteSavingsComparison(m) {
   // (ver docs/SW030_COST_PARAMETERS.md, sección "Fuera de alcance / pendiente").
   return `<p>${c.routesCompared} ruta(s) real(es) comparada(s).</p><p><b>${num(c.savedKm, ' km')}</b> (${c.savedPercent}%) potencialmente evitados optimizando el orden de paradas · <b>${num(c.savedFuelLiters, ' L')}</b> / <b>${money(c.savedFuelCost)}</b> potencial.</p><p class="demo">Orden guardado: ${num(c.manualDistanceKm, ' km')} · Optimizada: ${num(c.optimizedDistanceKm, ' km')}</p>`;
 }
+// SW-075: environmental estimate block. The assumptions used travel with the result and are always
+// shown next to the numbers; null means "pendiente de datos", never a fabricated 0 (rule 6/7).
+function renderEnvironmentalImpact(environmental) {
+  if (!environmental) return '<p class="demo">Pendiente de datos operativos reales — todavía no hay corridas medidas para este municipio.</p>';
+  const co2 = environmental.avoidedCo2Kg === null
+    ? '<p class="demo">CO2 evitado: pendiente de datos — falta comparar rutas reales (mínimo 3 paradas por ruta).</p>'
+    : `<p><b>${num(environmental.avoidedCo2Kg, ' kg')}</b> de CO2 potencialmente evitados (${num(environmental.avoidedLiters, ' L')} de combustible).</p>`;
+  return `<p><b>${num(environmental.estimatedKg, ' kg')}</b> de residuos recolectados (estimado).</p>${co2}<p class="demo">Supuestos: ${environmental.assumptions.kgPerStop} kg por casa · ${environmental.assumptions.co2KgPerLiter} kg de CO2 por litro. ${environmental.notice}</p>`;
+}
 function renderImpactCenter(assumptions = defaultImpactAssumptions, filters = {}) {
   const metrics = calculateImpactMetrics(assumptions, filters, impactRealData);
   return `<section id="impacto" class="section impact-center card">
@@ -1307,6 +1329,7 @@ function renderImpactCenter(assumptions = defaultImpactAssumptions, filters = {}
     <div class="impact-panel${impactTab === 'analisis' ? '' : ' hidden'}" data-impact-tab-panel="analisis">
       <div class="impact-grid"><article><h3>Visualizaciones operativas</h3>${renderImpactBars(metrics)}</article><article><h3>Antes del sistema vs. con SmartWaste</h3><p class="impact-notice small">${IMPACT_SCENARIO_NOTICE}</p>${renderBeforeAfter(metrics)}</article></div>
       <div class="impact-grid"><article><h3>Antes vs. después — datos reales</h3><div id="impactRealOperational">${renderRealOperationalComparison(metrics)}</div></article><article><h3>Ruta optimizada vs. manual — datos reales</h3><div id="impactRealRouteSavings">${renderRouteSavingsComparison(metrics)}</div></article></div>
+      <div class="impact-grid"><article><h3>Impacto ambiental — estimado</h3><div id="impactEnvironmental">${renderEnvironmentalImpact(impactRealData.environmental)}</div></article></div>
       <div class="impact-grid"><article><h3>Integración futura con datos reales</h3>${Object.entries(metricReadiness).map(([k,v])=>`<p><b>${k}</b>: ${v.join(', ')}</p>`).join('')}</article><article><h3>Incidencias y sectores</h3><p>Categorías: ${Object.entries(metrics.incidents.byCategory).map(([k,v])=>`${k} (${v})`).join(' · ')}</p><p>Sectores: ${Object.entries(metrics.incidents.bySector).map(([k,v])=>`${k} (${v})`).join(' · ')}</p><p>Zonas con más incidencias: ${metrics.coverage.topIncidentZones.map((z)=>`${z.name} (${z.incidents})`).join(' · ')}</p></article></div>
     </div>
   </section>`;
@@ -2650,7 +2673,7 @@ async function hydrateCostParameters() {
 // showSection('impacto') and call this function again — an infinite loop. Patching two known ids
 // sidesteps that entirely.
 async function hydrateRealComparisonData() {
-  if (!realAdapter) { impactRealData = { operational: null, routeSavings: null }; return; }
+  if (!realAdapter) { impactRealData = { operational: null, routeSavings: null, environmental: null }; return; }
   const runsResult = await realAdapter.listRouteRuns();
   const operational = runsResult.ok ? summarizeRouteRunsForMunicipality(runsResult.data) : null;
   // Only real (Supabase-backed) routes ever had saveRouteStops() called against a real backend — a
@@ -2659,15 +2682,31 @@ async function hydrateRealComparisonData() {
   const realRoutes = routes.filter((route) => route.real_id);
   const stopsResults = await Promise.all(realRoutes.map((route) => realAdapter.listRouteStops(route.real_id)));
   const stopsLists = stopsResults.filter((result) => result.ok).map((result) => result.data);
+  const routeSavings = aggregateRouteSavings(stopsLists);
+  // SW-075: environmental estimate (kg + CO2). route_runs does not record which stops were collected,
+  // so a measured run counts all of its route's stops (see shared/environmental-impact.js). Stays null
+  // ("pendiente de datos") until at least one measured run exists — never a fabricated number.
+  const stopCountsByRouteId = {};
+  realRoutes.forEach((route, index) => { if (stopsResults[index].ok) stopCountsByRouteId[route.real_id] = stopsResults[index].data.length; });
+  const hasMeasuredRuns = Boolean(operational && operational.runsCount > 0);
   impactRealData = {
-    operational: operational && operational.runsCount > 0 ? operational : null,
-    routeSavings: aggregateRouteSavings(stopsLists)
+    operational: hasMeasuredRuns ? operational : null,
+    routeSavings,
+    environmental: hasMeasuredRuns
+      ? calculateEnvironmentalImpact({
+          completedStops: countCompletedStops(runsResult.data, stopCountsByRouteId),
+          avoidedKm: routeSavings?.savedKm,
+          fuelEfficiency: currentImpactAssumptions().fuelEfficiency
+        })
+      : null
   };
   const metrics = calculateImpactMetrics(currentImpactAssumptions(), currentImpactFilters(), impactRealData);
   const opEl = document.getElementById('impactRealOperational');
   if (opEl) opEl.innerHTML = renderRealOperationalComparison(metrics);
   const savingsEl = document.getElementById('impactRealRouteSavings');
   if (savingsEl) savingsEl.innerHTML = renderRouteSavingsComparison(metrics);
+  const envEl = document.getElementById('impactEnvironmental');
+  if (envEl) envEl.innerHTML = renderEnvironmentalImpact(impactRealData.environmental);
 }
 // SW-030: shared by the municipal Economía tab's save button (token 'municipal') and Master Admin's
 // per-municipality forms (token = that municipality's real id) — see renderMaster()/
