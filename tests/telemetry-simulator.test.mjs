@@ -40,4 +40,14 @@ assert.equal(callCount, 2, 'getPath() must be called again on each emit(), not c
 const fallbackSimulator = new DeviceSimulator('truck-01');
 assert.ok(fallbackSimulator.start().latitude, 'fallback lookup must still work without getPath');
 
+// Una ruta recién creada (municipio real vacío, SW-LS onboarding) puede existir sin trazo todavía.
+// emit()/start() NO deben lanzar un error: eso abortaba bootstrapRealBackend() y dejaba la app en
+// blanco. Sin trazo no hay posición que emitir, igual que cuando se pierde la señal.
+const emptyPathSimulator = new DeviceSimulator('truck-01', { getPath: () => [] });
+let emptyStart;
+assert.doesNotThrow(() => { emptyStart = emptyPathSimulator.start(); }, 'start() con trazo vacío no debe lanzar');
+assert.equal(emptyStart, null, 'sin trazo no se emite posición');
+assert.equal(emptyPathSimulator.emit(), null, 'emit() con trazo vacío devuelve null');
+assert.equal(emptyPathSimulator.index, 0, 'el índice no avanza cuando no hay trazo');
+
 console.log('telemetry-simulator ok');
