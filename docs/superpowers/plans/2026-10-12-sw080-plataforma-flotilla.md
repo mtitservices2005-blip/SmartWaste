@@ -16,7 +16,7 @@
 - Migraciones solo aditivas (nuevo archivo `supabase/migrations/2026101200NN_sw08x_*.sql`); nunca editar migraciones existentes.
 - Nunca `service_role` en `frontend/`, `mobile/` ni `dist/` (la prueba `tests/frontend-no-service-role.test.mjs` debe seguir en verde).
 - Textos de interfaz en español; el texto "Datos demo · no producción" se conserva en modo demo y no aparece con backend real.
-- Umbrales: `sin_senal` > 90 s sin posición; `detenido` = velocidad < 1 m/s durante > 5 min con corrida activa; polling del centro de control = 5 s; lote máximo = 200 puntos; retención de posiciones = 90 días.
+- Umbrales: `sin_senal` > 90 s sin posición; `detenido` = velocidad < 1 m/s durante > 5 min con corrida activa; polling del centro de control = 5 s; lote máximo = 200 puntos; retención de posiciones = 180 días por defecto, configurable (aprobado 2026-10-13).
 - Muestreo del teléfono: cada 10 s o 25 m (constantes existentes `DRIVER_APP_MAX_INTERVAL_MS`, `DRIVER_APP_MIN_DISTANCE_METERS`).
 - Semana de reporte: lunes a domingo en zona `America/Santo_Domingo`.
 - Contraste mínimo 4.5:1 (texto normal) y 3:1 (texto grande); objetivos táctiles de la app del chofer ≥ 48 px.
@@ -71,9 +71,9 @@ Entradas que la especificación implica pero ninguna tarea cubriría sin esta li
 - Create: `tests/fleet-alerts-fuel.test.mjs` (integración)
 
 **Interfaces:**
-- Produces (SQL): tabla `fleet_alerts(id uuid, municipality_id, vehicle_id, route_run_id nullable, type text check in ('sin_senal','detenido_largo','bateria_baja','ruta_retrasada'), status text check in ('abierta','atendida'), opened_at, closed_at)` con índice único parcial `(vehicle_id, type) where status='abierta'`; `refresh_fleet_alerts() returns int` (abre/cierra sin duplicar; `bateria_baja` < 20 %); `acknowledge_fleet_alert(alert_id uuid) returns void`; tabla `fuel_logs(id uuid, municipality_id, vehicle_id, route_run_id nullable, liters numeric check (liters > 0), odometer_km numeric nullable, logged_at timestamptz default now(), logged_by uuid)`; `purge_old_positions(days int default 90) returns bigint`. RLS: lectura por `has_municipality_role` (administración y despacho); `fuel_logs` insertable por el chofer asignado al vehículo y por administración.
+- Produces (SQL): tabla `fleet_alerts(id uuid, municipality_id, vehicle_id, route_run_id nullable, type text check in ('sin_senal','detenido_largo','bateria_baja','ruta_retrasada'), status text check in ('abierta','atendida'), opened_at, closed_at)` con índice único parcial `(vehicle_id, type) where status='abierta'`; `refresh_fleet_alerts() returns int` (abre/cierra sin duplicar; `bateria_baja` < 20 %); `acknowledge_fleet_alert(alert_id uuid) returns void`; tabla `fuel_logs(id uuid, municipality_id, vehicle_id, route_run_id nullable, liters numeric check (liters > 0), odometer_km numeric nullable, logged_at timestamptz default now(), logged_by uuid)`; `purge_old_positions(days int default null) returns bigint` (si `days` es null lee la retención configurada, 180 por defecto). RLS: lectura por `has_municipality_role` (administración y despacho); `fuel_logs` insertable por el chofer asignado al vehículo y por administración.
 
-- [ ] **Step 1: Escribir pruebas:** `refresh_fleet_alerts()` llamado dos veces con el mismo camión sin señal deja 1 alerta abierta (CA-084-2); al volver a reportar, la alerta se cierra; `fuel_logs` con `liters = 0` es rechazado; un chofer no puede registrar combustible de un vehículo ajeno; `purge_old_positions(90)` borra solo puntos con más de 90 días y no toca `vehicle_live_state`; dos municipios no se ven entre sí (CA-081-4).
+- [ ] **Step 1: Escribir pruebas:** `refresh_fleet_alerts()` llamado dos veces con el mismo camión sin señal deja 1 alerta abierta (CA-084-2); al volver a reportar, la alerta se cierra; `fuel_logs` con `liters = 0` es rechazado; un chofer no puede registrar combustible de un vehículo ajeno; `purge_old_positions(180)` y `purge_old_positions()` con configuración personalizada borran solo puntos más viejos que el límite y no toca `vehicle_live_state`; dos municipios no se ven entre sí (CA-081-4).
 - [ ] **Step 2: Correr**; esperado: FALLA.
 - [ ] **Step 3: Escribir la migración** con RLS activada y al menos una política por tabla nueva; agregar la tabla a la verificación de cobertura si la prueba la necesita.
 - [ ] **Step 4: Correr** las pruebas nuevas y `tests/rls-coverage.test.mjs`; esperado: PASAN.
@@ -285,7 +285,7 @@ Entradas que la especificación implica pero ninguna tarea cubriría sin esta li
 
 ## Self-Review
 
-- **Cobertura de la especificación:** SW-081 → Tasks 1-3; SW-082 → Tasks 4-6; SW-083 → Tasks 7-10; SW-084 → Tasks 11-13; SW-085 → Tasks 14-16; SW-086 → Task 17; SW-087 → Task 18. Retención de 90 días: Task 2. Estados derivados: Tasks 1 y 3. Textos demo y etiquetas: Task 6. Combustible real: Tasks 2 y 9. PDF y comparación semanal: Tasks 15-16.
+- **Cobertura de la especificación:** SW-081 → Tasks 1-3; SW-082 → Tasks 4-6; SW-083 → Tasks 7-10; SW-084 → Tasks 11-13; SW-085 → Tasks 14-16; SW-086 → Task 17; SW-087 → Task 18. Retención de 180 días configurable: Task 2. Estados derivados: Tasks 1 y 3. Textos demo y etiquetas: Task 6. Combustible real: Tasks 2 y 9. PDF y comparación semanal: Tasks 15-16.
 - **Consistencia de tipos:** `fleetOverview`, `ingestPositions`, `logFuel`, `listFleetAlerts`, `acknowledgeFleetAlert` se definen en Task 3 y se usan con los mismos nombres en Tasks 7, 9, 11-13; `weeklyReport` se agrega al adaptador en Task 16 y llama a la RPC `weekly_fleet_report` de Task 14.
 - **Review Focus:** los cinco puntos tienen su prueba en las tareas 1, 11, 14 y 15.
 - **Pendientes que no puede hacer el agente** (marcados "Miguel"): keystore y secretos de GitHub (Task 10), prueba de campo con teléfonos (Task 17), paneles de Supabase y plan con respaldos (Task 18), y toda autorización de commit, push, PR y merge.

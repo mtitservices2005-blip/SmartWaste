@@ -1,7 +1,8 @@
 # SW-080: Plataforma de flotilla (5 camiones) — posiciones, centro de control, métricas y reportes semanales
 
-> Especificación maestra (SDD) · una sola corrida de implementación · Estado: BORRADOR PARA APROBACIÓN
+> Especificación maestra (SDD) · una sola corrida de implementación · Estado: APROBADA por Miguel el 2026-10-13 (ver nota de aprobación)
 > Fecha: 2026-10-12 · Autor: Claude (Cowork) con Miguel (MT IT Services) · Ayuntamiento: Laguna Salada
+> **Aprobación (2026-10-13):** Miguel aprueba la especificación completa con las decisiones por defecto de la sección 8, con UN cambio: la retención del GPS crudo pasa de 90 a **180 días**, configurable (no un número fijo en el código). Combustible sigue opcional. Los resúmenes diarios y semanales se conservan siempre. Hermes no participa; Claude es el único ejecutor. Commits locales autorizados dentro de cada sub-hito; push, PR, merge, despliegue y paso al siguiente sub-hito requieren autorización específica.
 > Convención del repo: cada sub-hito SW-08x va en su propia rama y PR (CLAUDE.md regla 2). Nada se commitea ni se hace merge sin autorización de Miguel (reglas 3 y 10).
 
 ## 1. Contexto
@@ -50,7 +51,7 @@ El ayuntamiento recibe hoy un segundo camión compactador y proyecta una flotill
 Teléfono Android (app Capacitor, servicio en primer plano)
   └─ cola persistente (ya existe) → envío por LOTES cada 10-15 s
         └─ Supabase: RPC ingest_positions(batch)  [idempotente]
-              ├─ vehicle_positions (historial, retención 90 días)
+              ├─ vehicle_positions (historial, retención configurable, 180 días por defecto)
               └─ vehicle_live_state (1 fila por camión: última posición, estado, batería)
 Centro de control (web)
   └─ polling cada 5 s a RPC fleet_overview()  (1 consulta, 1 fila por camión)
@@ -79,7 +80,7 @@ Cada uno es una rama y PR propios. El orden respeta dependencias; no se reordena
 - RPC `fleet_overview()`: devuelve una fila por camión del municipio del usuario, con estado derivado (sección 4), ruta, chofer y progreso.
 - Tabla `fleet_alerts` (tipo: sin_senal, detenido_largo, bateria_baja, ruta_retrasada; estado abierta/atendida; vehículo; corrida; fechas) + función que las abre y cierra de forma idempotente.
 - Tabla `fuel_logs` (municipality_id, vehicle_id, route_run_id nullable, liters, odometer_km nullable, logged_at, logged_by).
-- Retención: función `purge_old_positions(days := 90)` programada con `pg_cron` si el plan lo permite; si no, procedimiento manual documentado.
+- Retención: función `purge_old_positions(days)` con el valor por defecto leído de configuración (180 días por defecto, no fijo en el código) programada con `pg_cron` si el plan lo permite; si no, procedimiento manual documentado.
 
 **Criterios de aceptación**
 - [ ] CA-081-1: `ingest_positions` con el mismo lote enviado dos veces no duplica filas.
@@ -206,7 +207,7 @@ Cada uno es una rama y PR propios. El orden respeta dependencias; no se reordena
 1. **Entrega del reporte semanal:** pantalla "Reportes" + descarga a PDF. El envío automático por correo o WhatsApp queda para una versión posterior.
 2. **Combustible real:** el chofer registra los litros al terminar la corrida (opcional); si falta, se estima y se marca "estimado".
 3. **Distribución de la app:** APK directo (sideload) con guía de instalación. Google Play interno queda para después.
-4. **Retención de posiciones:** 90 días de historial crudo; agregados diarios y semanales sin límite.
+4. **Retención de posiciones:** 180 días de historial crudo, configurable (cambio aprobado el 2026-10-13; antes 90); agregados diarios y semanales sin límite.
 5. **Zonas:** 5 rutas permanentes, una por camión, ya creadas por el administrador; la reasignación manual existe en el centro de control.
 6. **Base de datos:** subir a un plan con respaldos antes de la operación real con el ayuntamiento.
 

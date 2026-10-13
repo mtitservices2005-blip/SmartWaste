@@ -75,7 +75,7 @@ Escalar con: qué se intentó, qué falló, qué opciones hay y cuál se recomie
 - Supabase local y Docker pueden no estar disponibles para los agentes; en ese caso las pruebas de integración corren en CI (`integration-tests`) y en la PC de Miguel.
 - OSRM y Overpass son servicios públicos sin SLA (deuda #18 y #22): no depender de ellos en pruebas automáticas.
 - Zona horaria de reportes: `America/Santo_Domingo` (UTC-4, sin horario de verano), semana de lunes a domingo.
-- Umbrales fijos: sin señal > 90 s; detenido < 1 m/s por más de 5 min; polling 5 s; lote máximo 200 puntos; retención 90 días.
+- Umbrales fijos: sin señal > 90 s; detenido < 1 m/s por más de 5 min; polling 5 s; lote máximo 200 puntos; retención 180 días (configurable; aprobado 2026-10-13).
 - Textos de interfaz en español claro; contraste mínimo 4.5:1; objetivos táctiles de la app del chofer ≥ 48 px.
 
 ## 8. Qué NO está en el alcance (no construir)
