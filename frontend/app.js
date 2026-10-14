@@ -16,7 +16,8 @@ import { routeReadinessStage, ROUTE_READINESS_LABELS } from '../shared/route-rea
 import { IMPACT_DEMO_NOTICE, IMPACT_SCENARIO_NOTICE, defaultImpactAssumptions, metricReadiness, calculateImpactMetrics } from '../shared/impact-center.js';
 import { COST_PARAMETER_KEYS, validateCostParameters, fetchCostParameters, saveCostParameters, createDemoCostParametersStore } from '../shared/cost-parameters.js';
 import { aggregateRouteSavings } from '../shared/route-savings.js';
-import { initAuthGate, readSupabaseConfig, getAuthClient } from './auth-gate.js';
+import { initAuthGate, readSupabaseConfig, getAuthClient, isDriverApp } from './auth-gate.js';
+import { mountDriverApp } from './driver-app.js';
 import { createDriverTelemetrySession, createPersistentTelemetryQueue } from '../shared/driver-app-telemetry.js';
 import { parseFuelLiters, buildFuelEntry } from '../shared/fuel-entry.js';
 import { connectionStatusText } from '../shared/driver-app-status.js';
@@ -2926,12 +2927,26 @@ async function hydrateMasterRealMunicipalities() {
   const el = document.getElementById('masterCostParametersSection');
   if (el) el.innerHTML = renderMasterCostParametersSection();
 }
+async function startDriverExperience(ctx) {
+  document.body.classList.add('sw-driver-mode');
+  let root = document.getElementById('driverApp');
+  if (!root) { root = document.createElement('div'); root.id = 'driverApp'; root.className = 'sw-driver-root'; document.body.appendChild(root); }
+  const client = getAuthClient();
+  const logout = async () => { try { await client.auth.signOut(); } finally { window.location.reload(); } };
+  await mountDriverApp({
+    root, client, ctx, adapter: realAdapter,
+    gps: { start: () => startDriverGps(), stop: (opts) => stopDriverGps(opts) },
+    toast: showToast, logout
+  });
+}
 async function bootstrapRealBackend(ctx) {
   const client = getAuthClient();
   if (!client || !ctx?.municipality_id) return;
   realAdapter = resolveOperationsAdapter({ client, municipality_id: ctx.municipality_id });
   backendMode = realAdapter.mode;
   driverAuthContext = ctx;
+  // SW-085: en el APK del conductor la pantalla es solo la del chofer (Hoy / En ruta / Terminar).
+  if (isDriverApp() && ctx.role === 'driver') { await startDriverExperience(ctx); return; }
   const sourceLabel = document.querySelector('.sim-controls span');
   if (sourceLabel) sourceLabel.textContent = `${simulationPrefix}fuente desacoplada: ${backendMode}`;
   // Codex review on PR #54 (P1): un fallo transitorio de red/RLS deja *Result.ok en false sin

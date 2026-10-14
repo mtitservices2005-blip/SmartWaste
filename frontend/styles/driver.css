@@ -63,3 +63,7 @@
 .sw-driver__form .sw-driver__cta { margin-top: auto; }
 .sw-driver__link { align-self: flex-end; min-height: 44px; padding: 0; background: none; border: 0; color: var(--color-primary); font: inherit; font-size: var(--font-size-2); cursor: pointer; }
 .sw-driver__link--center { align-self: center; }
+
+/* SW-085: en el APK del conductor solo se ve su pantalla */
+body.sw-driver-mode > *:not(#driverApp):not(script):not(.sw-driver-overlay):not(#swToast):not(.toast) { display: none !important; }
+body.sw-driver-mode #driverApp { display: block; }
