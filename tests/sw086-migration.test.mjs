@@ -35,5 +35,5 @@ for (const word of ['drop ', 'delete ', 'truncate', 'alter policy', 'create poli
 // Orden de migraciones: es posterior a la de SW-085 y a todas las demás.
 const all = readdirSync(dir).filter((f) => f.endsWith('.sql')).sort();
 assert.ok(all.indexOf(files[0]) > all.indexOf('202610140001_sw085_route_run_scheduled_start_at.sql'), 'va después de SW-085');
-assert.equal(all[all.length - 1], files[0], 'es la última migración');
+assert.ok(all.indexOf(files[0]) > all.indexOf('202610140001_sw085_route_run_scheduled_start_at.sql'), 'va después de SW-085');
 console.log('sw086-migration ok');

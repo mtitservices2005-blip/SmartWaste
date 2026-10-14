@@ -1,0 +1,14 @@
+/* SW-087: Flotilla (pestañas, tablas, paneles de alta). Reutiliza la tabla y el panel lateral de Rutas; solo tokens. */
+.sw-fleet-tabs { display: inline-flex; gap: var(--space-1); padding: var(--space-1); margin-bottom: var(--space-4); background: var(--color-background-alt); border: 1px solid var(--color-border); border-radius: var(--radius-3); }
+.sw-fleet-tab { min-height: 40px; padding: 0 var(--space-5); border: 0; border-radius: var(--radius-2); background: transparent; color: var(--color-muted); font: inherit; font-weight: 700; cursor: pointer; }
+.sw-fleet-tab[aria-pressed="true"] { background: var(--color-surface); color: var(--color-primary); box-shadow: var(--shadow-1); }
+.sw-fleet-form { display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-4); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-3); }
+.sw-fleet-form h3 { margin: 0; font-size: 1.15rem; }
+.sw-fleet-form__hint { color: var(--color-muted); font-size: var(--font-size-1); }
+.sw-fleet-form .sw-rutas__btn { min-height: 52px; }
+.sw-fleet-access { display: inline-block; padding: var(--space-1) var(--space-3); border-radius: 999px; font-size: var(--font-size-1); font-weight: 700; white-space: nowrap; }
+.sw-fleet-access--on { background: var(--status-en-ruta-bg); color: var(--status-en-ruta); }
+.sw-fleet-access--off { background: var(--status-fuera-servicio-bg); color: var(--status-fuera-servicio); }
+.sw-fleet-table td { color: var(--color-text); }
+.sw-fleet-table td:nth-child(n+2) { color: var(--color-muted); }
+.sw-fleet-table td.sw-routes__num { color: var(--color-text); }
