@@ -43,7 +43,9 @@ for (const secret of ['ANDROID_KEYSTORE_BASE64', 'ANDROID_KEYSTORE_PASSWORD', 'A
 assert.match(wf, /SMARTWASTE_REQUIRE_BACKEND:\s*'true'/, 'modo estricto del backend');
 assert.match(wf, /assembleRelease/);
 assert.match(wf, /apksigner"?\s+verify/, 'verifica la firma del APK');
-assert.match(wf, /service_role/, 'escanea el APK final en busca de service_role');
+assert.match(wf, /scripts\/scan-apk-keys\.mjs/, 'escanea el APK final con el escáner de secretos');
+assert.doesNotMatch(wf, /grep -R -a -l -i "service_role"/, 'no usa el grep crudo que marca comentarios');
+assert.match(wf, /tests\/scan-apk-keys\.test\.mjs/, 'corre el test del escáner');
 assert.match(wf, /SUPABASE_HIDE_DEMO:\s*'true'/, 'el APK real no muestra textos de demo');
 assert.doesNotMatch(wf, /eyJ[A-Za-z0-9_-]{20,}/, 'ninguna llave pegada en el flujo');
 assert.match(wf, /Falta el secreto/, 'mensaje claro si falta un secreto');
