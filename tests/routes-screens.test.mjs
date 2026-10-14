@@ -9,7 +9,7 @@ const rows = [
 const table = renderRoutesTable({ rows, selectedId: 'r1' });
 assert.match(table, /<table class="sw-routes__table"/);
 assert.match(table, /<caption class="sw-visually-hidden">Rutas<\/caption>/);
-for (const h of ['Ruta', 'Camión', 'Conductor', 'Paradas', 'Longitud', 'Hora', 'Días', 'Estado']) assert.match(table, new RegExp(`<th scope="col">${h}</th>`));
+for (const h of ['Ruta', 'Camión', 'Conductor', 'Paradas', 'Largo', 'Estado']) assert.match(table, new RegExp(`<th scope="col">${h}</th>`));
 assert.match(table, /data-route="r1"/);
 assert.match(table, /sw-routes__row selected/);
 assert.ok(table.includes('Ruta &lt;Norte&gt;') && !table.includes('<Norte>'), 'escapa texto');
@@ -19,7 +19,8 @@ assert.match(renderRoutesTable({ rows: [] }), /Todavía no hay rutas/);
 const chips = renderFilterChips({ filter: 'activas', counts: { todas: 2, activas: 1, programadas: 1, completas: 0 } });
 assert.match(chips, /data-route-filter="activas"[^>]*aria-pressed="true"/);
 assert.match(chips, /data-route-filter="todas"[^>]*aria-pressed="false"/);
-assert.match(chips, /Completas <span class="sw-chip__n">0<\/span>/);
+assert.match(chips, /Completas · 0/);
+assert.match(chips, /Todas · 2/);
 
 const days = renderDayChips({ selected: [1, 3] });
 assert.match(days, /data-day="1"[^>]*aria-pressed="true"/);
@@ -36,5 +37,7 @@ assert.match(renderHistory({ entries: [], count: 0, avgDurationText: '—', avgD
 const prev = renderDraftPreview({ pointsText: '3 puntos trazados', distanceText: '2,1 km', stopsCount: 5, timeText: '—' });
 assert.match(prev, /3 puntos trazados/);
 assert.match(prev, /2,1 km/);
-assert.match(prev, /5 paradas/);
+assert.match(prev, /Vista previa del viaje/);
+assert.match(prev, /<dt>Paradas<\/dt><dd>5<\/dd>/);
+assert.match(prev, /<dt>Tiempo<\/dt><dd>—<\/dd>/);
 console.log('routes-screens ok');

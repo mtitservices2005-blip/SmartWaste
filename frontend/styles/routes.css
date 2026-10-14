@@ -1,10 +1,8 @@
 /* SW-086: Rutas (tabla, filtros, días, historial, vista previa). Solo tokens: sigue los temas oscuro y claro. */
-.sw-routes__title { margin: var(--space-2) 0 var(--space-3); color: var(--color-muted); font-size: var(--font-size-2); }
 .sw-routes__filters, .sw-routes__days { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-3); }
 .sw-routes__filters .sw-chip, .sw-routes__days .sw-chip { margin: 0; min-height: 36px; padding: 0 var(--space-4); border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text); font: inherit; font-weight: 600; cursor: pointer; letter-spacing: 0; }
 .sw-routes__filters .sw-chip[aria-pressed="true"], .sw-routes__days .sw-chip[aria-pressed="true"] { background: var(--color-primary); border-color: var(--color-primary); color: var(--color-primary-contrast); }
 .sw-routes__days .sw-chip--day { min-width: 40px; justify-content: center; padding: 0 var(--space-3); }
-.sw-chip__n { margin-left: var(--space-2); font-family: ui-monospace, 'IBM Plex Mono', Consolas, monospace; opacity: .85; }
 .sw-routes__scroll { overflow-x: auto; border: 1px solid var(--color-border); border-radius: var(--radius-3); background: var(--color-surface); }
 .sw-routes__table { width: 100%; border-collapse: collapse; font-size: var(--font-size-2); }
 .sw-routes__table th { text-align: left; padding: var(--space-3) var(--space-4); color: var(--color-muted); font-size: var(--font-size-1); font-weight: 700; letter-spacing: .04em; text-transform: uppercase; border-bottom: 1px solid var(--color-border); white-space: nowrap; }
@@ -16,18 +14,66 @@
 .sw-routes__num { font-family: ui-monospace, 'IBM Plex Mono', Consolas, monospace; white-space: nowrap; }
 .sw-routes__state { display: inline-block; padding: var(--space-1) var(--space-3); border-radius: 999px; font-size: var(--font-size-1); font-weight: 700; white-space: nowrap; }
 .sw-routes__state--activas { background: var(--status-en-ruta-bg); color: var(--status-en-ruta); }
-.sw-routes__state--programadas { background: var(--status-disponible-bg); color: var(--status-disponible); }
+.sw-routes__state--programadas { background: var(--status-detenido-bg); color: var(--status-detenido); }
 .sw-routes__state--completas { background: var(--status-fuera-servicio-bg); color: var(--status-fuera-servicio); }
 .sw-routes__label { color: var(--color-muted); font-size: var(--font-size-2); font-weight: 600; }
 .sw-routes__field { margin: var(--space-3) 0; }
 .sw-routes__hint { margin: var(--space-1) 0 0; color: var(--color-muted); font-size: var(--font-size-1); }
 .sw-routes__hint:empty { display: none; }
-.sw-routes__preview { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: var(--space-2); margin: var(--space-3) 0; }
-.sw-routes__preview > div { padding: var(--space-3); background: var(--color-background-alt); border: 1px solid var(--color-border); border-radius: var(--radius-2); }
-.sw-routes__preview dt { color: var(--color-muted); font-size: var(--font-size-1); }
-.sw-routes__preview dd { margin: var(--space-1) 0 0; font-family: ui-monospace, 'IBM Plex Mono', Consolas, monospace; font-weight: 700; }
 .sw-routes__avg { margin: 0 0 var(--space-2); }
 .sw-routes__history { list-style: none; margin: 0; padding: 0; }
 .sw-routes__history li { display: grid; grid-template-columns: 1fr 1fr 1fr 1.4fr; gap: var(--space-2); padding: var(--space-2) 0; border-bottom: 1px solid var(--color-border); font-size: var(--font-size-1); }
 .sw-routes__pin { background: none; border: none; }
-.sw-routes__pin span { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background: var(--color-primary); color: var(--color-primary-contrast); border: 2px solid var(--color-surface); font: 700 11px/1 ui-monospace, Consolas, monospace; cursor: grab; }
+.sw-routes__pin span { display: block; width: 22px; height: 22px; border-radius: 50%; background: var(--color-surface); border: 4px solid var(--color-primary); box-sizing: border-box; cursor: grab; }
+
+/* Rutas: tabla a la izquierda, mini mapa y resumen a la derecha (diseño Mando, página 4) */
+.sw-rutas[hidden], .sw-newroute[hidden] { display: none; }
+.sw-rutas__head { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-4); margin-bottom: var(--space-4); }
+.sw-rutas__head h2 { margin: 0; font-size: 1.9rem; }
+.sw-rutas__sub { margin: var(--space-1) 0 0; color: var(--color-muted); }
+.sw-rutas__demo { margin: var(--space-1) 0 0; font-size: var(--font-size-1); }
+.sw-rutas__new { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 52px; padding: 0 var(--space-5); border: 0; border-radius: var(--radius-3); background: var(--color-primary); color: var(--color-primary-contrast); font: inherit; font-weight: 700; cursor: pointer; }
+.sw-rutas__new span { font-size: 1.4rem; line-height: 1; }
+.sw-rutas__body { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: var(--space-4); align-items: start; }
+.sw-rutas__side { display: flex; flex-direction: column; gap: var(--space-3); }
+.sw-rutas__mini { height: 300px; border: 1px solid var(--color-border); border-radius: var(--radius-3); overflow: hidden; background: var(--color-background-alt); isolation: isolate; }
+.sw-rutas__card { padding: var(--space-4); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-3); }
+.sw-rutas__card h3 { margin: 0 0 var(--space-2); font-size: 1.25rem; }
+.sw-rutas__muted { margin: 0 0 var(--space-1); color: var(--color-muted); font-size: var(--font-size-2); }
+.sw-rutas__actions { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); margin-top: var(--space-3); }
+.sw-rutas__btn { min-height: 48px; padding: 0 var(--space-4); border: 1px solid var(--color-border); border-radius: var(--radius-2); background: var(--color-surface); color: var(--color-text); font: inherit; font-weight: 700; cursor: pointer; }
+.sw-rutas__btn--primary { background: var(--color-primary); border-color: var(--color-primary); color: var(--color-primary-contrast); }
+.sw-routes__filters .sw-chip[aria-pressed="true"] { background: var(--color-rail-active); border-color: var(--color-primary); color: var(--color-primary); }
+.sw-routes__row.selected { background: var(--color-rail-active); }
+@media (max-width: 1000px) { .sw-rutas__body { grid-template-columns: 1fr; } }
+
+/* Nueva ruta: panel a la izquierda, mapa a la derecha (diseño Mando, página 6) */
+.sw-newroute { display: grid; grid-template-columns: 400px minmax(0, 1fr); min-height: calc(100dvh - 48px); margin: calc(var(--space-4) * -1); }
+.sw-newroute__panel { display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-5); background: var(--color-surface); border-right: 1px solid var(--color-border); }
+.sw-newroute__panel h2 { margin: 0; font-size: 1.7rem; }
+.sw-newroute__sub { margin: var(--space-1) 0 0; color: var(--color-muted); }
+.sw-newroute__field { display: flex; flex-direction: column; gap: var(--space-2); }
+.sw-newroute__field label, .sw-newroute__label { font-weight: 700; font-size: var(--font-size-2); color: var(--color-muted); }
+.sw-newroute__field label span { font-weight: 400; }
+.sw-newroute__field input, .sw-newroute__field select { min-height: 52px; padding: 0 var(--space-4); border: 1px solid var(--color-border); border-radius: var(--radius-2); background: var(--color-background-alt); color: var(--color-text); font: inherit; }
+.sw-newroute__opt { display: flex; gap: var(--space-3); align-items: flex-start; padding: var(--space-4); border: 1px solid var(--color-border); border-radius: var(--radius-2); background: var(--color-background-alt); cursor: pointer; }
+.sw-newroute__opt:has(input:checked) { background: var(--color-rail-active); border-color: var(--color-primary); }
+.sw-newroute__opt input { width: 20px; height: 20px; margin-top: 2px; accent-color: var(--color-primary); }
+.sw-newroute__opt span { display: flex; flex-direction: column; gap: var(--space-1); }
+.sw-newroute__opt small { color: var(--color-muted); font-size: var(--font-size-2); }
+.sw-newroute__preview { padding: var(--space-4); border: 1px solid var(--color-border); border-radius: var(--radius-2); background: var(--color-background-alt); }
+.sw-newroute__preview-head { display: flex; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-3); }
+.sw-newroute__preview-head span { color: var(--color-muted); font-size: var(--font-size-2); }
+.sw-newroute__preview dl { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-3); margin: 0; }
+.sw-newroute__preview dt { color: var(--color-muted); font-size: var(--font-size-1); }
+.sw-newroute__preview dd { margin: var(--space-1) 0 0; font-family: ui-monospace, 'IBM Plex Mono', Consolas, monospace; font-size: 1.35rem; font-weight: 700; }
+.sw-newroute__status { margin: 0; min-height: 0; color: var(--color-muted); font-size: var(--font-size-2); }
+.sw-newroute__status:empty { display: none; }
+.sw-newroute__actions { display: grid; grid-template-columns: 1fr 1.6fr; gap: var(--space-3); margin-top: auto; }
+.sw-newroute__mapwrap { position: relative; min-height: 480px; }
+.sw-newroute__map { position: absolute; inset: 0; isolation: isolate; background: var(--color-background-alt); }
+.sw-newroute__tools { position: absolute; z-index: 500; top: var(--space-4); left: var(--space-4); display: flex; gap: var(--space-2); padding: var(--space-2); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-3); box-shadow: var(--shadow-1); }
+.sw-newroute__tool { width: 48px; height: 48px; border: 0; border-radius: var(--radius-2); background: transparent; color: var(--color-text); font-size: 1.3rem; cursor: pointer; }
+.sw-newroute__tool--on { background: var(--color-rail-active); color: var(--color-primary); }
+.sw-newroute__hint { position: absolute; z-index: 500; left: var(--space-4); bottom: var(--space-4); margin: 0; padding: var(--space-3) var(--space-4); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-2); box-shadow: var(--shadow-1); font-size: var(--font-size-2); }
+@media (max-width: 1000px) { .sw-newroute { grid-template-columns: 1fr; } .sw-newroute__mapwrap { min-height: 420px; } }

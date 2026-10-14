@@ -5,7 +5,7 @@ import { emptyState } from './empty-state.js';
 import { FILTERS } from '../../shared/route-list.js';
 import { DAY_CHIPS, normalizeDays } from '../../shared/route-schedule.js';
 
-const COLUMNS = ['Ruta', 'Camión', 'Conductor', 'Paradas', 'Longitud', 'Hora', 'Días', 'Estado'];
+const COLUMNS = ['Ruta', 'Camión', 'Conductor', 'Paradas', 'Largo', 'Estado'];
 
 export function renderRoutesTable({ rows = [], selectedId = null } = {}) {
   if (!rows.length) return emptyState({ title: 'Todavía no hay rutas', message: 'Crea la primera con “+ Nueva ruta”.' });
@@ -16,14 +16,13 @@ export function renderRoutesTable({ rows = [], selectedId = null } = {}) {
       + `<td class="sw-routes__name">${escapeHtml(r.name)}</td>`
       + `<td>${escapeHtml(r.unit)}</td><td>${escapeHtml(r.driverName)}</td>`
       + `<td class="sw-routes__num">${escapeHtml(r.stopsCount)}</td><td class="sw-routes__num">${escapeHtml(r.lengthText)}</td>`
-      + `<td class="sw-routes__num">${escapeHtml(r.startText)}</td><td>${escapeHtml(r.daysText)}</td>`
       + `<td><span class="sw-routes__state sw-routes__state--${escapeHtml(r.stateKey)}">${escapeHtml(r.stateLabel)}</span></td></tr>`;
   }).join('');
   return `<div class="sw-routes__scroll"><table class="sw-routes__table"><caption class="sw-visually-hidden">Rutas</caption><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 export function renderFilterChips({ filter = 'todas', counts = {} } = {}) {
-  return `<div class="sw-routes__filters" role="group" aria-label="Filtrar rutas">${FILTERS.map((f) => `<button type="button" class="sw-chip" data-route-filter="${f.key}" aria-pressed="${f.key === filter}">${f.label} <span class="sw-chip__n">${counts[f.key] ?? 0}</span></button>`).join('')}</div>`;
+  return `<div class="sw-routes__filters" role="group" aria-label="Filtrar rutas">${FILTERS.map((f) => `<button type="button" class="sw-chip" data-route-filter="${f.key}" aria-pressed="${f.key === filter}">${f.label} · ${counts[f.key] ?? 0}</button>`).join('')}</div>`;
 }
 
 export function renderDayChips({ selected = [] } = {}) {
@@ -39,5 +38,5 @@ export function renderHistory({ entries = [], count = 0, avgDurationText = '—'
 }
 
 export function renderDraftPreview({ pointsText, distanceText, stopsCount, timeText } = {}) {
-  return `<dl class="sw-routes__preview"><div><dt>Trazo</dt><dd>${escapeHtml(pointsText)}</dd></div><div><dt>Distancia</dt><dd>${escapeHtml(distanceText)}</dd></div><div><dt>Paradas</dt><dd>${escapeHtml(stopsCount)} paradas</dd></div><div><dt>Tiempo estimado</dt><dd>${escapeHtml(timeText)}</dd></div></dl>`;
+  return `<div class="sw-newroute__preview"><div class="sw-newroute__preview-head"><strong>Vista previa del viaje</strong><span>${escapeHtml(pointsText)}</span></div><dl><div><dt>Distancia</dt><dd>${escapeHtml(distanceText)}</dd></div><div><dt>Tiempo</dt><dd>${escapeHtml(timeText)}</dd></div><div><dt>Paradas</dt><dd>${escapeHtml(stopsCount)}</dd></div></dl></div>`;
 }
