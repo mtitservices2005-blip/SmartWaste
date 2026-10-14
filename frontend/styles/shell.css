@@ -38,10 +38,15 @@ body { margin: 0; padding-left: 68px; }
 .sw-control { position: relative; height: calc(100vh - var(--space-5)); min-height: 560px; padding: 0; overflow: hidden; border-radius: var(--radius-3); }
 .sw-control .real-map { position: absolute; inset: 0; min-height: 0; border: 0; border-radius: 0; }
 .sw-control__top { position: absolute; z-index: 5; left: calc(var(--space-4) + 56px); right: calc(340px + var(--space-4) * 2); top: var(--space-4); display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: flex-start; pointer-events: none; }
-.sw-control__title, .sw-control__actions { pointer-events: auto; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-2); padding: var(--space-3) var(--space-4); box-shadow: var(--shadow-1); }
+.sw-control__title, .sw-control__actions, .sw-control__note, .sw-control__top .sw-chip { pointer-events: auto; }
+.sw-control__title, .sw-control__actions, .sw-control__note, .sw-control__top .sw-chip { pointer-events: auto; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-2); padding: var(--space-3) var(--space-4); box-shadow: var(--shadow-1); }
 .sw-control__title, .sw-control__actions { min-width: 0; box-sizing: border-box; }
 .sw-control__title { max-width: 460px; }
-.sw-control__title h1 { margin: 0; font-size: var(--font-size-3); }
+.sw-control__title { padding: var(--space-2) var(--space-4); }
+.sw-control__title h1 { margin: 0; font-size: var(--font-size-2); font-weight: 600; }
+.sw-control__top .sw-chip { align-self: stretch; display: inline-flex; align-items: center; padding: 0 var(--space-4); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-2); box-shadow: var(--shadow-1); font-family: var(--font-mono, monospace); }
+.sw-control__note { flex: 1 1 100%; max-width: 460px; padding: var(--space-2) var(--space-3); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-2); }
+.sw-control__note .demo { margin: 0; font-size: var(--font-size-1); }
 .sw-control__title .demo { margin: var(--space-1) 0 0; font-size: var(--font-size-1); font-weight: 500; }
 .sw-control__actions { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
 .sw-control__actions button, .sw-control__actions select { min-height: 44px; }

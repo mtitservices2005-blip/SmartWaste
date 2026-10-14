@@ -460,7 +460,7 @@ function renderMapPanel() {
   return `<div class="map-card sw-control">
       <div id="realMap" class="real-map" role="application" aria-label="Mapa OpenStreetMap de Laguna Salada"><div class="map-fallback"><strong>Mapa externo no disponible.</strong><span>Fallback operativo demo: use listas, paneles y coordenadas simuladas.</span></div></div>
       <div class="map-header sw-control__top">
-        <div class="sw-control__title"><p class="eyebrow">${pilotMunicipality.branding.label}</p><h1>Mapa operativo real de ${pilotMunicipality.name}</h1>${renderLiveChip({ freshness: kpis.freshness, demo: demoUi })}<p class="demo">${demoPrefix}Las rutas son simuladas, no oficiales del ayuntamiento.</p><p class="demo gps-legend">● = posición GPS real · el resto son camiones simulados</p></div>
+        <div class="sw-control__title"><h1 aria-label="Mapa operativo real de ${pilotMunicipality.name}">${pilotMunicipality.name}</h1></div>${renderLiveChip({ freshness: kpis.freshness, demo: demoUi })}<div class="sw-control__note"><p class="demo">${demoPrefix}Las rutas son simuladas, no oficiales del ayuntamiento.</p><p class="demo gps-legend">● = posición GPS real · el resto son camiones simulados</p></div>
         <div class="sw-control__actions">${routeFocusSelect()}<span id="mapStartAction">${mapStartAction()}</span><button class="btn-ghost" data-sim="fullscreen">Pantalla completa</button>${sim}</div>
       </div>
       <section class="sw-fleet" aria-label="Flota">
