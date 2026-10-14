@@ -1,5 +1,7 @@
 // SW-085: "Rutas de hoy" del chofer. Lógica pura (sin DOM ni red). La fecha es la local de República
 // Dominicana (America/Santo_Domingo). Una ruta sin hora de inicio no inventa una: se muestra sin hora y al final.
+import { runsOnDay, normalizeStartTime, formatTimeOfDay } from './route-schedule.js';
+
 const TIME_ZONE = 'America/Santo_Domingo';
 const OPEN = new Set(['planned', 'assigned']);
 const ACTIVE = new Set(['started', 'in_progress', 'delayed']);
@@ -31,7 +33,13 @@ export function selectTodayRoutes(runs, { now = new Date() } = {}) {
     const hasTime = Boolean(raw.scheduledStartAt) && localDateKey(raw.scheduledStartAt) !== null;
     if (hasTime && localDateKey(raw.scheduledStartAt) !== today) continue;
     if (!hasTime && !OPEN.has(status) && !ACTIVE.has(status)) continue;
-    items.push({ ...raw, status, startLabel: hasTime ? formatStartTime(raw.scheduledStartAt) : null, _t: hasTime ? new Date(raw.scheduledStartAt).getTime() : null });
+    // SW-086: fuera de los días de la ruta no se ofrece (si ya está en curso, se sigue mostrando).
+    if (!hasTime && OPEN.has(status) && !runsOnDay(raw.routeDays, now)) continue;
+    const routeTime = normalizeStartTime(raw.routeStartTime);
+    let label = null; let sortMs = null;
+    if (hasTime) { label = formatStartTime(raw.scheduledStartAt); sortMs = new Date(raw.scheduledStartAt).getTime(); }
+    else if (routeTime) { label = formatTimeOfDay(routeTime); const [h, m] = routeTime.split(':').map(Number); sortMs = new Date(`${today}T00:00:00-04:00`).getTime() + (h * 60 + m) * 60000; }
+    items.push({ ...raw, status, startLabel: label, _t: sortMs });
   }
   items.sort((a, b) => {
     if (a._t !== null && b._t !== null) return a._t - b._t;

@@ -65,4 +65,27 @@ assert.deepEqual(selectTodayRoutes(undefined, { now }), { items: [], nextId: nul
 assert.deepEqual(selectTodayRoutes([null, {}], { now }).items, []);
 assert.equal(formatTodayText(new Date('2026-10-14T11:30:00Z')), 'Miércoles 14 de octubre');
 assert.equal(formatTodayText(new Date('2026-10-14T02:00:00Z')), 'Martes 13 de octubre', 'a las 10 p. m. del martes en RD sigue siendo martes');
+
+// SW-086: la hora y los días vienen de la ruta (la hora propia de la corrida manda si existe).
+const wed = now; // miércoles 14 oct 2026 → día 3
+const routeTimed = selectTodayRoutes([
+  run('tarde', { routeStartTime: '14:30:00' }),
+  run('manana', { routeStartTime: '08:00:00' }),
+  run('propia', { routeStartTime: '20:00:00', scheduledStartAt: '2026-10-14T12:30:00Z' }),
+  run('sinhora')
+], { now: wed });
+assert.deepEqual(routeTimed.items.map((r) => r.id), ['manana', 'propia', 'tarde', 'sinhora'], 'ordenadas por hora del día');
+assert.equal(routeTimed.items[0].startLabel, '8:00 a. m.');
+assert.equal(routeTimed.items[1].startLabel, '8:30 a. m.', 'la hora de la corrida gana');
+assert.equal(routeTimed.items[2].startLabel, '2:30 p. m.');
+assert.equal(routeTimed.items[3].startLabel, null);
+
+const byDay = selectTodayRoutes([
+  run('lmv', { routeDays: [1, 3, 5] }),
+  run('mj', { routeDays: [2, 4] }),
+  run('todos', { routeDays: [] }),
+  run('nulo', { routeDays: null }),
+  run('mj-en-curso', { routeDays: [2, 4], status: 'in_progress' })
+], { now: wed });
+assert.deepEqual(byDay.items.map((r) => r.id).sort(), ['lmv', 'mj-en-curso', 'nulo', 'todos'], 'fuera de sus días no se muestra, salvo que ya esté en curso');
 console.log('driver-today ok');

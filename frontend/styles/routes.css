@@ -1,0 +1,33 @@
+/* SW-086: Rutas (tabla, filtros, días, historial, vista previa). Solo tokens: sigue los temas oscuro y claro. */
+.sw-routes__title { margin: var(--space-2) 0 var(--space-3); color: var(--color-muted); font-size: var(--font-size-2); }
+.sw-routes__filters, .sw-routes__days { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-3); }
+.sw-routes__filters .sw-chip, .sw-routes__days .sw-chip { margin: 0; min-height: 36px; padding: 0 var(--space-4); border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text); font: inherit; font-weight: 600; cursor: pointer; letter-spacing: 0; }
+.sw-routes__filters .sw-chip[aria-pressed="true"], .sw-routes__days .sw-chip[aria-pressed="true"] { background: var(--color-primary); border-color: var(--color-primary); color: var(--color-primary-contrast); }
+.sw-routes__days .sw-chip--day { min-width: 40px; justify-content: center; padding: 0 var(--space-3); }
+.sw-chip__n { margin-left: var(--space-2); font-family: ui-monospace, 'IBM Plex Mono', Consolas, monospace; opacity: .85; }
+.sw-routes__scroll { overflow-x: auto; border: 1px solid var(--color-border); border-radius: var(--radius-3); background: var(--color-surface); }
+.sw-routes__table { width: 100%; border-collapse: collapse; font-size: var(--font-size-2); }
+.sw-routes__table th { text-align: left; padding: var(--space-3) var(--space-4); color: var(--color-muted); font-size: var(--font-size-1); font-weight: 700; letter-spacing: .04em; text-transform: uppercase; border-bottom: 1px solid var(--color-border); white-space: nowrap; }
+.sw-routes__table td { padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--color-border); color: var(--color-text); vertical-align: middle; }
+.sw-routes__row { cursor: pointer; }
+.sw-routes__row:hover, .sw-routes__row.selected { background: var(--color-background-alt); }
+.sw-routes__row:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -2px; }
+.sw-routes__name { font-weight: 700; }
+.sw-routes__num { font-family: ui-monospace, 'IBM Plex Mono', Consolas, monospace; white-space: nowrap; }
+.sw-routes__state { display: inline-block; padding: var(--space-1) var(--space-3); border-radius: 999px; font-size: var(--font-size-1); font-weight: 700; white-space: nowrap; }
+.sw-routes__state--activas { background: var(--status-en-ruta-bg); color: var(--status-en-ruta); }
+.sw-routes__state--programadas { background: var(--status-disponible-bg); color: var(--status-disponible); }
+.sw-routes__state--completas { background: var(--status-fuera-servicio-bg); color: var(--status-fuera-servicio); }
+.sw-routes__label { color: var(--color-muted); font-size: var(--font-size-2); font-weight: 600; }
+.sw-routes__field { margin: var(--space-3) 0; }
+.sw-routes__hint { margin: var(--space-1) 0 0; color: var(--color-muted); font-size: var(--font-size-1); }
+.sw-routes__hint:empty { display: none; }
+.sw-routes__preview { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: var(--space-2); margin: var(--space-3) 0; }
+.sw-routes__preview > div { padding: var(--space-3); background: var(--color-background-alt); border: 1px solid var(--color-border); border-radius: var(--radius-2); }
+.sw-routes__preview dt { color: var(--color-muted); font-size: var(--font-size-1); }
+.sw-routes__preview dd { margin: var(--space-1) 0 0; font-family: ui-monospace, 'IBM Plex Mono', Consolas, monospace; font-weight: 700; }
+.sw-routes__avg { margin: 0 0 var(--space-2); }
+.sw-routes__history { list-style: none; margin: 0; padding: 0; }
+.sw-routes__history li { display: grid; grid-template-columns: 1fr 1fr 1fr 1.4fr; gap: var(--space-2); padding: var(--space-2) 0; border-bottom: 1px solid var(--color-border); font-size: var(--font-size-1); }
+.sw-routes__pin { background: none; border: none; }
+.sw-routes__pin span { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background: var(--color-primary); color: var(--color-primary-contrast); border: 2px solid var(--color-surface); font: 700 11px/1 ui-monospace, Consolas, monospace; cursor: grab; }
