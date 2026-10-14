@@ -122,4 +122,16 @@ assert.equal(nextRetryDelayMs(-3), 1000);
   assert.equal(await readBatteryPct({ getBattery: async () => { throw new Error('denied'); } }), null, 'si falla, no rompe el reporte');
 }
 console.log('driver-app-battery ok');
+
+// El registro local de enviados no crece sin límite (el latido agrega ~2 880 puntos al día).
+{
+  const storage = memoryStorage();
+  const queue = createPersistentTelemetryQueue({ storage });
+  for (let i = 0; i < 2500; i += 1) await queue.enqueue(pointAt(i));
+  await flushInBatches({ queue, send: async () => ({ ok: true }) });
+  const saved = JSON.parse([...storage.data.values()][0]);
+  assert.equal(saved.pending.length, 0);
+  assert.ok(saved.sent.length <= 2000, `el registro de enviados debe acotarse (hay ${saved.sent.length})`);
+  assert.equal(await queue.enqueue(pointAt(2499)), false, 'lo más reciente sigue protegido contra duplicados');
+}
 console.log('driver-app-batching ok');
