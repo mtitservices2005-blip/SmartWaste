@@ -88,7 +88,8 @@ $$;
 
 -- Abre y cierra alertas según el estado actual de la flotilla. Idempotente: llamarla muchas
 -- veces no duplica. Devuelve cuántas alertas abrió. Corre con los permisos de quien la llama
--- (RLS): un usuario del municipio A solo toca alertas de A; un job de plataforma (pg_cron) ve todo.
+-- (RLS): un usuario del municipio A solo toca alertas de A. Un job de plataforma (pg_cron, service_role,
+-- dueño de la base) ve todo vía fleet_caller_sees_all() y NO cierra alertas vigentes por no ver filas.
 create or replace function refresh_fleet_alerts() returns integer language plpgsql set search_path = public as $$
 declare opened integer;
 begin

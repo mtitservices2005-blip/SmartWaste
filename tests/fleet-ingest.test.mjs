@@ -186,6 +186,47 @@ try {
     assert.equal(moving, null, 'al volver a moverse se limpia la quietud');
   }
 
+  // Hallazgo P2 de la revisión de Codex (PR #95): un teléfono que sube su cola tras estar sin señal
+  // manda varios puntos quietos juntos; "desde cuándo está quieto" es el inicio de la última racha
+  // quieta del lote, no el punto más nuevo.
+  {
+    const C = await seedMunicipality(db, 'c');
+    const cv1 = C.truck1.vehicleId;
+    const cv2 = C.truck2.vehicleId;
+    const stoppedSince = async (vehicleId) => (await db.query('select stopped_since from vehicle_live_state where vehicle_id = $1', [vehicleId])).rows[0].stopped_since;
+
+    // Primer lote tras estar sin señal: todo quieto desde hace ~12 minutos.
+    const t700 = isoAgo(700);
+    await asUser(db, C.truck1.userId, () => ingest(db, [
+      point({ vehicle_id: cv1, route_run_id: C.runId, speed: 0.2, captured_at: t700 }),
+      point({ vehicle_id: cv1, route_run_id: C.runId, speed: 0.3, captured_at: isoAgo(400) }),
+      point({ vehicle_id: cv1, route_run_id: C.runId, speed: 0.1, captured_at: isoAgo(10) })
+    ]));
+    assert.equal((await stoppedSince(cv1)).getTime(), Date.parse(t700), 'la quietud empieza en el primer punto quieto del lote');
+    const overview = await asUser(db, C.adminId, async () => (await db.query('select status from fleet_overview() where vehicle_id = $1', [cv1])).rows[0]);
+    assert.equal(overview.status, 'detenido', 'sin esperar 5 minutos más después de subir la cola');
+
+    // Se movió, se detuvo: cuenta solo la última racha quieta.
+    const t500 = isoAgo(500);
+    await asUser(db, C.truck2.userId, () => ingest(db, [
+      point({ vehicle_id: cv2, speed: 8, captured_at: isoAgo(900) }),
+      point({ vehicle_id: cv2, speed: 0.1, captured_at: isoAgo(800) }),
+      point({ vehicle_id: cv2, speed: 0.1, captured_at: isoAgo(700) }),
+      point({ vehicle_id: cv2, speed: 7, captured_at: isoAgo(600) }),
+      point({ vehicle_id: cv2, speed: 0.1, captured_at: t500 }),
+      point({ vehicle_id: cv2, speed: 0.2, captured_at: isoAgo(20) })
+    ]));
+    assert.equal((await stoppedSince(cv2)).getTime(), Date.parse(t500), 'solo cuenta la última racha quieta del lote');
+
+    // Un lote siguiente que sigue quieto conserva el inicio.
+    await asUser(db, C.truck2.userId, () => ingest(db, [point({ vehicle_id: cv2, speed: 0.1, captured_at: isoAgo(5) })]));
+    assert.equal((await stoppedSince(cv2)).getTime(), Date.parse(t500), 'el siguiente lote quieto conserva el inicio de la quietud');
+
+    // Un lote que termina en movimiento la limpia.
+    await asUser(db, C.truck2.userId, () => ingest(db, [point({ vehicle_id: cv2, speed: 0.1, captured_at: isoAgo(4) }), point({ vehicle_id: cv2, speed: 6, captured_at: isoAgo(2) })]));
+    assert.equal(await stoppedSince(cv2), null);
+  }
+
   console.log('fleet-ingest ok');
 } finally {
   await finish(db);

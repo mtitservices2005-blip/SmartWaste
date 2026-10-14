@@ -203,14 +203,37 @@ begin
     on conflict (vehicle_id, captured_at, (coalesce(device_id, ''))) where source = 'driver_app' do nothing
     returning 1
   ),
+  moving as (
+    select vehicle_id, max(captured_at) filter (where speed is null or speed >= 1) as last_moving_at
+    from valid group by vehicle_id
+  ),
   latest as (
-    select distinct on (vehicle_id) * from valid order by vehicle_id, captured_at desc
+    -- Última muestra de cada camión y, si está quieto, desde cuándo: el inicio de la última racha
+    -- quieta del lote (un teléfono que sube su cola tras estar sin señal manda varias muestras quietas
+    -- juntas). Si el lote no trae ningún punto en movimiento y el camión ya estaba quieto, se conserva
+    -- el inicio anterior.
+    select distinct on (v.vehicle_id) v.*,
+      case when v.speed < 1 then
+        case when m.last_moving_at is null and prev.speed < 1 and prev.stopped_since is not null
+          then least(prev.stopped_since, run.run_start)
+          else run.run_start
+        end
+      end as stopped_since_new
+    from valid v
+    join moving m on m.vehicle_id = v.vehicle_id
+    left join vehicle_live_state prev on prev.vehicle_id = v.vehicle_id
+    cross join lateral (
+      select min(x.captured_at) as run_start
+      from valid x
+      where x.vehicle_id = v.vehicle_id and x.speed < 1
+        and (m.last_moving_at is null or x.captured_at > m.last_moving_at)
+    ) run
+    order by v.vehicle_id, v.captured_at desc
   ),
   live as (
     insert into vehicle_live_state as ls
       (municipality_id, vehicle_id, route_run_id, latitude, longitude, speed, heading, battery_pct, captured_at, stopped_since)
-    select municipality_id, vehicle_id, route_run_id, latitude, longitude, speed, heading, battery_pct, captured_at,
-           case when speed is not null and speed < 1 then captured_at end
+    select municipality_id, vehicle_id, route_run_id, latitude, longitude, speed, heading, battery_pct, captured_at, stopped_since_new
     from latest
     on conflict (vehicle_id) do update set
       route_run_id = excluded.route_run_id,
@@ -220,10 +243,7 @@ begin
       heading = excluded.heading,
       battery_pct = excluded.battery_pct,
       captured_at = excluded.captured_at,
-      stopped_since = case
-        when excluded.speed is not null and excluded.speed < 1
-          then coalesce(case when ls.speed is not null and ls.speed < 1 then ls.stopped_since end, excluded.captured_at)
-      end
+      stopped_since = excluded.stopped_since
     where excluded.captured_at > ls.captured_at
     returning 1
   )
@@ -236,6 +256,13 @@ begin
 
   return result;
 end $$;
+
+-- Roles que saltan RLS (dueño de la base, service_role, pg_cron): sin usuario no hay auth.uid(), pero
+-- sí deben ver toda la flotilla (p. ej. refresh_fleet_alerts() como job de plataforma). Un usuario
+-- normal nunca cae aquí.
+create or replace function fleet_caller_sees_all() returns boolean language sql stable as $$
+  select coalesce((select r.rolsuper or r.rolbypassrls from pg_roles r where r.rolname = current_user), false)
+$$;
 
 -- 7. Vista de flotilla: una fila por camión del municipio del usuario (solo administración,
 -- supervisión y despacho; un chofer recibe 0 filas). El estado se recalcula contra el reloj.
@@ -288,19 +315,22 @@ create or replace function fleet_overview() returns table (
     limit 1
   ) assigned_driver on true
   left join vehicle_live_state ls on ls.vehicle_id = v.id
-  where has_municipality_role(v.municipality_id, array['municipal_admin', 'supervisor', 'dispatcher'])
+  where fleet_caller_sees_all()
+     or has_municipality_role(v.municipality_id, array['municipal_admin', 'supervisor', 'dispatcher'])
   order by v.code
 $$;
 
 -- Permisos: solo usuarios autenticados (y service_role) ejecutan las RPC; nunca anon/public.
 revoke all on function derive_vehicle_status(boolean, timestamptz, numeric, timestamptz, timestamptz) from public, anon;
 revoke all on function ingest_positions(jsonb) from public, anon;
+revoke all on function fleet_caller_sees_all() from public, anon;
 revoke all on function fleet_overview() from public, anon;
 revoke all on function fleet_try_uuid(text) from public, anon;
 revoke all on function fleet_try_numeric(text) from public, anon;
 revoke all on function fleet_try_timestamptz(text) from public, anon;
 grant execute on function derive_vehicle_status(boolean, timestamptz, numeric, timestamptz, timestamptz) to authenticated, service_role;
 grant execute on function ingest_positions(jsonb) to authenticated, service_role;
+grant execute on function fleet_caller_sees_all() to authenticated, service_role;
 grant execute on function fleet_overview() to authenticated, service_role;
 grant execute on function fleet_try_uuid(text) to authenticated, service_role;
 grant execute on function fleet_try_numeric(text) to authenticated, service_role;

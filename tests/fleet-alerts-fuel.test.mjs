@@ -84,6 +84,37 @@ try {
       `insert into fleet_alerts (municipality_id, vehicle_id, type) values ($1, $2, 'sin_senal')`, [A.municipalityId, v1])), /row-level security|violates|not found/i);
   }
 
+  // Job de plataforma (pg_cron / service_role / dueño de la base): sin usuario no hay auth.uid(), pero
+  // NO debe cerrar las alertas vigentes de ningún municipio (hallazgo P1 de la revisión de Codex en el PR #95).
+  {
+    await asUser(db, B.truck1.userId, () => ingest(db, [point({ vehicle_id: B.truck1.vehicleId, route_run_id: B.runId, captured_at: isoAgo(2) })]));
+    await db.query(`update vehicle_live_state set captured_at = now() - interval '5 minutes' where vehicle_id = $1`, [B.truck1.vehicleId]);
+    await refresh(B.dispatcherId);
+    const openFor = async (vehicleId) => (await openAlerts(vehicleId, 'sin_senal')).length;
+    assert.equal(await openFor(v1), 1, 'precondición: A tiene su alerta de sin señal abierta');
+    assert.equal(await openFor(B.truck1.vehicleId), 1, 'precondición: B tiene su alerta de sin señal abierta');
+
+    assert.equal(Number((await q('select refresh_fleet_alerts() as n'))[0].n), 0, 'el job (dueño de la base) no abre ni duplica');
+    assert.equal(await openFor(v1), 1, 'el job no cierra la alerta vigente de A');
+    assert.equal(await openFor(B.truck1.vehicleId), 1, 'el job no cierra la alerta vigente de B');
+
+    await db.query('set local role service_role');
+    try {
+      assert.equal(Number((await q('select refresh_fleet_alerts() as n'))[0].n), 0);
+    } finally { await db.query('reset role'); }
+    assert.equal(await openFor(v1), 1, 'service_role tampoco cierra alertas vigentes');
+    assert.equal(await openFor(B.truck1.vehicleId), 1);
+
+    // Si la condición de A termina, el job sí cierra la de A y deja la de B.
+    await db.query(`update vehicle_live_state set captured_at = now() where vehicle_id = $1`, [v1]);
+    await q('select refresh_fleet_alerts()');
+    assert.equal(await openFor(v1), 0, 'el job cierra la alerta de A cuando A vuelve a reportar');
+    assert.equal(await openFor(B.truck1.vehicleId), 1, 'y deja intacta la de B');
+    // Deja el estado como lo esperan los bloques siguientes.
+    await db.query(`update vehicle_live_state set captured_at = now() - interval '5 minutes' where vehicle_id = $1`, [v1]);
+    await refresh(A.dispatcherId);
+  }
+
   // Combustible real: litros > 0, ligado al camión/corrida correctos, chofer solo de su camión.
   {
     const log = (userId, row) => asUser(db, userId, () => db.query(
