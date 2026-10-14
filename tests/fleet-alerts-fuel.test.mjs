@@ -91,16 +91,24 @@ try {
     await db.query(`update vehicle_live_state set captured_at = now() - interval '5 minutes' where vehicle_id = $1`, [B.truck1.vehicleId]);
     await refresh(B.dispatcherId);
     const openFor = async (vehicleId) => (await openAlerts(vehicleId, 'sin_senal')).length;
+    // Un tercer municipio con un camión sin señal que nadie ha refrescado: el job, que ve todo, SÍ debe
+    // abrirle su alerta (en CI hay datos de otras pruebas que producen lo mismo).
+    const C = await seedMunicipality(db, 'C');
+    await asUser(db, C.truck1.userId, () => ingest(db, [point({ vehicle_id: C.truck1.vehicleId, route_run_id: C.runId, captured_at: isoAgo(2) })]));
+    await db.query(`update vehicle_live_state set captured_at = now() - interval '5 minutes' where vehicle_id = $1`, [C.truck1.vehicleId]);
     assert.equal(await openFor(v1), 1, 'precondición: A tiene su alerta de sin señal abierta');
     assert.equal(await openFor(B.truck1.vehicleId), 1, 'precondición: B tiene su alerta de sin señal abierta');
 
-    assert.equal(Number((await q('select refresh_fleet_alerts() as n'))[0].n), 0, 'el job (dueño de la base) no abre ni duplica');
+    const openedByJob = Number((await q('select refresh_fleet_alerts() as n'))[0].n);
+    assert.ok(openedByJob >= 1, 'el job ve todos los municipios y abre la alerta del camión sin señal de C');
+    assert.equal((await q(`select 1 from fleet_alerts where vehicle_id = $1 and type = 'sin_senal' and condition_cleared_at is null`, [C.truck1.vehicleId])).length, 1);
+    assert.equal(Number((await q('select refresh_fleet_alerts() as n'))[0].n), 0, 'una segunda pasada del job no abre ni duplica nada');
     assert.equal(await openFor(v1), 1, 'el job no cierra la alerta vigente de A');
     assert.equal(await openFor(B.truck1.vehicleId), 1, 'el job no cierra la alerta vigente de B');
 
     await db.query('set local role service_role');
     try {
-      assert.equal(Number((await q('select refresh_fleet_alerts() as n'))[0].n), 0);
+      assert.equal(Number((await q('select refresh_fleet_alerts() as n'))[0].n), 0, 'service_role: sin novedades, nada que abrir');
     } finally { await db.query('reset role'); }
     assert.equal(await openFor(v1), 1, 'service_role tampoco cierra alertas vigentes');
     assert.equal(await openFor(B.truck1.vehicleId), 1);
