@@ -20,8 +20,8 @@ import { demoOnly } from './ui-mode.js';
 // SW-082: en despliegues con hideDemo no se muestran avisos de demo/simulación.
 const demoNotice = demoOnly(rawDemoNotice, readSupabaseConfig());
 const simulationNotice = demoOnly(rawSimulationNotice, readSupabaseConfig());
-const demoPrefix = demoNotice ? `${demoPrefix}` : '';
-const simulationPrefix = simulationNotice ? `${simulationPrefix}` : '';
+const demoPrefix = demoNotice ? `${demoNotice} · ` : '';
+const simulationPrefix = simulationNotice ? `${simulationNotice} · ` : '';
 
 const $ = (selector) => document.querySelector(selector);
 const app = $('#app');

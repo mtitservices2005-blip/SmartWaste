@@ -14,3 +14,17 @@ assert.equal(demoLine('Datos demo', { hideDemo: true }), '', 'sin demo no queda 
 assert.equal(demoLine('Datos demo <b>', undefined), '<p class="demo">Datos demo &lt;b&gt;</p>');
 assert.equal(demoLine('Datos demo', undefined, 'extra'), '<p class="demo extra">Datos demo</p>');
 console.log('ui-mode ok');
+
+// Regresión: los prefijos de demo/simulación de app.js no pueden referirse a sí mismos (daría
+// ReferenceError al cargar la app en modo demo).
+{
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync('frontend/app.js', 'utf8');
+  for (const [name, source] of [['demoPrefix', 'demoNotice'], ['simulationPrefix', 'simulationNotice']]) {
+    const line = app.split('\n').find((l) => l.startsWith(`const ${name} =`));
+    assert.ok(line, `falta la definición de ${name}`);
+    assert.ok(!new RegExp('\\$\\{' + name + '\\}').test(line), `${name} no puede usarse dentro de su propia definición`);
+    assert.ok(line.includes('${' + source + '}'), `${name} debe construirse a partir de ${source}`);
+  }
+  console.log('ui-mode regression ok');
+}
