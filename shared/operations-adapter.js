@@ -13,6 +13,21 @@ const fail = (code, message, meta = {}) => ({ ok: false, error: { code, message 
 const table = (client, name) => client.from(name);
 
 const clone = (value) => structuredClone(value);
+
+// SW-081: reglas compartidas por el adaptador real y el demo para la flotilla.
+const MAX_INGEST_BATCH = 200;
+const DEMO_STATUS = { active: 'en_ruta', delayed: 'en_ruta', stopped: 'detenido', completed: 'disponible', offline: 'disponible' };
+function validateIngestBatch(batch) {
+  if (!Array.isArray(batch)) return { code: 'INVALID_BATCH', message: 'El lote de posiciones debe ser un arreglo.' };
+  if (batch.length === 0) return { code: 'EMPTY_BATCH', message: 'El lote de posiciones está vacío.' };
+  if (batch.length > MAX_INGEST_BATCH) return { code: 'BATCH_TOO_LARGE', message: `El lote tiene ${batch.length} puntos; el máximo es ${MAX_INGEST_BATCH}.` };
+  return null;
+}
+function validateFuelLog(entry) {
+  if (!entry?.vehicle_id) return { code: 'VEHICLE_REQUIRED', message: 'Falta el camión del registro de combustible.' };
+  if (!Number.isFinite(Number(entry.liters)) || Number(entry.liters) <= 0) return { code: 'INVALID_LITERS', message: 'Los litros deben ser un número mayor que cero.' };
+  return null;
+}
 export function createDemoOperationsAdapter(seed = { trucks, routes, drivers, incidents, routeStops: [], routePaths: [] }) {
   const state = clone(seed);
   if (!state.routeStops) state.routeStops = [];
@@ -81,6 +96,36 @@ export function createDemoOperationsAdapter(seed = { trucks, routes, drivers, in
     // frontend/app.js's fleet panel) don't need to branch on adapter mode to read "who drives this
     // truck". assignDriverToVehicle() clears the driver from any other truck first — a driver
     // drives one truck at a time in this model, same constraint the real adapter enforces below.
+    // SW-081: flotilla. fleetOverview() devuelve los mismos campos que la RPC fleet_overview() real;
+    // el estado se aproxima desde el estado demo del camión (no hay telemetría real en modo demo).
+    fleetOverview: () => state.trucks.map((truck) => {
+      const route = state.routes?.find((r) => r.id === truck.routeId) ?? null;
+      const driver = (state.drivers ?? drivers).find((d) => d.id === truck.driverId) ?? null;
+      const position = truck.position ?? null;
+      return {
+        vehicle_id: truck.id, unit: truck.unit, plate: truck.plate ?? null,
+        status: DEMO_STATUS[truck.state] ?? 'disponible',
+        driver_name: driver?.name ?? null, route_id: route?.id ?? null, route_name: route?.name ?? null,
+        progress: route ? (truck.progress ?? 0) : null,
+        latitude: position?.[0] ?? null, longitude: position?.[1] ?? null,
+        speed: truck.speedKmh === undefined ? null : Number((truck.speedKmh / 3.6).toFixed(1)),
+        battery_pct: null, captured_at: null, seconds_since_report: null
+      };
+    }),
+    ingestPositions: (batch) => {
+      const invalid = validateIngestBatch(batch);
+      if (invalid) throw new Error(`${invalid.code}: ${invalid.message}`);
+      return { inserted: batch.length, ignored: 0, rejected: 0 };
+    },
+    logFuel: (entry) => {
+      const invalid = validateFuelLog(entry);
+      if (invalid) throw new Error(`${invalid.code}: ${invalid.message}`);
+      const saved = { id: `demo-fuel-${(state.fuelLogs ??= []).length + 1}`, route_run_id: null, odometer_km: null, ...entry };
+      state.fuelLogs.push(saved);
+      return clone(saved);
+    },
+    listFleetAlerts: () => [],
+    acknowledgeFleetAlert: () => null,
     listVehicleAssignments: () => state.trucks.filter((truck) => truck.driverId).map((truck) => ({ vehicle_id: truck.id, driver_id: truck.driverId, status:'assigned' })),
     assignDriverToVehicle: (vehicleId, driverId) => {
       const vehicle = state.trucks.find((v) => v.id === vehicleId);
@@ -127,6 +172,26 @@ export function createSupabaseOperationsAdapter(client, { fallback = createDemoO
   const selectOne = (name, id) => scoped(table(client, name).select('*')).eq('id', id).maybeSingle();
   return {
     mode: hasClient ? 'REAL' : 'DEMO_FALLBACK',
+    // SW-081: flotilla (RPC y tablas de supabase/migrations/202610120001/2_sw081_*). El lote se valida
+    // aquí también (máx. 200 puntos) para no gastar red en lotes que la base va a rechazar.
+    fleetOverview: (opts = {}) => run(() => client.rpc('fleet_overview'), () => fallback.fleetOverview(), opts.correlation_id),
+    ingestPositions: async (batch, opts = {}) => {
+      const invalid = validateIngestBatch(batch);
+      if (invalid) return fail(invalid.code, invalid.message, { correlation_id: opts.correlation_id });
+      return run(() => client.rpc('ingest_positions', { batch }), () => fallback.ingestPositions(batch), opts.correlation_id);
+    },
+    logFuel: async (entry, opts = {}) => {
+      const invalid = validateFuelLog(entry);
+      if (invalid) return fail(invalid.code, invalid.message, { correlation_id: opts.correlation_id });
+      const row = { vehicle_id: entry.vehicle_id, route_run_id: entry.route_run_id ?? null, liters: Number(entry.liters), odometer_km: entry.odometer_km ?? null, municipality_id: entry.municipality_id ?? municipality_id };
+      return run(() => table(client, 'fuel_logs').insert(row).select('*').single(), () => fallback.logFuel(entry), opts.correlation_id);
+    },
+    listFleetAlerts: (opts = {}) => run(() => {
+      let q = scoped(table(client, 'fleet_alerts').select('*'));
+      if (opts.status !== 'all') q = q.eq('status', opts.status ?? 'abierta');
+      return q.order('opened_at', { ascending: false });
+    }, () => fallback.listFleetAlerts(), opts.correlation_id),
+    acknowledgeFleetAlert: (alertId, opts = {}) => run(() => client.rpc('acknowledge_fleet_alert', { alert_id: alertId }), () => fallback.acknowledgeFleetAlert(alertId), opts.correlation_id),
     listVehicles: (opts = {}) => run(() => scoped(table(client, 'vehicles').select('*').order('code')), () => fallback.listVehicles(), opts.correlation_id),
     getVehicle: (id, opts = {}) => run(() => selectOne('vehicles', id), () => fallback.getVehicle(id), opts.correlation_id),
     createVehicle: (vehicle, opts = {}) => run(() => table(client, 'vehicles').insert({ ...vehicle, municipality_id: vehicle.municipality_id ?? municipality_id }).select('*').single(), () => ({ ...vehicle, id: vehicle.id ?? `demo-${Date.now()}` }), opts.correlation_id),

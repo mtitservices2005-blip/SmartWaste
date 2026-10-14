@@ -487,4 +487,78 @@ const demoResolveResult = await createSupabaseOperationsAdapter({}).updateCitize
 assert.equal(demoResolveResult.ok, false);
 assert.equal(demoResolveResult.error.code, 'NOT_SUPPORTED_IN_DEMO');
 
+// SW-081: flotilla — fleet_overview, ingest_positions, combustible y alertas (RPC/tablas nuevas).
+{
+  const calls = [];
+  const rpcClient = {
+    from: (name) => {
+      const builder = {
+        insert: (row) => { calls.push({ kind: 'insert', table: name, row }); return { select: () => ({ single: () => Promise.resolve({ data: { id: 'fuel-1', ...row }, error: null }) }) }; },
+        select: () => builder,
+        eq: (column, value) => { calls.push({ kind: 'eq', table: name, column, value }); return builder; },
+        order: () => Promise.resolve({ data: [{ id: 'alert-1', type: 'sin_senal', status: 'abierta' }], error: null })
+      };
+      return builder;
+    },
+    rpc: (fn, args) => {
+      calls.push({ kind: 'rpc', fn, args });
+      if (fn === 'fleet_overview') return Promise.resolve({ data: [{ vehicle_id: 'v1', status: 'en_ruta' }], error: null });
+      if (fn === 'ingest_positions') return Promise.resolve({ data: { inserted: args.batch.length, ignored: 0, rejected: 0 }, error: null });
+      if (fn === 'acknowledge_fleet_alert') return Promise.resolve({ data: null, error: null });
+      return Promise.resolve({ data: null, error: { message: `rpc inesperado ${fn}` } });
+    }
+  };
+  const fleet = createSupabaseOperationsAdapter(rpcClient, { municipality_id: 'mun-1' });
+
+  const overview = await fleet.fleetOverview({ correlation_id: 'c-1' });
+  assert.equal(overview.ok, true);
+  assert.equal(overview.data[0].status, 'en_ruta');
+  assert.equal(overview.correlation_id, 'c-1');
+  assert.deepEqual(calls.find((c) => c.kind === 'rpc' && c.fn === 'fleet_overview').args ?? {}, {});
+
+  const batch = Array.from({ length: 3 }, (_, i) => ({ vehicle_id: 'v1', latitude: 19.8, longitude: -71, captured_at: `2026-10-13T12:00:0${i}Z` }));
+  const ingested = await fleet.ingestPositions(batch);
+  assert.deepEqual(ingested.data, { inserted: 3, ignored: 0, rejected: 0 });
+  assert.deepEqual(calls.filter((c) => c.fn === 'ingest_positions').at(-1).args, { batch });
+
+  const rpcCallsBefore = calls.filter((c) => c.kind === 'rpc').length;
+  const tooBig = await fleet.ingestPositions(Array.from({ length: 201 }, () => batch[0]));
+  assert.equal(tooBig.ok, false);
+  assert.equal(tooBig.error.code, 'BATCH_TOO_LARGE');
+  assert.equal(calls.filter((c) => c.kind === 'rpc').length, rpcCallsBefore, 'un lote de 201 puntos no sale a la red');
+  assert.equal((await fleet.ingestPositions([])).error.code, 'EMPTY_BATCH');
+  assert.equal((await fleet.ingestPositions('x')).error.code, 'INVALID_BATCH');
+
+  const fuel = await fleet.logFuel({ vehicle_id: 'v1', route_run_id: 'run-1', liters: 40, odometer_km: 1200 });
+  assert.equal(fuel.ok, true);
+  assert.deepEqual(calls.find((c) => c.kind === 'insert' && c.table === 'fuel_logs').row, { vehicle_id: 'v1', route_run_id: 'run-1', liters: 40, odometer_km: 1200, municipality_id: 'mun-1' });
+  assert.equal((await fleet.logFuel({ vehicle_id: 'v1', liters: 0 })).error.code, 'INVALID_LITERS');
+  assert.equal((await fleet.logFuel({ vehicle_id: 'v1', liters: -3 })).error.code, 'INVALID_LITERS');
+  assert.equal((await fleet.logFuel({ liters: 5 })).error.code, 'VEHICLE_REQUIRED');
+
+  const alerts = await fleet.listFleetAlerts();
+  assert.equal(alerts.data[0].type, 'sin_senal');
+  assert.ok(calls.some((c) => c.kind === 'eq' && c.table === 'fleet_alerts' && c.column === 'status' && c.value === 'abierta'), 'por defecto solo alertas abiertas');
+  assert.equal((await fleet.acknowledgeFleetAlert('alert-1')).ok, true);
+  assert.deepEqual(calls.filter((c) => c.fn === 'acknowledge_fleet_alert').at(-1).args, { alert_id: 'alert-1' });
+
+  // Sin cliente real: el adaptador de respaldo usa datos demo y lo dice.
+  const offline = await createSupabaseOperationsAdapter({}).fleetOverview();
+  assert.equal(offline.source, 'DEMO_FALLBACK');
+  assert.ok(offline.data.length > 0);
+
+  // Adaptador demo: mismos campos que fleet_overview().
+  const demoOverview = createDemoOperationsAdapter().fleetOverview();
+  assert.ok(demoOverview.length >= 5, 'la demo trae al menos 5 camiones');
+  for (const key of ['vehicle_id', 'unit', 'plate', 'status', 'driver_name', 'route_id', 'route_name', 'progress', 'latitude', 'longitude', 'speed', 'battery_pct', 'captured_at', 'seconds_since_report']) {
+    assert.ok(key in demoOverview[0], `fleetOverview demo debe incluir ${key}`);
+  }
+  assert.ok(demoOverview.every((row) => ['en_ruta', 'detenido', 'sin_senal', 'disponible'].includes(row.status)));
+  const demo = createDemoOperationsAdapter();
+  assert.equal(demo.ingestPositions(batch).inserted, 3);
+  assert.throws(() => demo.ingestPositions(Array.from({ length: 201 }, () => batch[0])), /BATCH_TOO_LARGE|200/);
+  assert.equal(demo.logFuel({ vehicle_id: 'truck-01', liters: 30 }).liters, 30);
+  assert.deepEqual(demo.listFleetAlerts(), []);
+}
+
 console.log('operations-adapter ok');

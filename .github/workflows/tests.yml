@@ -23,12 +23,12 @@ jobs:
       # keeps this job fast. tests/rls-adversarial.test.mjs, tests/operational-cycle.test.mjs,
       # tests/telemetry-persistence.test.mjs, tests/telemetry-realtime-diagnosis.test.mjs,
       # tests/route-stops-persistence.test.mjs, tests/route-paths-persistence.test.mjs, and
-      # tests/rls-coverage.test.mjs are excluded on purpose: they need a live Supabase instance and
+      # tests/rls-coverage.test.mjs, and the SW-081 tests/fleet-{ingest,alerts-fuel,rls-adversarial,overview-perf}.test.mjs are excluded on purpose: they need a live Supabase instance and
       # run in the integration-tests job.
       - name: Run each tests/*.test.mjs file as an independent node process
         run: |
           set -e
-          skip_list="tests/rls-adversarial.test.mjs tests/operational-cycle.test.mjs tests/telemetry-persistence.test.mjs tests/telemetry-realtime-diagnosis.test.mjs tests/route-stops-persistence.test.mjs tests/route-paths-persistence.test.mjs tests/rls-coverage.test.mjs tests/gps-route-metrics.test.mjs"
+          skip_list="tests/rls-adversarial.test.mjs tests/operational-cycle.test.mjs tests/telemetry-persistence.test.mjs tests/telemetry-realtime-diagnosis.test.mjs tests/route-stops-persistence.test.mjs tests/route-paths-persistence.test.mjs tests/rls-coverage.test.mjs tests/gps-route-metrics.test.mjs tests/fleet-ingest.test.mjs tests/fleet-alerts-fuel.test.mjs tests/fleet-rls-adversarial.test.mjs tests/fleet-overview-perf.test.mjs"
           for f in tests/*.test.mjs; do
             skip=false
             for s in $skip_list; do
@@ -67,6 +67,10 @@ jobs:
           node tests/gps-route-metrics.test.mjs
           node tests/route-stops-persistence.test.mjs
           node tests/route-paths-persistence.test.mjs
+          node tests/fleet-ingest.test.mjs
+          node tests/fleet-alerts-fuel.test.mjs
+          node tests/fleet-rls-adversarial.test.mjs
+          node tests/fleet-overview-perf.test.mjs
       # SW-022 (docs/TECHNICAL_DEBT_REGISTER.md item #14): diagnostic-only, inspects Postgres
       # directly to find why Realtime never delivers postgres_changes events. Always exits 0 by
       # design — read its output in the job log, it's not a pass/fail gate.
