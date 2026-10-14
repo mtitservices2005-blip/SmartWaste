@@ -1016,6 +1016,7 @@ async function startDriverGps() {
       deviceId,
       operationsAdapter: realAdapter,
       ingestionAdapter: telemetry,
+      batchAdapter: realAdapter, // SW-083: lotes a ingest_positions
       queue
     });
     if (!session.ok) { if (status) status.textContent = session.error.code === 'NO_ACTIVE_ROUTE_ASSIGNED' ? 'No tienes un vehículo asignado en una ruta activa. Contacta a tu supervisor.' : `No se pudo activar el GPS: ${session.error.message}`; return; }
@@ -1037,8 +1038,10 @@ async function startDriverGps() {
     try {
       await session.reconnect();
       driverGpsWatchId = await driverBackgroundBridge.start();
+      session.startHeartbeat(); // SW-083: latido cada 30 s aunque el camión esté quieto
     } catch (error) {
       await driverBackgroundBridge.stop();
+      session.stop();
       driverBackgroundBridge = null;
       driverTelemetrySession = null;
       if (status) status.textContent = `No se pudo activar el GPS en segundo plano: ${error.message}`;
@@ -1089,6 +1092,7 @@ async function stopDriverGps({ flush = false } = {}) {
   if (driverBackgroundBridge) {
     await driverBackgroundBridge.stop({ flush });
     if (flush) await driverTelemetrySession?.reconnect();
+    driverTelemetrySession?.stop();
     driverBackgroundBridge = null;
     driverTelemetrySession = null;
     if (driverOnlineHandler) window.removeEventListener('online', driverOnlineHandler);
