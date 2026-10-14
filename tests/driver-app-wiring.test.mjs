@@ -14,4 +14,17 @@ assert.match(startBody, /session\.startHeartbeat\(\)/, 'debe iniciar el latido')
 assert.match(stopBody, /driverTelemetrySession\?\.stop\(\)/, 'debe detener latido y reintentos al terminar');
 // el latido se detiene antes de soltar la sesión
 assert.ok(stopBody.indexOf('driverTelemetrySession?.stop()') < stopBody.indexOf('driverTelemetrySession = null'), 'stop() antes de soltar la sesión');
+
+// Combustible al finalizar (CA-083-4): campo con etiqueta visible, validación antes de apagar el GPS y
+// registro con el camión y la corrida de la asignación.
+const lifecycle = app.slice(app.indexOf('function driverRouteLifecycleControl('), app.indexOf('function renderDriverMobile('));
+assert.match(lifecycle, /<label[^>]*for="driverFuelLiters"[^>]*>[^<]*combustible/i, 'etiqueta visible del campo de litros');
+assert.match(lifecycle, /id="driverFuelLiters"/);
+assert.match(lifecycle, /inputmode="decimal"/);
+const completeBody = app.slice(app.indexOf('async function driverCompleteRoute('), app.indexOf('async function completeRouteManually('));
+assert.match(completeBody, /parseFuelLiters\(/);
+assert.match(completeBody, /buildFuelEntry\(/);
+assert.match(completeBody, /logFuel\(/);
+assert.ok(completeBody.indexOf('parseFuelLiters(') < completeBody.indexOf('stopDriverGps('), 'valida los litros antes de apagar el GPS');
+assert.ok(completeBody.indexOf('logFuel(') < completeBody.indexOf('completeRouteManually('), 'registra el combustible mientras la asignación sigue vigente');
 console.log('driver-app-wiring ok');

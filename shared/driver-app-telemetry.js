@@ -213,6 +213,7 @@ export async function createDriverTelemetrySession({
 
   const session = {
     ok: true,
+    assignment: { vehicle_id: assignment.data.vehicle_id, route_run_id: assignment.data.route_run_id ?? null },
     async capture(location, { correlation_id } = {}) {
       let battery_pct = null;
       try { battery_pct = await getBatteryLevel(); } catch { battery_pct = null; }

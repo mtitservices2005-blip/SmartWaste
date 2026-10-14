@@ -114,4 +114,9 @@ function fakeTimers() {
   await timers.intervals[0].fn();
   assert.equal(sent.length, 0);
 }
+// 6. La sesión expone su asignación (camión y corrida) para asociar el combustible (CA-083-4).
+{
+  const { session } = await make({ send: async () => ({ ok: true }) });
+  assert.deepEqual(session.assignment, { vehicle_id: 'veh-1', route_run_id: 'run-1' });
+}
 console.log('driver-app-session ok');

@@ -17,6 +17,7 @@ import { COST_PARAMETER_KEYS, validateCostParameters, fetchCostParameters, saveC
 import { aggregateRouteSavings } from '../shared/route-savings.js';
 import { initAuthGate, readSupabaseConfig, getAuthClient } from './auth-gate.js';
 import { createDriverTelemetrySession, createPersistentTelemetryQueue } from '../shared/driver-app-telemetry.js';
+import { parseFuelLiters, buildFuelEntry } from '../shared/fuel-entry.js';
 import { createDriverBackgroundBridge, getOrCreateDriverDeviceId } from '../shared/driver-app-background.js';
 
 const $ = (selector) => document.querySelector(selector);
@@ -954,7 +955,7 @@ function driverRouteLifecycleControl(truck) {
   const route = truck?.routeId ? routeById(truck.routeId) : null;
   if (!route) return '';
   if (route.status === 'assigned') return `<div class="controls"><button type="button" class="btn-primary" data-driver-start-route="${route.id}">Iniciar recorrido</button></div>`;
-  if (['started', 'in_progress', 'delayed'].includes(route.status)) return `<div class="controls"><button type="button" class="btn-primary" data-driver-complete-route="${route.id}">Finalizar recorrido</button></div>`;
+  if (['started', 'in_progress', 'delayed'].includes(route.status)) return `<div class="sw-field"><label class="sw-field__label" for="driverFuelLiters">Litros de combustible cargados (opcional)</label><input class="sw-field__control" id="driverFuelLiters" name="driverFuelLiters" type="text" inputmode="decimal" aria-describedby="driverFuelHint" autocomplete="off"><p class="sw-field__hint" id="driverFuelHint">Si cargaste combustible en este recorrido, escribe los litros. Ejemplo: 45,5</p></div><div class="controls"><button type="button" class="btn-primary" data-driver-complete-route="${route.id}">Finalizar recorrido</button></div>`;
   return '';
 }
 function renderDriverMobile() {
@@ -1917,6 +1918,20 @@ async function driverStartRoute(routeId) {
   await startDriverGps();
 }
 async function driverCompleteRoute(routeId) {
+  // SW-083: el combustible se valida ANTES de apagar el GPS (un error de tecleo no debe costar el recorrido)
+  // y se registra mientras la asignación del chofer sigue vigente. Es opcional: vacío = omitido.
+  const fuel = parseFuelLiters($('#driverFuelLiters')?.value);
+  if (!fuel.ok) { showToast(fuel.message, { type: 'error' }); $('#driverFuelLiters')?.focus(); return; }
+  let fuelEntry = null;
+  if (fuel.liters != null && realAdapter && driverAuthContext) {
+    const assignment = driverTelemetrySession?.assignment ?? (await realAdapter.findOwnVehicleAssignment(driverAuthContext.user_id)).data;
+    fuelEntry = buildFuelEntry({ liters: fuel.liters, assignment, municipalityId: driverAuthContext.municipality_id });
+  }
+  if (fuelEntry) {
+    const saved = await realAdapter.logFuel(fuelEntry);
+    if (!saved?.ok) showToast(`No se pudo guardar el combustible: ${saved?.error?.message ?? 'error desconocido'}. Avisa a tu supervisor.`, { type: 'error' });
+    else { showToast(`Combustible guardado: ${fuel.liters} litros.`); const fuelInput = $('#driverFuelLiters'); if (fuelInput) fuelInput.value = ''; /* evita duplicar si hay que reintentar */ }
+  }
   // Stop producing samples, then wait for the last accepted browser event to reach Supabase before
   // completeRoute() calculates distance and stamps the final GPS metrics on route_runs.
   await stopDriverGps({ flush: true });
