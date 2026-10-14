@@ -232,6 +232,7 @@ export async function createDriverTelemetrySession({
       if (queued) { lastCaptured = position; lastSampleAt = now(); }
       return { ok: true, queued, position };
     },
+    async pendingCount() { return (await queue.list()).length; },
     async reconnect() {
       if (!batchAdapter) return queue.flush((position, opts) => ingestionAdapter.ingest(position, opts));
       const { sent, failed } = await flushInBatches({ queue, send: (batch) => batchAdapter.ingestPositions(batch) });

@@ -10,6 +10,9 @@ on:
       - 'shared/**'
       - 'tests/driver-app-background.test.mjs'
       - 'tests/driver-app-telemetry.test.mjs'
+      - 'tests/driver-app-batching.test.mjs'
+      - 'tests/driver-app-session.test.mjs'
+      - 'tests/mobile-release.test.mjs'
       - 'tests/frontend-no-service-role.test.mjs'
   push:
     branches: [main]
@@ -20,6 +23,9 @@ on:
       - 'shared/**'
       - 'tests/driver-app-background.test.mjs'
       - 'tests/driver-app-telemetry.test.mjs'
+      - 'tests/driver-app-batching.test.mjs'
+      - 'tests/driver-app-session.test.mjs'
+      - 'tests/mobile-release.test.mjs'
       - 'tests/frontend-no-service-role.test.mjs'
 
 permissions:
@@ -69,6 +75,9 @@ jobs:
           set -euo pipefail
           node tests/driver-app-background.test.mjs
           node tests/driver-app-telemetry.test.mjs
+          node tests/driver-app-batching.test.mjs
+          node tests/driver-app-session.test.mjs
+          node tests/mobile-release.test.mjs
           node tests/frontend-no-service-role.test.mjs
 
       - name: Generate and synchronize the Android project
