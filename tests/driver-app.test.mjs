@@ -128,3 +128,15 @@ await s.c.refresh(); await s.c.action('start', 'run1');
 await s.c.action('logout');
 assert.ok(s.log.some((l) => l[0] === 'logout'));
 console.log('driver-app ok');
+
+// Rutas nuevas aparecen sin cerrar la app: refreshIfIdle recarga en Hoy, pero no en En ruta.
+s = setup();
+await s.c.refresh();
+const drawsBefore = s.draws.length;
+await s.c.refreshIfIdle();
+assert.ok(s.draws.length > drawsBefore, 'recarga en Hoy');
+await s.c.action('open-run', 'run1');
+const drawsMid = s.draws.length;
+await s.c.refreshIfIdle();
+assert.equal(s.draws.length, drawsMid, 'no recarga mientras estás en ruta');
+console.log('driver-app refreshIfIdle ok');

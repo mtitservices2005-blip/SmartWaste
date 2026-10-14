@@ -61,6 +61,9 @@ export function createDriverController({ load, adapter, gps, municipalityId, use
     render();
   };
 
+  // Rutas nuevas sin cerrar la app: solo se recarga en la pantalla Hoy y sin acciones en curso.
+  c.refreshIfIdle = async () => { if (state.screen !== 'today' || state.busy) return; await c.refresh(); };
+
   c.setPosition = (position) => {
     state.position = position;
     const run = currentRun();
@@ -184,6 +187,8 @@ export async function mountDriverApp({ root, client, ctx, adapter, gps, toast, l
   };
   win?.addEventListener?.('online', setConn); win?.addEventListener?.('offline', setConn);
   win?.setInterval?.(() => controller.tick(), 30000);
+  win?.setInterval?.(() => controller.refreshIfIdle(), 60000);
+  win?.document?.addEventListener?.('visibilitychange', () => { if (win.document.visibilityState === 'visible') controller.refreshIfIdle(); });
 
   await controller.refresh();
   return controller;
