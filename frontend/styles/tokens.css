@@ -1,0 +1,89 @@
+/* SW-082: tokens de diseño de SmartWaste. Verde institucional existente como color primario;
+   ámbar y rojo para alertas; grises neutros. Cada par texto/fondo está verificado por
+   tests/design-contrast.test.mjs (WCAG 2.1 AA: 4.5:1 texto normal, 3:1 texto grande e iconos).
+   Los estados de camión se muestran SIEMPRE con color + icono + texto, nunca solo color. */
+:root {
+  /* Color */
+  --color-primary: #0f7b4f;
+  --color-primary-strong: #0b5c3b;
+  --color-primary-contrast: #ffffff;
+  --color-success: #0b6b43;
+  --color-success-bg: #dff8eb;
+  --color-warning: #7a4300;
+  --color-warning-bg: #fff3d1;
+  --color-danger: #b42318;
+  --color-danger-bg: #fee4e2;
+  --color-info: #124bc4;
+  --color-info-bg: #e5edff;
+  --color-surface: #ffffff;
+  --color-background: #eef4f2;
+  --color-background-alt: #f8fafc;
+  --color-text: #17212b;
+  --color-muted: #475569;
+  --color-border: #d8e4df;
+  --color-border-input: #64748b;
+  --color-focus: #124bc4;
+  --color-ink: #062f2b;
+  --color-on-ink: #ffffff;
+  --color-on-ink-muted: #b6f5dd;
+
+  /* Estados de camión (color del texto/icono y fondo de la insignia) */
+  --status-en-ruta: #0b6b43;
+  --status-en-ruta-bg: #dff8eb;
+  --status-detenido: #7a4300;
+  --status-detenido-bg: #fff3d1;
+  --status-sin-senal: #b42318;
+  --status-sin-senal-bg: #fee4e2;
+  --status-disponible: #124bc4;
+  --status-disponible-bg: #e5edff;
+  --status-fuera-servicio: #3f4a5a;
+  --status-fuera-servicio-bg: #e5e7eb;
+
+  /* Tipografía */
+  --font-family: Inter, Arial, sans-serif;
+  --font-size-1: 0.8rem;
+  --font-size-2: 0.95rem;
+  --font-size-3: 1.1rem;
+  --font-size-4: 1.4rem;
+  --font-size-5: 1.9rem;
+  --line-height: 1.45;
+
+  /* Espaciado */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4rem;
+
+  /* Radios y sombras */
+  --radius-1: 8px;
+  --radius-2: 12px;
+  --radius-3: 18px;
+  --shadow-1: 0 2px 8px #0f172a14;
+  --shadow-2: 0 10px 30px #0f172a14;
+
+  /* Objetivo táctil mínimo (app del chofer) */
+  --touch-target: 48px;
+}
+
+/* Alto contraste para uso a la intemperie (app del chofer): activar con data-contrast="high". */
+:root[data-contrast="high"] {
+  --color-primary: #064d30;
+  --color-primary-strong: #04361f;
+  --color-success: #064d30;
+  --color-warning: #4a2800;
+  --color-danger: #8f1a10;
+  --color-info: #0b3a99;
+  --color-text: #000000;
+  --color-muted: #1f2937;
+  --color-border-input: #374151;
+  --color-focus: #0b3a99;
+  --status-en-ruta: #064d30;
+  --status-detenido: #4a2800;
+  --status-sin-senal: #8f1a10;
+  --status-disponible: #0b3a99;
+  --status-fuera-servicio: #1f2937;
+}
