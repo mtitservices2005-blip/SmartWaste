@@ -28,10 +28,10 @@ import { renderFleetList, mapTruckStatus } from './components/fleet-panel.js';
 import { readMapLabels, saveMapLabels, applyMapLabels } from './map-prefs.js';
 import { renderKpiBar, renderLiveChip } from './components/kpi-bar.js';
 import { computeOpsKpis } from '../shared/ops-kpis.js';
-import { buildRouteRows, filterRows, countByFilter, headerText } from '../shared/route-list.js';
+import { FILTERS, buildRouteRows, filterRows, countByFilter, headerText } from '../shared/route-list.js';
 import { addPoint, movePoint, undoPoint, clearPoints, validateDraft, previewDraft } from '../shared/route-draft.js';
 import { buildRouteHistory } from '../shared/route-history.js';
-import { normalizeDays, normalizeStartTime, formatDays, formatTimeOfDay } from '../shared/route-schedule.js';
+import { DAY_CHIPS, normalizeDays, normalizeStartTime, formatDays, formatTimeOfDay } from '../shared/route-schedule.js';
 import { renderRoutesTable, renderFilterChips, renderDayChips, renderHistory, renderDraftPreview } from './components/routes-screens.js';
 // SW-082: en despliegues con hideDemo no se muestran avisos de demo/simulación.
 const demoNotice = demoOnly(rawDemoNotice, readSupabaseConfig());
@@ -1018,7 +1018,7 @@ function renderCreateRoute() {
     <div class="sw-newroute__field"><label for="createRouteName">Nombre de la ruta</label><input id="createRouteName" autocomplete="off"></div>
     <div class="sw-newroute__field"><label for="createRouteVehicle">Camión <span>(opcional)</span></label><select id="createRouteVehicle"><option value="">Sin camión (asignar después)</option>${availableTrucks.map((t) => `<option value="${t.id}">${t.unit}${t.plate ? ` · ${t.plate}` : ''}</option>`).join('')}</select></div>
     <div class="sw-newroute__field"><label for="createRouteStart">Hora de inicio</label><input type="time" id="createRouteStart"></div>
-    <div class="sw-newroute__field"><span class="sw-newroute__label">Días en que corre</span><div id="createRouteDays">${renderDayChips({ selected: draftDays })}</div></div>
+    <div class="sw-newroute__field"><span class="sw-newroute__label">Días en que corre</span><div id="createRouteDays">${renderDayChips({ chips: DAY_CHIPS, selected: draftDays })}</div></div>
     <label class="sw-newroute__opt"><input type="checkbox" id="createRouteOptimize"><span><strong>Optimizar el orden de las paradas</strong><small>Reordena los puntos para recorrer menos distancia.</small></span></label>
     <div id="createRoutePreview">${renderDraftPreview(preview)}</div>
     <p id="createRouteStatus" class="sw-newroute__status" role="status"></p>
@@ -1333,7 +1333,7 @@ function routesHeaderLine() {
 }
 function renderRoutesChips() {
   const rows = buildRouteRows(routes.map(routeListItem));
-  return renderFilterChips({ filter: routeFilter, counts: countByFilter(rows) });
+  return renderFilterChips({ filters: FILTERS, filter: routeFilter, counts: countByFilter(rows) });
 }
 // SW-086: tarjeta de la ruta seleccionada (junto al mini mapa). La fila que se ve marcada es la de rutasFocusId.
 function rutasFocusRoute() { return routeById(rutasFocusId) ?? routes[0] ?? null; }
@@ -2444,7 +2444,7 @@ async function finishCreateRouteSave({ name, startTime, days, status, tripPrevie
   drawnRoutePoints = clearPoints();
   redrawCreateRouteTrace();
   draftDays = [];
-  const daysEl = $('#createRouteDays'); if (daysEl) daysEl.innerHTML = renderDayChips({ selected: draftDays });
+  const daysEl = $('#createRouteDays'); if (daysEl) daysEl.innerHTML = renderDayChips({ chips: DAY_CHIPS, selected: draftDays });
   const startEl = $('#createRouteStart'); if (startEl) startEl.value = '';
   if (nameInput) nameInput.value = '';
   if (vehicleSelect) vehicleSelect.innerHTML = `<option value="">Sin vehículo asignado (asignar después)</option>${trucks.filter(isTruckAvailable).map((item) => `<option value="${item.id}">${item.unit}</option>`).join('')}`;
@@ -2555,7 +2555,7 @@ document.addEventListener('click', (event) => {
   if (dayChip && dayChip.closest('#createRouteDays')) {
     const day = Number(dayChip.dataset.day);
     draftDays = draftDays.includes(day) ? draftDays.filter((d) => d !== day) : [...draftDays, day];
-    $('#createRouteDays').innerHTML = renderDayChips({ selected: draftDays });
+    $('#createRouteDays').innerHTML = renderDayChips({ chips: DAY_CHIPS, selected: draftDays });
   }
   const createRouteAction = event.target.closest('[data-create-route]')?.dataset.createRoute;
   if (createRouteAction === 'undo') undoLastRoutePoint();

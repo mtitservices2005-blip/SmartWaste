@@ -2,8 +2,6 @@
 // días de la semana, el historial de corridas y la vista previa de la ruta nueva.
 import { escapeHtml } from './button.js';
 import { emptyState } from './empty-state.js';
-import { FILTERS } from '../../shared/route-list.js';
-import { DAY_CHIPS, normalizeDays } from '../../shared/route-schedule.js';
 
 const COLUMNS = ['Ruta', 'Camión', 'Conductor', 'Paradas', 'Largo', 'Estado'];
 
@@ -21,13 +19,14 @@ export function renderRoutesTable({ rows = [], selectedId = null } = {}) {
   return `<div class="sw-routes__scroll"><table class="sw-routes__table"><caption class="sw-visually-hidden">Rutas</caption><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
-export function renderFilterChips({ filter = 'todas', counts = {} } = {}) {
-  return `<div class="sw-routes__filters" role="group" aria-label="Filtrar rutas">${FILTERS.map((f) => `<button type="button" class="sw-chip" data-route-filter="${f.key}" aria-pressed="${f.key === filter}">${f.label} · ${counts[f.key] ?? 0}</button>`).join('')}</div>`;
+// Los componentes no importan de shared/ (ver tests/components-imports.test.mjs): app.js pasa filtros y días.
+export function renderFilterChips({ filters = [], filter = 'todas', counts = {} } = {}) {
+  return `<div class="sw-routes__filters" role="group" aria-label="Filtrar rutas">${filters.map((f) => `<button type="button" class="sw-chip" data-route-filter="${f.key}" aria-pressed="${f.key === filter}">${f.label} · ${counts[f.key] ?? 0}</button>`).join('')}</div>`;
 }
 
-export function renderDayChips({ selected = [] } = {}) {
-  const on = new Set(normalizeDays(selected) ?? []);
-  const chips = DAY_CHIPS.map((d) => `<button type="button" class="sw-chip sw-chip--day" data-day="${d.value}" aria-pressed="${on.has(d.value)}" aria-label="${escapeHtml(d.name ?? d.label)}">${d.label}</button>`).join('');
+export function renderDayChips({ chips: dayChips = [], selected = [] } = {}) {
+  const on = new Set((Array.isArray(selected) ? selected : []).map(Number));
+  const chips = dayChips.map((d) => `<button type="button" class="sw-chip sw-chip--day" data-day="${d.value}" aria-pressed="${on.has(d.value)}" aria-label="${escapeHtml(d.name ?? d.label)}">${d.label}</button>`).join('');
   return `<div class="sw-routes__days" role="group" aria-label="Días de la semana">${chips}</div><p class="sw-routes__hint">${on.size ? '' : 'Sin días marcados: corre todos los días.'}</p>`;
 }
 
