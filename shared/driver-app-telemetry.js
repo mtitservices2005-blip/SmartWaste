@@ -26,12 +26,21 @@ export function shouldCaptureDriverPosition(lastPosition, nextPosition, {
   return elapsed >= maxIntervalMs || distanceMeters(lastPosition, nextPosition) >= minDistanceMeters;
 }
 
+// Nivel decimal 0..1 (como lo entrega el dispositivo) -> entero 0..100; cualquier otra cosa -> null.
+function batteryPercent(level) {
+  if (level === null || level === undefined || level === '') return null;
+  const n = Number(level);
+  if (!Number.isFinite(n) || n < 0 || n > 1) return null;
+  return Math.round(n * 100);
+}
+
 export function positionFromDriverLocation(location, {
   vehicle_id,
   municipality_id,
   route_run_id,
   device_id,
-  correlation_id
+  correlation_id,
+  battery_pct
 } = {}) {
   const coords = location.coords ?? location;
   const timestamp = location.timestamp ?? location.time ?? Date.now();
@@ -48,6 +57,7 @@ export function positionFromDriverLocation(location, {
     received_at: new Date().toISOString(),
     source: 'driver_app',
     device_id,
+    battery_pct: batteryPercent(battery_pct),
     correlation_id
   };
 }

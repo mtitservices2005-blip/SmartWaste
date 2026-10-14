@@ -1,6 +1,7 @@
 // SW-083 Task 7 (CA-083-1): envío por lotes en orden, reintento sin duplicar, espera exponencial y latido.
 import assert from 'node:assert/strict';
-import { createPersistentTelemetryQueue, flushInBatches } from '../shared/driver-app-telemetry.js';
+import { createPersistentTelemetryQueue, flushInBatches, positionFromDriverLocation } from '../shared/driver-app-telemetry.js';
+import { readBatteryPct } from '../shared/driver-app-battery.js';
 import { createHeartbeat, nextRetryDelayMs, heartbeatPosition } from '../shared/driver-app-heartbeat.js';
 
 function memoryStorage() {
@@ -101,4 +102,24 @@ assert.equal(nextRetryDelayMs(-3), 1000);
   assert.equal(beat.battery_pct, 80);
   assert.equal(heartbeatPosition(null, new Date(t0)), null, 'sin posición previa no hay latido');
 }
+
+// SW-083 Task 8: batería en cada punto (nivel decimal 0..1 del plugin/WebView -> entero 0..100 o null).
+{
+  const loc = { latitude: 19.65, longitude: -71.09, timestamp: '2026-10-14T12:00:00.000Z' };
+  const ctx = { vehicle_id: 'veh-1', municipality_id: 'mun-1', route_run_id: 'run-1', device_id: 'android-abc' };
+  assert.equal(positionFromDriverLocation(loc, { ...ctx, battery_pct: 0.37 }).battery_pct, 37);
+  assert.equal(positionFromDriverLocation(loc, { ...ctx, battery_pct: 1 }).battery_pct, 100);
+  assert.equal(positionFromDriverLocation(loc, { ...ctx, battery_pct: 0 }).battery_pct, 0);
+  assert.equal(positionFromDriverLocation(loc, { ...ctx, battery_pct: 0.375 }).battery_pct, 38, 'redondea al entero más cercano');
+  assert.equal(positionFromDriverLocation(loc, ctx).battery_pct, null, 'sin valor -> null');
+  assert.equal(positionFromDriverLocation(loc, { ...ctx, battery_pct: 7 }).battery_pct, null, 'fuera de 0..1 se descarta');
+  assert.equal(positionFromDriverLocation(loc, { ...ctx, battery_pct: 'abc' }).battery_pct, null);
+
+  // Lectura de la API del dispositivo con degradación silenciosa.
+  assert.equal(await readBatteryPct({ getBattery: async () => ({ level: 0.5 }) }), 0.5);
+  assert.equal(await readBatteryPct({}), null, 'sin API de batería -> null');
+  assert.equal(await readBatteryPct(undefined), null);
+  assert.equal(await readBatteryPct({ getBattery: async () => { throw new Error('denied'); } }), null, 'si falla, no rompe el reporte');
+}
+console.log('driver-app-battery ok');
 console.log('driver-app-batching ok');
