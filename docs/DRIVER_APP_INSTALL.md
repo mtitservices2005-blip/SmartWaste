@@ -162,3 +162,60 @@ Hasta que Miguel complete y adjunte el checklist anterior, siguen pendientes:
 Registrar: paso, hora, resultado esperado, resultado observado, modelo/Android, estado de señal y texto exacto del error. Adjuntar solo capturas recortadas. No incluir nombres, correos, matrículas, coordenadas completas, URL de backend, tokens, contraseñas ni claves.
 
 No desinstalar ni borrar los datos de la app antes de que el operador revise una posible cola pendiente. Este procedimiento valida exclusivamente un APK de prueba en staging; no autoriza un despliegue de producción ni una publicación en Play Store.
+
+
+## 9. APK de lanzamiento firmado (SW-083)
+
+El APK de prueba (secciones 1–8) usa firma de depuración. Para entregar la app a los choferes se genera un **APK de lanzamiento firmado**, con las variables de Supabase ya incrustadas y sin textos de demostración.
+
+### 9.1 Lo que hace Miguel una sola vez (el agente no maneja claves)
+
+1. **Crear la llave de firma (keystore).** En una computadora con Java instalado:
+
+   ```
+   keytool -genkeypair -v -keystore smartwaste-release.keystore -alias smartwaste -keyalg RSA -keysize 2048 -validity 10000
+   ```
+
+   Elige contraseñas largas y guárdalas en tu gestor de contraseñas. **Guarda una copia del archivo `.keystore` fuera del repositorio** (por ejemplo en tu respaldo cifrado): si lo pierdes, no podrás actualizar la app instalada en los teléfonos. Nunca lo subas a GitHub.
+
+2. **Convertir el keystore a texto** para guardarlo como secreto:
+
+   - Windows (PowerShell): `[Convert]::ToBase64String([IO.File]::ReadAllBytes("smartwaste-release.keystore")) | Set-Clipboard`
+   - Linux/macOS: `base64 -w0 smartwaste-release.keystore`
+
+3. **Crear los secretos en GitHub:** repositorio → *Settings → Secrets and variables → Actions → New repository secret*:
+
+   | Secreto | Qué es |
+   |---|---|
+   | `ANDROID_KEYSTORE_BASE64` | El keystore convertido a texto (paso 2) |
+   | `ANDROID_KEYSTORE_PASSWORD` | Contraseña del keystore |
+   | `ANDROID_KEY_ALIAS` | `smartwaste` (o el alias que elegiste) |
+   | `ANDROID_KEY_PASSWORD` | Contraseña de la llave |
+   | `SUPABASE_URL` | URL del proyecto Supabase de producción (https) |
+   | `SUPABASE_ANON_KEY` | Llave `anon` (pública por diseño). **Nunca pongas aquí la `service_role`.** |
+
+### 9.2 Generar el APK
+
+1. En GitHub: *Actions → Android release APK (signed) → Run workflow*. Opcional: escribe la versión visible (por ejemplo `1.0.0`).
+2. El flujo falla de inmediato con el mensaje **“Falta el secreto …”** si falta alguno, y el build móvil falla si faltan `SUPABASE_URL` o `SUPABASE_ANON_KEY`.
+3. Antes de publicar el archivo, el flujo ejecuta las pruebas del chofer, **verifica la firma** del APK y **escanea el APK final** buscando `service_role`; si aparece, no entrega nada.
+4. Descarga el artefacto `SmartWaste-Driver-release-APK`, descomprime el `.zip` y usa `SmartWaste-Driver-release.apk`.
+
+Cada ejecución sube automáticamente el código de versión (número de ejecución), así Android acepta la actualización sobre la instalación anterior **siempre que se firme con el mismo keystore**.
+
+### 9.3 Instalación
+
+Igual que en la sección 2, con `SmartWaste-Driver-release.apk` (distribución por APK directo, no Google Play). Un teléfono con el APK de prueba (firma de depuración) debe desinstalarlo antes, porque la firma es distinta; **confirma primero que no haya posiciones pendientes en la cola local**.
+
+### 9.4 Qué hace la app ahora
+
+- Envía las posiciones **por lotes** (hasta 200) cada vez que hay muestra nueva, y reintenta solo con esperas de 1, 2, 4… hasta 60 segundos si no hay conexión. Los puntos pendientes salen en orden y sin duplicados al reconectar.
+- Manda un **latido cada 30 segundos** aunque el camión esté quieto: el centro de control ve “Detenido” y no “Sin señal”.
+- Incluye el **nivel de batería** en cada punto (si el teléfono lo permite).
+- Al **Finalizar recorrido**, la pantalla pide los **litros de combustible cargados** (opcional, con coma o punto decimal). Si escribes un valor inválido, la app te lo dice **antes** de apagar el GPS. El registro queda asociado a tu camión y a tu recorrido.
+
+### 9.5 Pruebas de campo pendientes de Miguel (SW-083)
+
+- **CA-083-2:** pantalla apagada y app en segundo plano durante **60 minutos continuos**; al terminar, comprobar en la base que hay puntos cada ~10–30 s sin huecos largos.
+- **CA-083-3:** con el centro de control abierto (SW-084), cortar los datos del teléfono: “Sin señal” debe aparecer a los ~90 s y desaparecer al reconectar.
+- **CA-083-1 (real):** viajar 10 minutos sin señal; al reconectar deben subir todos los puntos en orden.
