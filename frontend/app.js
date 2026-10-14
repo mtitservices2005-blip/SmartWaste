@@ -21,7 +21,12 @@ import { createDriverTelemetrySession, createPersistentTelemetryQueue } from '..
 import { parseFuelLiters, buildFuelEntry } from '../shared/fuel-entry.js';
 import { connectionStatusText } from '../shared/driver-app-status.js';
 import { createDriverBackgroundBridge, getOrCreateDriverDeviceId } from '../shared/driver-app-background.js';
-import { demoOnly } from './ui-mode.js';
+import { demoOnly, isDemoUi } from './ui-mode.js';
+import { mountShell } from './shell.js';
+import { renderFleetList, mapTruckStatus } from './components/fleet-panel.js';
+import { readMapLabels, saveMapLabels, applyMapLabels } from './map-prefs.js';
+import { renderKpiBar, renderLiveChip } from './components/kpi-bar.js';
+import { computeOpsKpis } from '../shared/ops-kpis.js';
 // SW-082: en despliegues con hideDemo no se muestran avisos de demo/simulación.
 const demoNotice = demoOnly(rawDemoNotice, readSupabaseConfig());
 const simulationNotice = demoOnly(rawSimulationNotice, readSupabaseConfig());
@@ -428,15 +433,54 @@ function mapStartAction() {
 // removed) stacked above the map itself, duplicating numbers already on Resumen (renderSummary()),
 // before ever reaching the map. Trimmed to just: route selector + start action + the map. Anything
 // needing the broader operational KPIs is a click away on Resumen.
+// SW-084: centro de control Mando. Mismos elementos e ids de antes (realMap, mapStartAction, #detail,
+// data-sim, routeFocusSelect); cambia la composición: mapa a pantalla completa con paneles flotantes
+// (flota + detalle, indicadores) y los controles de simulación en un menú que solo existe en modo demo.
+function fleetRows() {
+  return trucks.map((truck) => ({ id: truck.id, unit: truck.unit, state: truck.state, routeName: truck.routeId ? routeName(truck.routeId) : null, progress: truck.progress, updatedAt: truck.updatedAt }));
+}
+function controlCenterKpis() {
+  let coverageRate = null;
+  try { coverageRate = calculateImpactMetrics(currentImpactAssumptions(), {}, impactRealData).coverage.coverageRate; } catch { /* sin dato */ }
+  const distanceKm = routes.length ? routes.reduce((total, route) => total + (Number(route.distanceKm) || 0), 0) : null;
+  const vehicles = trucks.map((truck) => ({ id: truck.id, status: mapTruckStatus(truck.state).kpi, lastCapturedAt: truck.real_id ? realPositions[truck.real_id]?.capturedAt ?? null : null }));
+  return computeOpsKpis({ vehicles, coverageRate, distanceKm, fuelLiters: null });
+}
+// SW-084: el detalle del camión va justo debajo de su fila en la lista (como en el diseño). Antes de
+// volver a dibujar la lista se devuelve al final del panel para que no se borre con ella.
+function placeDetail() {
+  const detail = $('#detail'); const panel = document.querySelector('.sw-fleet');
+  if (!detail || !panel) return;
+  const row = selectedTruckId ? document.querySelector(`#swFleetList [data-truck="${selectedTruckId}"]`)?.closest('li') : null;
+  if (row) row.appendChild(detail); else panel.appendChild(detail);
+}
+function refreshControlCenter() {
+  const list = $('#swFleetList');
+  if (!list) return;
+  const panel = document.querySelector('.sw-fleet'); const detail = $('#detail');
+  if (panel && detail) panel.appendChild(detail);
+  list.innerHTML = renderFleetList({ trucks: fleetRows(), selectedId: selectedTruckId });
+  const kpis = controlCenterKpis();
+  const bar = $('#swKpis'); if (bar) bar.outerHTML = renderKpiBar(kpis);
+  const live = $('#swLive'); if (live) live.outerHTML = renderLiveChip({ freshness: kpis.freshness, demo: isDemoUi(readSupabaseConfig()) });
+  placeDetail();
+}
 function renderMapPanel() {
-  return `<div class="map-card">
-      <div class="map-header">
-        <div><p class="eyebrow">${pilotMunicipality.branding.label}</p><h1>Mapa operativo real de ${pilotMunicipality.name}</h1><p class="demo">${demoPrefix}Las rutas son simuladas, no oficiales del ayuntamiento.</p><p class="demo gps-legend">● = posición GPS real · el resto son camiones simulados</p></div>
-        <div class="sim-controls" aria-label="Controles de simulación"><span>${simulationPrefix}fuente desacoplada: ${backendMode}</span>${routeFocusSelect()}<span id="mapStartAction">${mapStartAction()}</span><button class="btn-primary" data-sim="start">Iniciar</button><button data-sim="pause">Pausar</button><button data-sim="reset">Reiniciar</button><button class="btn-ghost" data-sim="speed">${simulationSpeed}×</button><button class="btn-ghost" data-sim="fullscreen">Pantalla completa</button></div>
-      </div>
+  const demoUi = isDemoUi(readSupabaseConfig());
+  const kpis = controlCenterKpis();
+  const sim = demoUi ? `<details class="sw-sim"><summary>Simulación</summary><div class="sim-controls" aria-label="Controles de simulación"><span>${simulationPrefix}fuente desacoplada: ${backendMode}</span><span class="demo">● = posición GPS real · el resto son camiones simulados</span><button class="btn-primary" data-sim="start">Iniciar</button><button data-sim="pause">Pausar</button><button data-sim="reset">Reiniciar</button><button class="btn-ghost" data-sim="speed">${simulationSpeed}×</button></div></details>` : '';
+  return `<div class="map-card sw-control">
       <div id="realMap" class="real-map" role="application" aria-label="Mapa OpenStreetMap de Laguna Salada"><div class="map-fallback"><strong>Mapa externo no disponible.</strong><span>Fallback operativo demo: use listas, paneles y coordenadas simuladas.</span></div></div>
-    </div>
-    <aside class="detail-drawer is-hidden" id="detail" aria-hidden="true"></aside>`;
+      <div class="map-header sw-control__top">
+        <div class="sw-control__title"><h1 aria-label="Mapa operativo real de ${pilotMunicipality.name}">${pilotMunicipality.name}</h1></div>${renderLiveChip({ freshness: kpis.freshness, demo: demoUi })}
+        <div class="sw-control__actions">${routeFocusSelect()}<span id="mapStartAction">${mapStartAction()}</span><button class="btn-ghost" data-sim="fullscreen">Pantalla completa</button>${sim}</div>
+      </div>
+      <section class="sw-fleet" aria-label="Flota">
+        <div id="swFleetList">${renderFleetList({ trucks: fleetRows(), selectedId: selectedTruckId })}</div>
+        <aside class="detail-drawer is-hidden" id="detail" aria-hidden="true"></aside>
+      </section>
+      ${renderKpiBar(kpis)}
+    </div>`;
 }
 
 // SW-042 (docs/TECHNICAL_DEBT_REGISTER.md #24): there was no UI to assign a driver to a vehicle at
@@ -1473,13 +1517,20 @@ function renderMaster() { return `<section id="master" class="section card"><h2>
 // operador, no un dato del municipio — se guarda en localStorage del navegador, no en Supabase, así
 // que cada despachador la elige para su propio equipo sin afectar a los demás. Apagada por defecto:
 // sin tocar esto, el flujo de asignación de ruta se comporta exactamente igual que en SW-048.
+function mapPrefStorage() { try { return localStorage; } catch { return null; } }
 function renderConfiguracion() {
   return `<section id="configuracion" class="section card"><h2>Configuración</h2><p class="demo">${demoPrefix}Preferencias de este navegador/operador, no del municipio.</p>
+    <div class="controls"><label><input type="checkbox" id="mapLabelsToggle"${readMapLabels(mapPrefStorage()) ? ' checked' : ''}> Mostrar etiquetas en el mapa (número de camión y situaciones)</label></div>
+    <p class="demo">Desactívalas para ver el mapa más despejado. Los camiones y las alertas siguen visibles; solo se oculta el texto. Se recuerda en este navegador.</p>
     <div class="controls"><label><input type="checkbox" id="guidedAssignmentToggle"${guidedAssignmentEnabled ? ' checked' : ''}> Activar flujo guiado "Poner en marcha" en el detalle de ruta</label></div>
     <p class="demo">Con esta opción activa, el detalle de una ruta sin vehículo o sin chofer muestra un solo formulario y un solo botón para asignar todo lo que falte e iniciarla de una vez, en vez de los pasos separados (asignar vehículo, luego asignar chofer, luego iniciar).</p></section>`;
 }
 
 app.innerHTML = `${renderSummary()}${renderOperations()}${renderSupervisor()}${renderDriverSection()}${renderCitizen()}${renderImpactCenter()}${renderConfiguracion()}${renderMaster()}`;
+// SW-084: riel lateral Mando, selector de tema oscuro/claro y menú "Más" (frontend/shell.js).
+mountShell({ document, window, storage: (() => { try { return window.localStorage; } catch { return undefined; } })(), hideDemo: Boolean(readSupabaseConfig()?.hideDemo), onThemeChange: () => { drawMapLayers(); } });
+// SW-084: colores del tema para las capas del mapa (el CSS no llega a las polilíneas de Leaflet).
+function themeColor(name, fallback) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback; }
 
 // initMap() and initDriverMap() both call this at page load, before window.L exists yet — without
 // caching the in-flight promise, the second call would inject a second <script> tag, and whichever
@@ -1509,6 +1560,8 @@ function initMap() {
 // Selecting a truck/incident or closing the detail drawer clears selectedRouteId (see
 // selectTruck()/selectIncident()/closeDetail() below) and returns to showing everything.
 function drawMapLayers(L = window.L) {
+  refreshControlCenter(); // SW-084: la lista de flota y los indicadores siguen el mismo ritmo que el mapa
+  const colorPrimary = themeColor('--color-primary', '#0f7b4f'); const colorInfo = themeColor('--color-info', '#155eef');
   if (!mapReady) return;
   [...routeLayers, ...truckMarkers, ...incidentMarkers].forEach((layer) => layer.remove()); routeLayers = []; truckMarkers = []; incidentMarkers = [];
   const focusRoute = selectedRouteId ? routeById(selectedRouteId) : null;
@@ -1517,9 +1570,9 @@ function drawMapLayers(L = window.L) {
   const visibleIncidents = focusRoute ? incidents.filter((incident) => focusRoute.incidents.includes(incident.code)) : incidents;
   visibleRoutes.forEach((route) => {
     const path = routeGeometry(route.id); const cut = Math.max(1, Math.round((path.length - 1) * (route.progress / 100)));
-    routeLayers.push(L.polyline(path.slice(0, cut + 1), { color: '#0f7b4f', weight: 7, opacity: .9 }).addTo(map));
-    routeLayers.push(L.polyline(path.slice(cut), { color: '#155eef', weight: 6, opacity: .45, dashArray: '8 10' }).addTo(map).on('click', () => selectRoute(route.id)));
-    routeLayers.push(...path.map((point, index) => L.circleMarker(point, { radius: index <= cut ? 5 : 4, color: index <= cut ? '#0f7b4f' : '#155eef', fillOpacity: .85 }).addTo(map)));
+    routeLayers.push(L.polyline(path.slice(0, cut + 1), { color: colorPrimary, weight: 7, opacity: .9 }).addTo(map));
+    routeLayers.push(L.polyline(path.slice(cut), { color: colorInfo, weight: 6, opacity: .45, dashArray: '8 10' }).addTo(map).on('click', () => selectRoute(route.id)));
+    routeLayers.push(...path.map((point, index) => L.circleMarker(point, { radius: index <= cut ? 5 : 4, color: index <= cut ? colorPrimary : colorInfo, fillOpacity: .85 }).addTo(map)));
   });
   let focusTruckPosition = null;
   visibleTrucks.forEach((truck) => {
@@ -2321,7 +2374,7 @@ async function finishCreateRoute() {
 }
 
 function drawerContent(content) { return `<button class="drawer-close" data-close-detail aria-label="Cerrar detalle">✕ Cerrar</button><div class="drawer-scroll">${content}</div>`; }
-function openDetail(content) { const detail = $('#detail'); detail.innerHTML = drawerContent(content); detail.classList.remove('is-hidden'); detail.setAttribute('aria-hidden', 'false'); }
+function openDetail(content) { const detail = $('#detail'); detail.innerHTML = drawerContent(content); detail.classList.remove('is-hidden'); detail.setAttribute('aria-hidden', 'false'); placeDetail(); }
 // Reflects the current selection on whatever [data-route]/[data-truck]/[data-incident] elements are
 // in the DOM right now (list rows, map layers wired up later don't need this) — run on every
 // selection change so a click gives visible feedback even though the row markup itself isn't re-rendered.
@@ -2338,7 +2391,7 @@ function markSelection() {
   const mapStartActionEl = $('#mapStartAction');
   if (mapStartActionEl) mapStartActionEl.innerHTML = mapStartAction();
 }
-function closeDetail() { const detail = $('#detail'); detail.classList.add('is-hidden'); detail.setAttribute('aria-hidden', 'true'); detail.innerHTML = ''; selectedTruckId = null; selectedRouteId = null; selectedIncidentId = null; drawMapLayers(); markSelection(); }
+function closeDetail() { const detail = $('#detail'); document.querySelector('.sw-fleet')?.appendChild(detail); detail.classList.add('is-hidden'); detail.setAttribute('aria-hidden', 'true'); detail.innerHTML = ''; selectedTruckId = null; selectedRouteId = null; selectedIncidentId = null; drawMapLayers(); markSelection(); }
 function selectTruck(id) { selectedTruckId = id; selectedRouteId = null; selectedIncidentId = null; const truck = trucks.find((item) => item.id === id); openDetail(renderTruckDetail(truck)); drawMapLayers(); markSelection(); }
 function selectRoute(id) { if (routeReoptimizationPreview?.routeId !== id) routeReoptimizationPreview = null; selectedRouteId = id; selectedTruckId = null; selectedIncidentId = null; const route = routeById(id); openDetail(renderRouteDetail(route)); drawMapLayers(); markSelection(); refreshRouteDurationHistory(id); }
 // SW-044: fills the #routeDurationHistory placeholder renderRouteDetail() leaves for a real/
@@ -2456,6 +2509,8 @@ document.addEventListener('change', (event) => { if (event.target.closest('#impa
 document.addEventListener('change', (event) => { if (event.target.id === 'simVehicle' && event.target.value) { selectRoute(event.target.value); goToMapTab(); } });
 // SW-049: no re-render needed here beyond the checkbox itself — the next time a route detail is
 // opened/re-rendered, renderRouteDetail() reads the module-level guidedAssignmentEnabled fresh.
+document.addEventListener('change', (event) => { if (event.target.id === 'mapLabelsToggle') { saveMapLabels(mapPrefStorage(), event.target.checked); applyMapLabels(document, event.target.checked); } });
+applyMapLabels(document, readMapLabels(mapPrefStorage()));
 document.addEventListener('change', (event) => { if (event.target.id === 'guidedAssignmentToggle') setGuidedAssignmentPreference(event.target.checked); });
 // UX cleanup (SW-037): "Crear ruta" now lives collapsed behind a <details> ("+ Nueva ruta") instead
 // of always taking up space in the Rutas panel. Its Leaflet map (#createRouteMap) is built once at

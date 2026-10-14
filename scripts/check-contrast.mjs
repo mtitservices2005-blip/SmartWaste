@@ -35,6 +35,15 @@ export function parseTokens(css) {
   return { base: baseMatch ? read(baseMatch[1]) : {}, high: highMatch ? read(highMatch[1]) : {} };
 }
 
+// SW-084: lee el bloque `:root[data-theme="nombre"] { ... }` de un tema (vacío si no existe).
+export function parseTheme(css, name) {
+  const clean = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const re = new RegExp(`:root\\[data-theme=["']${name}["']\\]\\s*\\{([^}]*)\\}`);
+  const m = clean.match(re);
+  if (!m) return {};
+  return Object.fromEntries([...m[1].matchAll(/--([a-z0-9-]+)\s*:\s*([^;]+);/gi)].map((x) => [x[1], x[2].trim()]));
+}
+
 // Devuelve una lista de mensajes de los pares que NO cumplen (vacía si todo cumple).
 export function checkPairs(tokens, pairs) {
   const failures = [];
@@ -89,9 +98,22 @@ export const TOKEN_PAIRS = {
   decorative: ['color-border', 'color-background-alt']
 };
 
+// SW-084: pares propios de los temas Mando (riel lateral y chip de elemento activo).
+export const THEME_PAIRS = [
+  { fg: 'color-primary', bg: 'color-rail-active', min: 4.5, label: 'icono activo del riel' },
+  { fg: 'color-text', bg: 'color-rail-active', min: 4.5, label: 'texto del elemento activo' },
+  { fg: 'color-muted', bg: 'color-rail-active', min: 4.5, label: 'texto secundario del elemento activo' }
+];
+
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const { base, high } = parseTokens(readFileSync(new URL('../frontend/styles/tokens.css', import.meta.url), 'utf8'));
   const failures = [...checkPairs(base, TOKEN_PAIRS.normal), ...checkPairs({ ...base, ...high }, TOKEN_PAIRS.high).map((f) => `[alto contraste] ${f}`)];
+  if (failures.length) { console.error(failures.join('\n')); process.exit(1); }
+  const themeCss = readFileSync(new URL('../frontend/styles/theme-mando.css', import.meta.url), 'utf8');
+  for (const theme of ['oscuro', 'claro']) {
+    const tokens = { ...base, ...parseTheme(themeCss, theme) };
+    failures.push(...checkPairs(tokens, [...TOKEN_PAIRS.normal, ...THEME_PAIRS]).map((f) => `[tema ${theme}] ${f}`));
+  }
   if (failures.length) { console.error(failures.join('\n')); process.exit(1); }
   console.log(`contraste ok: ${TOKEN_PAIRS.normal.length} pares en modo normal, ${TOKEN_PAIRS.high.length} en alto contraste`);
 }
