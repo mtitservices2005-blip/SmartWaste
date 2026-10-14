@@ -93,6 +93,22 @@ export function createPersistentTelemetryQueue({ storage, storageKey = 'smartwas
       await persist(value);
       return true;
     },
+    // SW-083: lectura y confirmación por lotes (más antiguos primero). Nada sale de la cola hasta que
+    // markSent confirma que el servidor lo recibió, así un corte a mitad de envío no pierde puntos.
+    async peek(max = 200) {
+      const value = await state();
+      return value.pending
+        .slice()
+        .sort((a, b) => Date.parse(a.position.captured_at) - Date.parse(b.position.captured_at))
+        .slice(0, max);
+    },
+    async markSent(ids) {
+      const value = await state();
+      const done = new Set(ids);
+      value.pending = value.pending.filter((item) => !done.has(item.id));
+      for (const id of done) if (!value.sent.includes(id)) value.sent.push(id);
+      await persist(value);
+    },
     async flush(ingest) {
       if (flushPromise) return flushPromise;
       flushPromise = (async () => {
@@ -171,4 +187,24 @@ export async function createDriverTelemetrySession({
     },
     reconnect: () => queue.flush((position, opts) => ingestionAdapter.ingest(position, opts))
   };
+}
+
+// SW-083: vacía la cola en lotes de hasta `maxBatch` puntos (tope de ingest_positions: 200), del más
+// antiguo al más nuevo. Se detiene en el primer fallo (respuesta no ok o excepción) para que ningún
+// punto adelante a otro; lo no enviado sigue en la cola. `failed` = puntos que quedan pendientes.
+export async function flushInBatches({ queue, send, maxBatch = 200 }) {
+  let sent = 0;
+  for (;;) {
+    const items = await queue.peek(maxBatch);
+    if (!items.length) return { sent, failed: 0 };
+    let result;
+    try {
+      result = await send(items.map((item) => item.position));
+    } catch (error) {
+      result = { ok: false, error: { code: 'NETWORK', message: String(error?.message ?? error) } };
+    }
+    if (!result?.ok) return { sent, failed: (await queue.list()).length };
+    await queue.markSent(items.map((item) => item.id));
+    sent += items.length;
+  }
 }
