@@ -15,7 +15,7 @@ assert.ok(!/default/.test(code), 'sin valor por defecto inventado');
 for (const word of ['drop ', 'delete ', 'truncate', 'alter policy', 'create policy', 'disable row level security', 'update ']) {
   assert.ok(!code.includes(word), `no debe contener "${word.trim()}"`);
 }
-// Orden de migraciones: es posterior a la última existente.
+// Orden de migraciones: es posterior a SW-081 (las siguientes, como SW-086, pueden venir después).
 const all = readdirSync(dir).filter((f) => f.endsWith('.sql')).sort();
-assert.equal(all[all.length - 1], files[0], 'es la última migración');
+assert.ok(all.indexOf(files[0]) > all.indexOf('202610120002_sw081_alerts_fuel_retention.sql'), 'va después de las migraciones previas');
 console.log('sw085-migration ok');
