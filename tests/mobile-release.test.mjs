@@ -25,6 +25,12 @@ for (const name of ['ANDROID_KEYSTORE_PASSWORD', 'ANDROID_KEY_ALIAS', 'ANDROID_K
 assert.match(gradle, /release\s*\{[\s\S]*signingConfig\s+signingConfigs\.release/, 'el tipo release usa la firma de lanzamiento');
 assert.doesNotMatch(gradle, /storePassword\s+['"][^'"]+['"]/, 'ninguna contraseña escrita en el repositorio');
 
+// Regresión (CI del PR de SW-083): en Groovy `versionCode (x).toInteger()` se lee como `versionCode(x).toInteger()`
+// y falla con "Value is null". La conversión debe quedar DENTRO del argumento, sin paréntesis tras el nombre.
+assert.doesNotMatch(gradle, /version(Code|Name)\s*\(/, 'no usar versionCode (...)/versionName (...) con paréntesis separados');
+assert.match(gradle, /versionCode\s+Integer\.parseInt\(System\.getenv\('ANDROID_VERSION_CODE'\) \?: '1'\)/);
+assert.match(gradle, /versionName\s+System\.getenv\('ANDROID_VERSION_NAME'\) \?: '1\.0'/);
+
 // --- Flujo de CI ---
 const wfPath = '.github/workflows/android-release-apk.yml';
 assert.ok(existsSync(wfPath), 'falta el flujo de APK de lanzamiento');
