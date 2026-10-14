@@ -103,3 +103,5 @@ body { margin: 0; padding-left: 68px; }
 .sw-fleet .detail-grid { gap: var(--space-1); }
 .sw-fleet .detail-grid p { padding: var(--space-2); font-size: var(--font-size-1); }
 .sw-fleet .detail-grid p b { font-size: 0.7rem; }
+/* Etiquetas del mapa opcionales (Configuración): se oculta el texto, el icono y el color quedan. */
+.sw-hide-map-labels .leaflet-truck small, .sw-hide-map-labels .leaflet-incident small { display: none; }

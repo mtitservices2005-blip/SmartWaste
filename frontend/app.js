@@ -24,6 +24,7 @@ import { createDriverBackgroundBridge, getOrCreateDriverDeviceId } from '../shar
 import { demoOnly, isDemoUi } from './ui-mode.js';
 import { mountShell } from './shell.js';
 import { renderFleetList, mapTruckStatus } from './components/fleet-panel.js';
+import { readMapLabels, saveMapLabels, applyMapLabels } from './map-prefs.js';
 import { renderKpiBar, renderLiveChip } from './components/kpi-bar.js';
 import { computeOpsKpis } from '../shared/ops-kpis.js';
 // SW-082: en despliegues con hideDemo no se muestran avisos de demo/simulación.
@@ -1516,8 +1517,11 @@ function renderMaster() { return `<section id="master" class="section card"><h2>
 // operador, no un dato del municipio — se guarda en localStorage del navegador, no en Supabase, así
 // que cada despachador la elige para su propio equipo sin afectar a los demás. Apagada por defecto:
 // sin tocar esto, el flujo de asignación de ruta se comporta exactamente igual que en SW-048.
+function mapPrefStorage() { try { return localStorage; } catch { return null; } }
 function renderConfiguracion() {
   return `<section id="configuracion" class="section card"><h2>Configuración</h2><p class="demo">${demoPrefix}Preferencias de este navegador/operador, no del municipio.</p>
+    <div class="controls"><label><input type="checkbox" id="mapLabelsToggle"${readMapLabels(mapPrefStorage()) ? ' checked' : ''}> Mostrar etiquetas en el mapa (número de camión y situaciones)</label></div>
+    <p class="demo">Desactívalas para ver el mapa más despejado. Los camiones y las alertas siguen visibles; solo se oculta el texto. Se recuerda en este navegador.</p>
     <div class="controls"><label><input type="checkbox" id="guidedAssignmentToggle"${guidedAssignmentEnabled ? ' checked' : ''}> Activar flujo guiado "Poner en marcha" en el detalle de ruta</label></div>
     <p class="demo">Con esta opción activa, el detalle de una ruta sin vehículo o sin chofer muestra un solo formulario y un solo botón para asignar todo lo que falte e iniciarla de una vez, en vez de los pasos separados (asignar vehículo, luego asignar chofer, luego iniciar).</p></section>`;
 }
@@ -2505,6 +2509,8 @@ document.addEventListener('change', (event) => { if (event.target.closest('#impa
 document.addEventListener('change', (event) => { if (event.target.id === 'simVehicle' && event.target.value) { selectRoute(event.target.value); goToMapTab(); } });
 // SW-049: no re-render needed here beyond the checkbox itself — the next time a route detail is
 // opened/re-rendered, renderRouteDetail() reads the module-level guidedAssignmentEnabled fresh.
+document.addEventListener('change', (event) => { if (event.target.id === 'mapLabelsToggle') { saveMapLabels(mapPrefStorage(), event.target.checked); applyMapLabels(document, event.target.checked); } });
+applyMapLabels(document, readMapLabels(mapPrefStorage()));
 document.addEventListener('change', (event) => { if (event.target.id === 'guidedAssignmentToggle') setGuidedAssignmentPreference(event.target.checked); });
 // UX cleanup (SW-037): "Crear ruta" now lives collapsed behind a <details> ("+ Nueva ruta") instead
 // of always taking up space in the Rutas panel. Its Leaflet map (#createRouteMap) is built once at
