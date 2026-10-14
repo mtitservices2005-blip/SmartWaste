@@ -13,6 +13,8 @@ on:
       - 'tests/driver-app-batching.test.mjs'
       - 'tests/driver-app-session.test.mjs'
       - 'tests/mobile-release.test.mjs'
+      - 'tests/scan-apk-keys.test.mjs'
+      - 'scripts/scan-apk-keys.mjs'
       - 'tests/frontend-no-service-role.test.mjs'
   push:
     branches: [main]
@@ -26,6 +28,8 @@ on:
       - 'tests/driver-app-batching.test.mjs'
       - 'tests/driver-app-session.test.mjs'
       - 'tests/mobile-release.test.mjs'
+      - 'tests/scan-apk-keys.test.mjs'
+      - 'scripts/scan-apk-keys.mjs'
       - 'tests/frontend-no-service-role.test.mjs'
 
 permissions:
@@ -78,6 +82,7 @@ jobs:
           node tests/driver-app-batching.test.mjs
           node tests/driver-app-session.test.mjs
           node tests/mobile-release.test.mjs
+          node tests/scan-apk-keys.test.mjs
           node tests/frontend-no-service-role.test.mjs
 
       - name: Generate and synchronize the Android project

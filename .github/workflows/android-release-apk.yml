@@ -80,6 +80,7 @@ jobs:
           node tests/driver-app-batching.test.mjs
           node tests/driver-app-session.test.mjs
           node tests/mobile-release.test.mjs
+          node tests/scan-apk-keys.test.mjs
           node tests/frontend-no-service-role.test.mjs
 
       - name: Generate and synchronize the Android project (strict backend config)
@@ -116,11 +117,8 @@ jobs:
           APK=mobile/android/app/build/outputs/apk/release/app-release.apk
           rm -rf "$RUNNER_TEMP/apk-scan" && mkdir -p "$RUNNER_TEMP/apk-scan"
           unzip -q "$APK" -d "$RUNNER_TEMP/apk-scan"
-          if grep -R -a -l -i "service_role" "$RUNNER_TEMP/apk-scan"; then
-            echo "::error::El APK contiene la cadena service_role. No se publica."
-            exit 1
-          fi
-          echo "APK limpio: sin service_role."
+          node scripts/scan-apk-keys.mjs "$RUNNER_TEMP/apk-scan"
+          echo "APK limpio: sin claves service_role."
 
       - name: Stage APK with a clear download name
         run: cp mobile/android/app/build/outputs/apk/release/app-release.apk SmartWaste-Driver-release.apk
