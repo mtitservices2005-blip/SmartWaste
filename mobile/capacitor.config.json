@@ -1,0 +1,8 @@
+{
+  "appId": "com.mtitservices.smartwaste.driver",
+  "appName": "SmartWaste Conductor",
+  "webDir": "www",
+  "android": {
+    "useLegacyBridge": true
+  }
+}
