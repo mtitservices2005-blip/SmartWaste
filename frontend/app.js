@@ -1381,7 +1381,7 @@ function openEditRoute(routeId) {
   const geo = canEditGeometry(route);
   createRouteLocked = !geo.ok;
   const points = routeGeometry(route.id);
-  const currentTruck = trucks.find((t) => t.unit === route.truckId);
+  const currentTruck = trucks.find((t) => t.id === route.truckId || t.unit === route.truckId || (route.truckId && t.routeId === route.id));
   editingBefore = initialEditValues(route, points, { vehicleId: currentTruck?.id ?? '' });
   const nameEl = $('#createRouteName'); if (nameEl) nameEl.value = editingBefore.name;
   const startEl = $('#createRouteStart'); if (startEl) startEl.value = editingBefore.startTime;
