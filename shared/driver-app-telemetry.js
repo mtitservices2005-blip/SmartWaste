@@ -1,4 +1,6 @@
 import { validateTelemetryPosition } from './telemetry-simulator.js';
+import { readBatteryPct } from './driver-app-battery.js';
+import { HEARTBEAT_INTERVAL_MS, createHeartbeat, heartbeatPosition, nextRetryDelayMs } from './driver-app-heartbeat.js';
 
 export const DRIVER_APP_MAX_INTERVAL_MS = 10_000;
 export const DRIVER_APP_MIN_DISTANCE_METERS = 25;
@@ -26,12 +28,21 @@ export function shouldCaptureDriverPosition(lastPosition, nextPosition, {
   return elapsed >= maxIntervalMs || distanceMeters(lastPosition, nextPosition) >= minDistanceMeters;
 }
 
+// Nivel decimal 0..1 (como lo entrega el dispositivo) -> entero 0..100; cualquier otra cosa -> null.
+function batteryPercent(level) {
+  if (level === null || level === undefined || level === '') return null;
+  const n = Number(level);
+  if (!Number.isFinite(n) || n < 0 || n > 1) return null;
+  return Math.round(n * 100);
+}
+
 export function positionFromDriverLocation(location, {
   vehicle_id,
   municipality_id,
   route_run_id,
   device_id,
-  correlation_id
+  correlation_id,
+  battery_pct
 } = {}) {
   const coords = location.coords ?? location;
   const timestamp = location.timestamp ?? location.time ?? Date.now();
@@ -48,9 +59,13 @@ export function positionFromDriverLocation(location, {
     received_at: new Date().toISOString(),
     source: 'driver_app',
     device_id,
+    battery_pct: batteryPercent(battery_pct),
     correlation_id
   };
 }
+
+// Tope del registro local de enviados (solo sirve para ignorar repeticiones recientes).
+const SENT_LEDGER_LIMIT = 2000;
 
 function queueKey(position) {
   return [position.device_id, position.vehicle_id, position.captured_at,
@@ -93,6 +108,23 @@ export function createPersistentTelemetryQueue({ storage, storageKey = 'smartwas
       await persist(value);
       return true;
     },
+    // SW-083: lectura y confirmación por lotes (más antiguos primero). Nada sale de la cola hasta que
+    // markSent confirma que el servidor lo recibió, así un corte a mitad de envío no pierde puntos.
+    async peek(max = 200) {
+      const value = await state();
+      return value.pending
+        .slice()
+        .sort((a, b) => Date.parse(a.position.captured_at) - Date.parse(b.position.captured_at))
+        .slice(0, max);
+    },
+    async markSent(ids) {
+      const value = await state();
+      const done = new Set(ids);
+      value.pending = value.pending.filter((item) => !done.has(item.id));
+      for (const id of done) if (!value.sent.includes(id)) value.sent.push(id);
+      if (value.sent.length > SENT_LEDGER_LIMIT) value.sent = value.sent.slice(-SENT_LEDGER_LIMIT);
+      await persist(value);
+    },
     async flush(ingest) {
       if (flushPromise) return flushPromise;
       flushPromise = (async () => {
@@ -109,6 +141,7 @@ export function createPersistentTelemetryQueue({ storage, storageKey = 'smartwas
           const result = await ingest(item.position, { correlation_id: item.position.correlation_id });
           if (!result?.ok) return { ok: false, sent, pending: value.pending.length, error: result?.error };
           value.sent.push(item.id);
+          if (value.sent.length > SENT_LEDGER_LIMIT) value.sent = value.sent.slice(-SENT_LEDGER_LIMIT);
           value.pending.shift();
           await persist(value);
           sent += 1;
@@ -128,7 +161,17 @@ export async function createDriverTelemetrySession({
   deviceId,
   operationsAdapter,
   ingestionAdapter,
-  queue
+  queue,
+  // SW-083: con batchAdapter (ingestPositions) la cola sale en lotes de hasta 200 puntos; sin él se
+  // mantiene el envío de a uno de SW-074.
+  batchAdapter = null,
+  getBatteryLevel = () => readBatteryPct(),
+  now = () => Date.now(),
+  setTimeoutFn = (fn, ms) => setTimeout(fn, ms),
+  clearTimeoutFn = (id) => clearTimeout(id),
+  setIntervalFn,
+  clearIntervalFn,
+  heartbeatIntervalMs = HEARTBEAT_INTERVAL_MS
 }) {
   const assignment = await operationsAdapter.findOwnVehicleAssignment(profileId);
   if (!assignment.ok) {
@@ -152,23 +195,99 @@ export async function createDriverTelemetrySession({
   }
 
   let lastCaptured = null;
-  return {
+  let lastSampleAt = null;
+  let retryAttempt = 0;
+  let retryTimer = null;
+  let heartbeat = null;
+  let stopped = false;
+
+  const cancelRetry = () => {
+    if (retryTimer !== null) { clearTimeoutFn(retryTimer); retryTimer = null; }
+  };
+  const scheduleRetry = () => {
+    if (stopped || retryTimer !== null) return;
+    const delay = nextRetryDelayMs(retryAttempt);
+    retryAttempt += 1;
+    retryTimer = setTimeoutFn(async () => { retryTimer = null; await session.reconnect(); }, delay);
+  };
+
+  const session = {
     ok: true,
+    assignment: { vehicle_id: assignment.data.vehicle_id, route_run_id: assignment.data.route_run_id ?? null },
     async capture(location, { correlation_id } = {}) {
+      let battery_pct = null;
+      try { battery_pct = await getBatteryLevel(); } catch { battery_pct = null; }
       const position = positionFromDriverLocation(location, {
         vehicle_id: assignment.data.vehicle_id,
         route_run_id: assignment.data.route_run_id,
         municipality_id: municipalityId,
         device_id: deviceId,
-        correlation_id
+        correlation_id,
+        battery_pct
       });
       const validation = validateTelemetryPosition(position);
       if (!validation.valid) return { ok: false, error: { code: 'INVALID_TELEMETRY', message: validation.errors.join('; ') } };
       if (!shouldCaptureDriverPosition(lastCaptured, position)) return { ok: true, queued: false, reason: 'THROTTLED' };
       const queued = await queue.enqueue(position);
-      if (queued) lastCaptured = position;
+      if (queued) { lastCaptured = position; lastSampleAt = now(); }
       return { ok: true, queued, position };
     },
-    reconnect: () => queue.flush((position, opts) => ingestionAdapter.ingest(position, opts))
+    async pendingCount() { return (await queue.list()).length; },
+    async reconnect() {
+      if (!batchAdapter) return queue.flush((position, opts) => ingestionAdapter.ingest(position, opts));
+      const { sent, failed } = await flushInBatches({ queue, send: (batch) => batchAdapter.ingestPositions(batch) });
+      if (failed > 0) {
+        scheduleRetry();
+        return { ok: false, sent, pending: failed, error: { code: 'BATCH_SEND_FAILED', message: 'No se pudo enviar; se reintentará solo.' } };
+      }
+      retryAttempt = 0;
+      cancelRetry();
+      return { ok: true, sent, pending: 0 };
+    },
+    // Latido: si pasaron al menos `heartbeatIntervalMs` sin muestra, repite la última posición con
+    // velocidad 0 (así el centro de control ve "detenido" y no "sin señal").
+    startHeartbeat() {
+      if (heartbeat) return;
+      stopped = false;
+      heartbeat = createHeartbeat({
+        intervalMs: heartbeatIntervalMs,
+        now,
+        setIntervalFn,
+        clearIntervalFn,
+        onBeat: async ({ at }) => {
+          if (!lastCaptured || (lastSampleAt !== null && now() - lastSampleAt < heartbeatIntervalMs)) return;
+          const beat = heartbeatPosition(lastCaptured, at);
+          if (await queue.enqueue(beat)) { lastSampleAt = now(); await session.reconnect(); }
+        }
+      });
+      heartbeat.start();
+    },
+    stop() {
+      stopped = true;
+      cancelRetry();
+      heartbeat?.stop();
+      heartbeat = null;
+    }
   };
+  return session;
+}
+
+// SW-083: vacía la cola en lotes de hasta `maxBatch` puntos (tope de ingest_positions: 200), del más
+// antiguo al más nuevo. Se detiene en el primer fallo (respuesta no ok o excepción) para que ningún
+// punto adelante a otro; lo no enviado sigue en la cola. `failed` = puntos que quedan pendientes.
+export async function flushInBatches({ queue, send, maxBatch = 200 }) {
+  let sent = 0;
+  for (;;) {
+    const items = await queue.peek(maxBatch);
+    if (!items.length) return { sent, failed: 0 };
+    let result;
+    try {
+      result = await send(items.map((item) => item.position));
+    } catch (error) {
+      result = { ok: false, error: { code: 'NETWORK', message: String(error?.message ?? error) } };
+    }
+    if (!result?.ok) return { sent, failed: (await queue.list()).length };
+    await queue.markSent(items.map((item) => item.id));
+    sent += items.length;
+  }
 }

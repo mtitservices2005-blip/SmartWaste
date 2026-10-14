@@ -18,6 +18,8 @@ import { COST_PARAMETER_KEYS, validateCostParameters, fetchCostParameters, saveC
 import { aggregateRouteSavings } from '../shared/route-savings.js';
 import { initAuthGate, readSupabaseConfig, getAuthClient } from './auth-gate.js';
 import { createDriverTelemetrySession, createPersistentTelemetryQueue } from '../shared/driver-app-telemetry.js';
+import { parseFuelLiters, buildFuelEntry } from '../shared/fuel-entry.js';
+import { connectionStatusText } from '../shared/driver-app-status.js';
 import { createDriverBackgroundBridge, getOrCreateDriverDeviceId } from '../shared/driver-app-background.js';
 import { demoOnly } from './ui-mode.js';
 // SW-082: en despliegues con hideDemo no se muestran avisos de demo/simulación.
@@ -168,6 +170,7 @@ let driverGpsWatchId = null;
 let driverBackgroundBridge = null;
 let driverTelemetrySession = null;
 let driverOnlineHandler = null;
+let driverOfflineHandler = null;
 // SW-030: which municipality's cost parameters the current session should read/write — the signed-
 // in municipal session's own municipality_id when there is one, else whatever the deployment's
 // static config points at (citizen-portal-only sessions), else the bundled demo municipality. Master
@@ -973,7 +976,7 @@ function driverRouteLifecycleControl(truck) {
   const route = truck?.routeId ? routeById(truck.routeId) : null;
   if (!route) return '';
   if (route.status === 'assigned') return `<div class="controls"><button type="button" class="btn-primary" data-driver-start-route="${route.id}">Iniciar recorrido</button></div>`;
-  if (['started', 'in_progress', 'delayed'].includes(route.status)) return `<div class="controls"><button type="button" class="btn-primary" data-driver-complete-route="${route.id}">Finalizar recorrido</button></div>`;
+  if (['started', 'in_progress', 'delayed'].includes(route.status)) return `<div class="sw-field"><label class="sw-field__label" for="driverFuelLiters">Litros de combustible cargados (opcional)</label><input class="sw-field__control" id="driverFuelLiters" name="driverFuelLiters" type="text" inputmode="decimal" aria-describedby="driverFuelHint" autocomplete="off"><p class="sw-field__hint" id="driverFuelHint">Si cargaste combustible en este recorrido, escribe los litros. Ejemplo: 45,5</p></div><div class="controls"><button type="button" class="btn-primary" data-driver-complete-route="${route.id}">Finalizar recorrido</button></div>`;
   return '';
 }
 function renderDriverMobile() {
@@ -987,6 +990,7 @@ function renderDriverMobile() {
     <select id="driverVehicleSelect" aria-label="Vehículo del conductor">${trucksWithRoute.map((t) => `<option value="${t.id}" ${t.id === driverVehicleId ? 'selected' : ''}>${t.unit}</option>`).join('')}</select>
     <p id="driverRouteInfo">${routeInfoLine}</p>
     <div id="driverRouteLifecycleControl">${driverRouteLifecycleControl(truck)}</div>
+    <p id="driverConnectionStatus" role="status" class="sw-field__hint"></p>
     <p id="driverStopsProgress"></p>
     <div id="driverMap" class="real-map driver-map" role="application" aria-label="Posición y trazo del vehículo (demo)"></div>
     <p class="demo">${simulationPrefix}trazo histórico vía polling cada ${DRIVER_POLL_INTERVAL_MS / 1000}s (sin Realtime, ver docs/TECHNICAL_DEBT_REGISTER.md #14)</p>
@@ -1012,6 +1016,13 @@ function renderDriverGpsControl() {
 // browser/phone location to Supabase (source: browser_geolocation); does not touch the simulation
 // engine or any map rendering (drawDriverPositions/drawMapLayers stay demo-driven, by design —
 // showing real GPS on a live map is a separate, later milestone).
+// SW-083: estado de conexión visible (texto claro) con las posiciones pendientes de la cola.
+async function refreshDriverConnectionStatus() {
+  const el = $('#driverConnectionStatus');
+  if (!el) return;
+  const pending = driverTelemetrySession ? await driverTelemetrySession.pendingCount() : 0;
+  el.textContent = connectionStatusText({ online: navigator.onLine !== false, pending });
+}
 async function startDriverGps() {
   const status = $('#driverGpsStatus');
   if (driverGpsWatchId != null || driverBackgroundBridge) return;
@@ -1035,6 +1046,7 @@ async function startDriverGps() {
       deviceId,
       operationsAdapter: realAdapter,
       ingestionAdapter: telemetry,
+      batchAdapter: realAdapter, // SW-083: lotes a ingest_positions
       queue
     });
     if (!session.ok) { if (status) status.textContent = session.error.code === 'NO_ACTIVE_ROUTE_ASSIGNED' ? 'No tienes un vehículo asignado en una ruta activa. Contacta a tu supervisor.' : `No se pudo activar el GPS: ${session.error.message}`; return; }
@@ -1044,6 +1056,7 @@ async function startDriverGps() {
       onLocation: async (location) => {
         const result = await session.capture(location, { correlation_id: crypto.randomUUID() });
         if (result.ok && result.queued) await session.reconnect();
+        refreshDriverConnectionStatus();
         const currentStatus = $('#driverGpsStatus');
         if (currentStatus) currentStatus.textContent = result.ok ? 'GPS activo · recorrido registrándose en segundo plano.' : `No se pudo guardar la ubicación: ${result.error?.message ?? 'error desconocido'}`;
       },
@@ -1056,15 +1069,20 @@ async function startDriverGps() {
     try {
       await session.reconnect();
       driverGpsWatchId = await driverBackgroundBridge.start();
+      session.startHeartbeat(); // SW-083: latido cada 30 s aunque el camión esté quieto
     } catch (error) {
       await driverBackgroundBridge.stop();
+      session.stop();
       driverBackgroundBridge = null;
       driverTelemetrySession = null;
       if (status) status.textContent = `No se pudo activar el GPS en segundo plano: ${error.message}`;
       return;
     }
-    driverOnlineHandler = () => driverTelemetrySession?.reconnect();
+    driverOnlineHandler = async () => { await driverTelemetrySession?.reconnect(); refreshDriverConnectionStatus(); };
+    driverOfflineHandler = () => refreshDriverConnectionStatus();
     window.addEventListener('online', driverOnlineHandler);
+    window.addEventListener('offline', driverOfflineHandler);
+    refreshDriverConnectionStatus();
     if (status) status.textContent = 'GPS activo · recorrido registrándose en segundo plano.';
     const button = document.querySelector('[data-driver-gps]');
     if (button) { button.dataset.driverGps = 'stop'; button.textContent = 'Detener GPS'; }
@@ -1108,10 +1126,13 @@ async function stopDriverGps({ flush = false } = {}) {
   if (driverBackgroundBridge) {
     await driverBackgroundBridge.stop({ flush });
     if (flush) await driverTelemetrySession?.reconnect();
+    driverTelemetrySession?.stop();
     driverBackgroundBridge = null;
     driverTelemetrySession = null;
     if (driverOnlineHandler) window.removeEventListener('online', driverOnlineHandler);
+    if (driverOfflineHandler) window.removeEventListener('offline', driverOfflineHandler);
     driverOnlineHandler = null;
+    driverOfflineHandler = null;
   } else if (driverGpsWatchId != null) navigator.geolocation.clearWatch(driverGpsWatchId);
   driverGpsWatchId = null;
   if (flush && driverGpsPendingWrites.size) await Promise.allSettled([...driverGpsPendingWrites]);
@@ -1942,6 +1963,20 @@ async function driverStartRoute(routeId) {
   await startDriverGps();
 }
 async function driverCompleteRoute(routeId) {
+  // SW-083: el combustible se valida ANTES de apagar el GPS (un error de tecleo no debe costar el recorrido)
+  // y se registra mientras la asignación del chofer sigue vigente. Es opcional: vacío = omitido.
+  const fuel = parseFuelLiters($('#driverFuelLiters')?.value);
+  if (!fuel.ok) { showToast(fuel.message, { type: 'error' }); $('#driverFuelLiters')?.focus(); return; }
+  let fuelEntry = null;
+  if (fuel.liters != null && realAdapter && driverAuthContext) {
+    const assignment = driverTelemetrySession?.assignment ?? (await realAdapter.findOwnVehicleAssignment(driverAuthContext.user_id)).data;
+    fuelEntry = buildFuelEntry({ liters: fuel.liters, assignment, municipalityId: driverAuthContext.municipality_id });
+  }
+  if (fuelEntry) {
+    const saved = await realAdapter.logFuel(fuelEntry);
+    if (!saved?.ok) showToast(`No se pudo guardar el combustible: ${saved?.error?.message ?? 'error desconocido'}. Avisa a tu supervisor.`, { type: 'error' });
+    else { showToast(`Combustible guardado: ${fuel.liters} litros.`); const fuelInput = $('#driverFuelLiters'); if (fuelInput) fuelInput.value = ''; /* evita duplicar si hay que reintentar */ }
+  }
   // Stop producing samples, then wait for the last accepted browser event to reach Supabase before
   // completeRoute() calculates distance and stamps the final GPS metrics on route_runs.
   await stopDriverGps({ flush: true });

@@ -2,6 +2,7 @@ import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } f
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildSync } from 'esbuild';
+import { resolveBackendConfig } from './backend-config.mjs';
 
 const mobileDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const repositoryDir = dirname(mobileDir);
@@ -22,22 +23,7 @@ function stripGeneratedConfig(html) {
   return html.slice(0, start) + html.slice(end + configEnd.length).replace(/^\r?\n/, '');
 }
 
-function injectSupabaseConfig() {
-  const url = process.env.SUPABASE_URL;
-  const anonKey = process.env.SUPABASE_ANON_KEY;
-
-  if (!url && !anonKey) {
-    console.warn('SUPABASE_URL/SUPABASE_ANON_KEY absent: mobile bundle built in demo mode.');
-  } else if (!url || !anonKey) {
-    throw new Error('SUPABASE_URL and SUPABASE_ANON_KEY must be provided together.');
-  }
-
-  const config = url && anonKey ? {
-    url,
-    anonKey,
-    municipality_id: process.env.SUPABASE_MUNICIPALITY_ID || null,
-    hideDemo: process.env.SUPABASE_HIDE_DEMO === 'true'
-  } : null;
+function injectSupabaseConfig(config) {
   const configScript = config ? `  <script>\n    window.SMARTWASTE_SUPABASE_CONFIG = ${JSON.stringify(config)};\n  </script>\n` : '';
   const block = `${configStart}\n${configScript}  <script src="./native-background-geolocation.js"></script>\n  ${configEnd}\n`;
   const html = stripGeneratedConfig(readFileSync(indexPath, 'utf8'));
@@ -45,6 +31,10 @@ function injectSupabaseConfig() {
   if (!html.includes(scriptTag)) throw new Error(`Expected ${scriptTag} in copied frontend/index.html.`);
   writeFileSync(indexPath, html.replace(scriptTag, `${block}  ${scriptTag}`));
 }
+
+// Se valida antes de tocar nada: un build de lanzamiento sin variables debe fallar de inmediato.
+const backendConfig = resolveBackendConfig();
+if (!backendConfig) console.warn('SUPABASE_URL/SUPABASE_ANON_KEY absent: mobile bundle built in demo mode.');
 
 rmSync(outputDir, { recursive: true, force: true });
 mkdirSync(outputDir, { recursive: true });
@@ -60,5 +50,5 @@ for (const entry of readdirSync(outputDir, { withFileTypes: true })) {
   writeFileSync(path, source.replaceAll('../shared/', './shared/'));
 }
 
-injectSupabaseConfig();
+injectSupabaseConfig(backendConfig);
 console.log(`Mobile web bundle generated at ${outputDir}.`);
