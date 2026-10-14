@@ -83,6 +83,15 @@ export function summarizeRouteRunsByDriver(routeRuns, month) {
     .map(([driverId, runs]) => ({ driverId, ...summarizeGroup(runs) }));
 }
 
+// SW-075: same measured-run rules as per-driver; runs with no vehicle_id are excluded, never grouped
+// under an invented key.
+export function summarizeRouteRunsByVehicle(routeRuns, month) {
+  const measured = measuredRuns(routeRuns, month).filter((run) => run.vehicle_id);
+  return [...groupBy(measured, 'vehicle_id').entries()]
+    .sort(([a], [b]) => String(a).localeCompare(String(b)))
+    .map(([vehicleId, runs]) => ({ vehicleId, ...summarizeGroup(runs) }));
+}
+
 // Municipality-wide totals deliberately do not group by route or driver.
 export function summarizeRouteRunsForMunicipality(routeRuns, month) {
   const summary = summarizeGroup(measuredRuns(routeRuns, month));

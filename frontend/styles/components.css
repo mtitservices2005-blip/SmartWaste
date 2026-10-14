@@ -1,0 +1,57 @@
+/* SW-082: componentes base. Solo tokens de tokens.css: ningún color fijo aquí. */
+.sw-visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 2px; }
+
+.sw-btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); min-height: 40px; padding: var(--space-2) var(--space-4); border: 2px solid transparent; border-radius: var(--radius-2); font: inherit; font-weight: 700; cursor: pointer; }
+.sw-btn:disabled { opacity: .6; cursor: not-allowed; }
+.sw-btn--primary { background: var(--color-primary); color: var(--color-primary-contrast); }
+.sw-btn--primary:hover:not(:disabled) { background: var(--color-primary-strong); }
+.sw-btn--secondary { background: var(--color-surface); color: var(--color-text); border-color: var(--color-border-input); }
+.sw-btn--danger { background: var(--color-danger); color: var(--color-primary-contrast); }
+.sw-btn--ghost { background: transparent; color: var(--color-text); }
+
+/* Objetivos táctiles de 48 px en la vista del chofer y en móvil. */
+.sw-driver .sw-btn,
+.mobile button { min-height: var(--touch-target); }
+
+.sw-badge { display: inline-flex; align-items: center; gap: var(--space-1); padding: var(--space-1) var(--space-3); border-radius: var(--radius-3); font-size: var(--font-size-2); font-weight: 700; }
+.sw-badge--en-ruta { background: var(--status-en-ruta-bg); color: var(--status-en-ruta); }
+.sw-badge--detenido { background: var(--status-detenido-bg); color: var(--status-detenido); }
+.sw-badge--sin-senal { background: var(--status-sin-senal-bg); color: var(--status-sin-senal); }
+.sw-badge--disponible { background: var(--status-disponible-bg); color: var(--status-disponible); }
+.sw-badge--fuera-servicio { background: var(--status-fuera-servicio-bg); color: var(--status-fuera-servicio); }
+
+.sw-field { display: grid; gap: var(--space-1); margin-bottom: var(--space-4); }
+.sw-field__label { font-weight: 700; color: var(--color-text); }
+.sw-field__control { min-height: var(--touch-target); padding: var(--space-2) var(--space-3); border: 2px solid var(--color-border-input); border-radius: var(--radius-2); background: var(--color-surface); color: var(--color-text); font: inherit; }
+.sw-field__hint { margin: 0; color: var(--color-muted); }
+.sw-field__error { margin: 0; color: var(--color-danger); font-weight: 700; }
+
+.sw-toast-host { position: fixed; right: var(--space-4); bottom: var(--space-4); display: grid; gap: var(--space-2); z-index: 1000; }
+.sw-toast { padding: var(--space-3) var(--space-4); border-radius: var(--radius-2); box-shadow: var(--shadow-2); }
+.sw-toast--success { background: var(--color-success-bg); color: var(--color-success); }
+.sw-toast--error { background: var(--color-danger-bg); color: var(--color-danger); }
+.sw-toast--warning { background: var(--color-warning-bg); color: var(--color-warning); }
+.sw-toast--info { background: var(--color-info-bg); color: var(--color-info); }
+
+.sw-empty { padding: var(--space-6); text-align: center; background: var(--color-background-alt); border: 1px dashed var(--color-border-input); border-radius: var(--radius-3); }
+.sw-empty__message { color: var(--color-muted); }
+
+.sw-status-card { padding: var(--space-4); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-3); }
+.sw-status-card__title { margin: 0; color: var(--color-muted); font-size: 1rem; }
+.sw-status-card__value { margin: var(--space-1) 0; font-size: 1.75rem; font-weight: 800; color: var(--color-text); }
+.sw-status-card__note { margin: var(--space-2) 0 0; color: var(--color-muted); }
+
+.sw-table { width: 100%; border-collapse: collapse; }
+.sw-table th, .sw-table td { padding: var(--space-3); text-align: left; border-bottom: 1px solid var(--color-border); }
+.sw-table th { color: var(--color-muted); }
+.sw-table__empty { text-align: center; color: var(--color-muted); }
+
+.sw-skeleton { display: grid; gap: var(--space-2); }
+.sw-skeleton__line { display: block; height: 1rem; border-radius: var(--radius-1); background: var(--color-border); }
+@media (prefers-reduced-motion: no-preference) { .sw-skeleton__line { animation: sw-pulse 1.4s ease-in-out infinite; } }
+@keyframes sw-pulse { 50% { opacity: .5; } }
+
+/* SW-082: avisos de demo vacíos (hideDemo) no ocupan espacio. */
+.demo:empty { display: none; }

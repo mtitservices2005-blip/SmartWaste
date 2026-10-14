@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { summarizeRouteRunsByRoute, summarizeRouteRunsByDriver, summarizeRouteRunsForMunicipality } from '../shared/route-run-stats.js';
+import { summarizeRouteRunsByRoute, summarizeRouteRunsByDriver, summarizeRouteRunsByVehicle, summarizeRouteRunsForMunicipality } from '../shared/route-run-stats.js';
 
 // Two measured runs for route A (driver X), one measured run for route B (driver Y), one
 // unmeasured run (no completed_at yet, should be excluded entirely).
@@ -93,5 +93,28 @@ assert.deepEqual(summarizeRouteRunsByDriver(multiMonthRuns, '2025-09').map((run)
 const deterministicForward = summarizeRouteRunsByRoute(routeRuns);
 const deterministicReverse = summarizeRouteRunsByRoute([...routeRuns].reverse());
 assert.deepEqual(deterministicReverse, deterministicForward);
+
+// SW-075: per-vehicle totals, same measured-run rules as per-driver. Runs without vehicle_id are
+// excluded (never grouped under an invented key), unmeasured runs never count, and the month filter
+// applies exactly like the other groupings.
+const vehicleRuns = [
+  { id: 'v1', route_id: 'A', vehicle_id: 'T1', driver_id: 'X', started_at: '2026-09-02T08:00:00Z', completed_at: '2026-09-02T08:30:00Z', distance_meters: 4000 },
+  { id: 'v2', route_id: 'B', vehicle_id: 'T1', driver_id: 'Y', started_at: '2026-09-03T08:00:00Z', completed_at: '2026-09-03T09:00:00Z', distance_meters: 6000 },
+  { id: 'v3', route_id: 'A', vehicle_id: 'T2', driver_id: 'X', started_at: '2026-09-02T10:00:00Z', completed_at: '2026-09-02T10:20:00Z', distance_meters: null },
+  { id: 'v4', route_id: 'A', vehicle_id: null, driver_id: 'X', started_at: '2026-09-04T08:00:00Z', completed_at: '2026-09-04T08:30:00Z', distance_meters: 9000 },
+  { id: 'v5', route_id: 'A', vehicle_id: 'T1', driver_id: 'X', started_at: '2026-09-05T08:00:00Z', completed_at: null },
+  { id: 'v6', route_id: 'A', vehicle_id: 'T2', driver_id: 'X', started_at: '2026-08-31T08:00:00Z', completed_at: '2026-08-31T08:40:00Z', distance_meters: 1000 },
+];
+const byVehicle = summarizeRouteRunsByVehicle(vehicleRuns, '2026-09');
+assert.deepEqual(byVehicle.map((v) => v.vehicleId), ['T1', 'T2'], 'sorted by vehicleId; null vehicle_id and August run excluded');
+const truck1 = byVehicle.find((v) => v.vehicleId === 'T1');
+assert.equal(truck1.runsCount, 2, 'unmeasured run v5 must not count');
+assert.equal(truck1.totalDurationMinutes, 90);
+assert.equal(truck1.totalDistanceKm, 10);
+const truck2 = byVehicle.find((v) => v.vehicleId === 'T2');
+assert.equal(truck2.runsCount, 1);
+assert.equal(truck2.distanceMeasuredRunsCount, 0, 'no distance_meters — must stay distinguishable from a real 0 km');
+assert.equal(summarizeRouteRunsByVehicle(vehicleRuns).find((v) => v.vehicleId === 'T2').runsCount, 2, 'without a month filter both T2 runs count');
+assert.deepEqual(summarizeRouteRunsByVehicle([], '2026-09'), []);
 
 console.log('route-run-stats ok');

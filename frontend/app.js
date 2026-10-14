@@ -1,4 +1,4 @@
-import { demoNotice, simulationNotice, pilotMunicipality, trucks, routes, sectors, drivers, incidents, notifications, municipalities, routeFlow, routePaths, stateLabels } from '../shared/demo-data.js';
+import { demoNotice as rawDemoNotice, simulationNotice as rawSimulationNotice, pilotMunicipality, trucks, routes, sectors, drivers, incidents, notifications, municipalities, routeFlow, routePaths, stateLabels } from '../shared/demo-data.js';
 import { operationsAdapter, resolveOperationsAdapter } from '../shared/operations-adapter.js';
 import { DeviceSimulator, createDemoPositionHistory, createTelemetryIngestionAdapter } from '../shared/telemetry-simulator.js';
 import { validateEvidenceFile } from '../shared/channel-contracts.js';
@@ -10,7 +10,8 @@ import { optimizeWaypointOrder } from '../shared/route-optimizer.js';
 import { positionFromGeolocationEvent, shouldSendPosition } from '../shared/browser-geolocation.js';
 import { isAccuracyAcceptable, shouldSendPhonePing, buildPhoneGpsPing } from '../shared/phone-gps.js';
 import { suggestReoptimizedOrder } from '../shared/route-reoptimizer.js';
-import { summarizeRouteRunsByRoute, summarizeRouteRunsByDriver, summarizeRouteRunsForMunicipality } from '../shared/route-run-stats.js';
+import { summarizeRouteRunsByRoute, summarizeRouteRunsByDriver, summarizeRouteRunsByVehicle, summarizeRouteRunsForMunicipality } from '../shared/route-run-stats.js';
+import { calculateEnvironmentalImpact, countCompletedStops } from '../shared/environmental-impact.js';
 import { routeReadinessStage, ROUTE_READINESS_LABELS } from '../shared/route-readiness.js';
 import { IMPACT_DEMO_NOTICE, IMPACT_SCENARIO_NOTICE, defaultImpactAssumptions, metricReadiness, calculateImpactMetrics } from '../shared/impact-center.js';
 import { COST_PARAMETER_KEYS, validateCostParameters, fetchCostParameters, saveCostParameters, createDemoCostParametersStore } from '../shared/cost-parameters.js';
@@ -20,6 +21,12 @@ import { createDriverTelemetrySession, createPersistentTelemetryQueue } from '..
 import { parseFuelLiters, buildFuelEntry } from '../shared/fuel-entry.js';
 import { connectionStatusText } from '../shared/driver-app-status.js';
 import { createDriverBackgroundBridge, getOrCreateDriverDeviceId } from '../shared/driver-app-background.js';
+import { demoOnly } from './ui-mode.js';
+// SW-082: en despliegues con hideDemo no se muestran avisos de demo/simulación.
+const demoNotice = demoOnly(rawDemoNotice, readSupabaseConfig());
+const simulationNotice = demoOnly(rawSimulationNotice, readSupabaseConfig());
+const demoPrefix = demoNotice ? `${demoNotice} · ` : '';
+const simulationPrefix = simulationNotice ? `${simulationNotice} · ` : '';
 
 const $ = (selector) => document.querySelector(selector);
 const app = $('#app');
@@ -146,7 +153,7 @@ let realSectors = [];
 // route_stops, never fabricates a placeholder number (rule 6).
 let impactCostParameters = { ...defaultImpactAssumptions };
 let impactCostParametersConfigured = false;
-let impactRealData = { operational: null, routeSavings: null };
+let impactRealData = { operational: null, routeSavings: null, environmental: null };
 const costParametersStore = createDemoCostParametersStore();
 // SW-030 (Codex review, PR #88, P1): real municipalities (real uuid `id`, from the `municipalities`
 // table) Master Admin can edit cost parameters for — see renderMasterCostParametersSection()/
@@ -385,7 +392,7 @@ function renderSummary() {
   return `<section id="resumen" class="section card">
     <p class="eyebrow">${pilotMunicipality.branding.label}</p>
     <h1>Resumen del día</h1>
-    <p class="demo">${demoNotice} · Municipio piloto: ${pilotMunicipality.name}, ${pilotMunicipality.country}</p>
+    <p class="demo">${demoPrefix}Municipio piloto: ${pilotMunicipality.name}, ${pilotMunicipality.country}</p>
     <div class="kpis summary-grid">${summaryCards.map((card) => `<a class="kpi${card.tone ? ` ${card.tone}` : ''}" href="${card.href}"${card.scrollTo ? ` data-scroll-to="${card.scrollTo}"` : ''}><strong>${card.value}</strong><br>${card.label}</a>`).join('')}</div>
     ${attentionItems.length
       ? `<div><h3>Necesita tu atención</h3><div class="list">${attentionItems.join('')}</div></div>`
@@ -424,8 +431,8 @@ function mapStartAction() {
 function renderMapPanel() {
   return `<div class="map-card">
       <div class="map-header">
-        <div><p class="eyebrow">${pilotMunicipality.branding.label}</p><h1>Mapa operativo real de ${pilotMunicipality.name}</h1><p class="demo">${demoNotice} · Las rutas son simuladas, no oficiales del ayuntamiento.</p><p class="demo gps-legend">● = posición GPS real · el resto son camiones simulados</p></div>
-        <div class="sim-controls" aria-label="Controles de simulación"><span>${simulationNotice} · fuente desacoplada: ${backendMode}</span>${routeFocusSelect()}<span id="mapStartAction">${mapStartAction()}</span><button class="btn-primary" data-sim="start">Iniciar</button><button data-sim="pause">Pausar</button><button data-sim="reset">Reiniciar</button><button class="btn-ghost" data-sim="speed">${simulationSpeed}×</button><button class="btn-ghost" data-sim="fullscreen">Pantalla completa</button></div>
+        <div><p class="eyebrow">${pilotMunicipality.branding.label}</p><h1>Mapa operativo real de ${pilotMunicipality.name}</h1><p class="demo">${demoPrefix}Las rutas son simuladas, no oficiales del ayuntamiento.</p><p class="demo gps-legend">● = posición GPS real · el resto son camiones simulados</p></div>
+        <div class="sim-controls" aria-label="Controles de simulación"><span>${simulationPrefix}fuente desacoplada: ${backendMode}</span>${routeFocusSelect()}<span id="mapStartAction">${mapStartAction()}</span><button class="btn-primary" data-sim="start">Iniciar</button><button data-sim="pause">Pausar</button><button data-sim="reset">Reiniciar</button><button class="btn-ghost" data-sim="speed">${simulationSpeed}×</button><button class="btn-ghost" data-sim="fullscreen">Pantalla completa</button></div>
       </div>
       <div id="realMap" class="real-map" role="application" aria-label="Mapa OpenStreetMap de Laguna Salada"><div class="map-fallback"><strong>Mapa externo no disponible.</strong><span>Fallback operativo demo: use listas, paneles y coordenadas simuladas.</span></div></div>
     </div>
@@ -449,7 +456,7 @@ function renderTruckDetail(truck) {
   return `<div class="drawer-head"><p class="eyebrow">Detalle del camión</p><h2>${truck.unit} · ${truck.name}</h2>${pill(truck.state)}</div>
     <div class="detail-grid"><p><b>Conductor</b><span>${driverName(truck.driverId)}</span></p><p><b>Matrícula demo</b><span>${truck.plate}</span></p><p><b>Ruta</b><span>${routeName(truck.routeId)}</span></p><p><b>Velocidad demo</b><span>${truck.speedKmh} km/h</span></p><p><b>Última actualización</b><span>${truck.updatedAt}</span></p><p><b>Sector actual</b><span>${truck.sector}</span></p><p><b>Próxima parada</b><span>${truck.nextStop}</span></p><p><b>Nivel de carga demo</b><span>${truck.loadLevel}%</span></p></div>
     ${driverAssignmentControl(truck)}
-    ${progress(truck.progress)}<p><strong>${truck.progress}%</strong> completado · ${demoNotice}</p>
+    ${progress(truck.progress)}<p><strong>${truck.progress}%</strong> completado${demoNotice ? ` · ${demoNotice}` : ''}</p>
     <h3>Incidencias</h3>${relatedIncidents.length ? relatedIncidents.map((incident) => `<button class="incident-row" data-incident="${incident.code}">${incident.type} · ${incident.priority}</button>`).join('') : '<p>Sin incidencias demo asociadas.</p>'}
     <div class="actions"><button data-route="${truck.routeId ?? ''}">Ver ruta completa</button><button data-history="${truck.id}">Ver historial demo</button></div>`;
 }
@@ -565,9 +572,9 @@ function renderIncidentDetail(incident) { return `<div class="drawer-head"><p cl
 // route-detail actions) so it can have its own alignment without affecting every other `.controls`
 // block in the app.
 function renderRutasPanel() {
-  return `<h2>Rutas</h2><p class="demo">${demoNotice} · Municipio piloto configurable: ${pilotMunicipality.name}, ${pilotMunicipality.country}</p>
+  return `<h2>Rutas</h2><p class="demo">${demoPrefix}Municipio piloto configurable: ${pilotMunicipality.name}, ${pilotMunicipality.country}</p>
     <details class="create-route-toggle" id="createRouteToggle"><summary>+ Nueva ruta</summary>${renderCreateRoute()}</details>
-    <div class="search-bar"><input id="search" placeholder="Buscar ruta, camión o sector"><select id="sectorFilter"><option value="">Todos los sectores</option>${sectors.map((s) => `<option>${s.name}</option>`).join('')}</select></div>
+    <div class="search-bar"><input id="search" aria-label="Buscar ruta, camión o sector" placeholder="Buscar ruta, camión o sector"><select id="sectorFilter"><option value="">Todos los sectores</option>${sectors.map((s) => `<option>${s.name}</option>`).join('')}</select></div>
     <h3>Rutas del día</h3><div class="list compact" id="routeList">${renderRoutes(routes)}</div>`;
 }
 // SW-054: renamed "Flota" -> "Flotilla" (display label only, OPS_VIEW_LABELS above — the
@@ -593,18 +600,21 @@ function renderIncidenciasPanel() {
 // persistidos), mismo criterio que refreshRouteDurationHistory(). El panel se rellena de forma
 // asíncrona (refreshEfficiencyDashboard()) al abrir la pestaña, no al construir este HTML estático.
 function renderEstadisticasPanel() {
-  return `<h2>Estadísticas</h2><p class="demo">${demoNotice} · Eficiencia por ruta y chofer, calculada sobre corridas con duración/distancia medida real.</p>
+  return `<h2>Estadísticas</h2><p class="demo">${demoPrefix}Eficiencia por ruta y chofer, calculada sobre corridas con duración/distancia medida real.</p>
     <h3>Por ruta</h3><div id="statsByRoute" class="list"><p class="demo">Cargando…</p></div>
-    <h3>Por chofer</h3><div id="statsByDriver" class="list"><p class="demo">Cargando…</p></div>`;
+    <h3>Por chofer</h3><div id="statsByDriver" class="list"><p class="demo">Cargando…</p></div>
+    <h3>Por camión</h3><div id="statsByVehicle" class="list"><p class="demo">Cargando…</p></div>`;
 }
 async function refreshEfficiencyDashboard() {
   const byRouteEl = document.getElementById('statsByRoute');
   const byDriverEl = document.getElementById('statsByDriver');
-  if (!byRouteEl || !byDriverEl) return;
+  const byVehicleEl = document.getElementById('statsByVehicle');
+  if (!byRouteEl || !byDriverEl || !byVehicleEl) return;
   if (!realAdapter) {
     const message = '<p class="demo">Requiere un backend real conectado — la demo no acumula corridas persistidas.</p>';
     byRouteEl.innerHTML = message;
     byDriverEl.innerHTML = message;
+    byVehicleEl.innerHTML = message;
     return;
   }
   const result = await realAdapter.listRouteRuns();
@@ -612,10 +622,12 @@ async function refreshEfficiencyDashboard() {
   if (!result.ok) {
     byRouteEl.innerHTML = '<p class="demo">No se pudo cargar el histórico de corridas.</p>';
     byDriverEl.innerHTML = '<p class="demo">No se pudo cargar el histórico de corridas.</p>';
+    byVehicleEl.innerHTML = '<p class="demo">No se pudo cargar el histórico de corridas.</p>';
     return;
   }
   const byRoute = summarizeRouteRunsByRoute(result.data);
   const byDriver = summarizeRouteRunsByDriver(result.data);
+  const byVehicle = summarizeRouteRunsByVehicle(result.data);
   byRouteEl.innerHTML = byRoute.length
     ? byRoute.map((stat) => {
         const route = routes.find((r) => r.real_id === stat.routeId);
@@ -626,6 +638,13 @@ async function refreshEfficiencyDashboard() {
     ? byDriver.map((stat) => {
         const driver = drivers.find((d) => d.real_id === stat.driverId);
         return `<div class="row"><span>${driver?.name ?? 'Chofer eliminado'}<br><small>${stat.runsCount} corrida(s)</small></span><span>${formatMinutes(stat.avgDurationMinutes)} prom. · última ${formatMinutes(stat.lastDurationMinutes)}${stat.avgDistanceKm != null ? ` · ${stat.avgDistanceKm} km prom.` : ''}</span></div>`;
+      }).join('')
+    : '<p class="demo">Todavía no hay corridas con duración medida.</p>';
+  // SW-075: per-vehicle totals, same measured-run rules as the per-driver list above.
+  byVehicleEl.innerHTML = byVehicle.length
+    ? byVehicle.map((stat) => {
+        const truck = trucks.find((t) => t.real_id === stat.vehicleId);
+        return `<div class="row"><span>${truck?.unit ?? 'Vehículo eliminado'}<br><small>${stat.runsCount} corrida(s)</small></span><span>${formatMinutes(stat.avgDurationMinutes)} prom. · ${stat.distanceMeasuredRunsCount > 0 ? `${stat.totalDistanceKm} km en total` : 'sin distancia GPS registrada'}</span></div>`;
       }).join('')
     : '<p class="demo">Todavía no hay corridas con duración medida.</p>';
 }
@@ -697,17 +716,17 @@ function renderFleetManagement() {
   }
   return `<div class="card" id="fleetManagement">
     <h3>Registrar nuevo vehículo o chofer</h3>
-    <p class="demo">${demoNotice} · El chofer queda registrado sin cuenta de acceso todavía.</p>
+    <p class="demo">${demoPrefix}El chofer queda registrado sin cuenta de acceso todavía.</p>
     <div class="panel-grid two-col">
       <div>
         <h4>Nuevo vehículo</h4>
-        <div class="controls"><input id="fleetVehicleUnit" placeholder="Unidad (p. ej. SW-LS-07)"><input id="fleetVehiclePlate" placeholder="Matrícula"><input id="fleetVehicleMaxStops" type="number" min="1" placeholder="Paradas máx. por viaje" value="20"></div>
+        <div class="controls"><input id="fleetVehicleUnit" aria-label="Unidad" placeholder="Unidad (p. ej. SW-LS-07)"><input id="fleetVehiclePlate" aria-label="Matrícula" placeholder="Matrícula"><input id="fleetVehicleMaxStops" type="number" min="1" aria-label="Paradas máx. por viaje" placeholder="Paradas máx. por viaje" value="20"></div>
         <div class="controls"><button type="button" class="btn-primary" data-fleet="create-vehicle">Registrar vehículo</button></div>
         <p id="fleetVehicleStatus" class="demo"></p>
       </div>
       <div>
         <h4>Nuevo chofer</h4>
-        <div class="controls"><input id="fleetDriverName" placeholder="Nombre del chofer"><input id="fleetDriverPhone" placeholder="Teléfono"><input id="fleetDriverEmail" type="email" placeholder="Correo (para cuenta de acceso, opcional)"></div>
+        <div class="controls"><input id="fleetDriverName" aria-label="Nombre del chofer" placeholder="Nombre del chofer"><input id="fleetDriverPhone" aria-label="Teléfono" placeholder="Teléfono"><input id="fleetDriverEmail" type="email" aria-label="Correo (para cuenta de acceso, opcional)" placeholder="Correo (para cuenta de acceso, opcional)"></div>
         <div class="controls"><button type="button" class="btn-primary" data-fleet="create-driver">Registrar chofer</button></div>
         <p id="fleetDriverStatus" class="demo"></p>
       </div>
@@ -836,13 +855,13 @@ function renderOnboardingOverlay() {
   </div>`;
 }
 function renderOnboardingVehicleStep() {
-  return `<div class="controls"><input id="onboardVehicleUnit" placeholder="Unidad (p. ej. SW-LS-01)"><input id="onboardVehiclePlate" placeholder="Matrícula"><input id="onboardVehicleMaxStops" type="number" min="1" value="20" placeholder="Paradas máx. por viaje"></div>
+  return `<div class="controls"><input id="onboardVehicleUnit" aria-label="Unidad" placeholder="Unidad (p. ej. SW-LS-01)"><input id="onboardVehiclePlate" aria-label="Matrícula" placeholder="Matrícula"><input id="onboardVehicleMaxStops" type="number" min="1" value="20" aria-label="Paradas máx. por viaje" placeholder="Paradas máx. por viaje"></div>
     <p id="onboardVehicleStatus" class="demo"></p>
     <div class="controls"><button type="button" class="btn-primary" data-onboard="vehicle">Siguiente: chofer</button></div>`;
 }
 function renderOnboardingDriverStep() {
   return `<p class="demo">Vehículo registrado: <b>${onboardingVehicle.unit}</b></p>
-    <div class="controls"><input id="onboardDriverName" placeholder="Nombre del chofer"><input id="onboardDriverPhone" placeholder="Teléfono"><input id="onboardDriverEmail" type="email" placeholder="Correo (para cuenta de acceso, opcional)"></div>
+    <div class="controls"><input id="onboardDriverName" aria-label="Nombre del chofer" placeholder="Nombre del chofer"><input id="onboardDriverPhone" aria-label="Teléfono" placeholder="Teléfono"><input id="onboardDriverEmail" type="email" aria-label="Correo (para cuenta de acceso, opcional)" placeholder="Correo (para cuenta de acceso, opcional)"></div>
     <p id="onboardDriverStatus" class="demo"></p>
     <div class="controls"><button type="button" class="btn-primary" data-onboard="driver">Siguiente: primera ruta</button></div>`;
 }
@@ -936,8 +955,8 @@ function renderCreateRoute() {
   const availableTrucks = trucks.filter(isTruckAvailable);
   return `<div class="card" id="createRoute">
     <h3>Crear ruta</h3>
-    <p class="demo">${demoNotice} · Clic en el mapa para agregar puntos al trazo, en orden. Al finalizar se intenta ajustar el trazo a calles reales (OSRM); si no es posible, se usa línea recta entre los puntos. Opcionalmente, puedes optimizar el orden de las paradas (excepto la primera) para minimizar la distancia recorrida antes de ajustar a calles.</p>
-    <div class="controls"><input id="createRouteName" placeholder="Nombre de la ruta"><select id="createRouteVehicle"><option value="">Sin vehículo asignado (asignar después)</option>${availableTrucks.map((t) => `<option value="${t.id}">${t.unit}</option>`).join('')}</select></div>
+    <p class="demo">${demoPrefix}Clic en el mapa para agregar puntos al trazo, en orden. Al finalizar se intenta ajustar el trazo a calles reales (OSRM); si no es posible, se usa línea recta entre los puntos. Opcionalmente, puedes optimizar el orden de las paradas (excepto la primera) para minimizar la distancia recorrida antes de ajustar a calles.</p>
+    <div class="controls"><input id="createRouteName" aria-label="Nombre de la ruta" placeholder="Nombre de la ruta"><select id="createRouteVehicle"><option value="">Sin vehículo asignado (asignar después)</option>${availableTrucks.map((t) => `<option value="${t.id}">${t.unit}</option>`).join('')}</select></div>
     <div class="controls"><label><input type="checkbox" id="createRouteOptimize"> Optimizar orden de paradas (mantiene el primer punto como inicio)</label></div>
     <div id="createRouteMap" class="real-map driver-map" role="application" aria-label="Dibujar trazo de ruta nueva"></div>
     <div class="controls"><button type="button" class="btn-ghost" data-create-route="undo">Deshacer último punto</button><button type="button" class="btn-primary" data-create-route="finish">Finalizar y guardar</button></div>
@@ -974,7 +993,7 @@ function renderDriverMobile() {
     <p id="driverConnectionStatus" role="status" class="sw-field__hint"></p>
     <p id="driverStopsProgress"></p>
     <div id="driverMap" class="real-map driver-map" role="application" aria-label="Posición y trazo del vehículo (demo)"></div>
-    <p class="demo">${simulationNotice} · trazo histórico vía polling cada ${DRIVER_POLL_INTERVAL_MS / 1000}s (sin Realtime, ver docs/TECHNICAL_DEBT_REGISTER.md #14)</p>
+    <p class="demo">${simulationPrefix}trazo histórico vía polling cada ${DRIVER_POLL_INTERVAL_MS / 1000}s (sin Realtime, ver docs/TECHNICAL_DEBT_REGISTER.md #14)</p>
     ${renderPhoneGpsModeControl()}
     ${backendMode !== 'DEMO_ONLY' ? renderDriverGpsControl() : ''}
   </div>`;
@@ -1220,7 +1239,7 @@ function setDriverGpsMode(mode) {
 // es su propia <section id="conductor">, con el mismo contenido (renderDriverMobile() sin cambios)
 // solo movido a un lugar de primer nivel, gateado a los mismos roles que ya veían Municipal
 // (municipal_admin/dispatcher/driver — frontend/auth-gate.js's SECTION_ROLES).
-function renderDriverSection() { return `<section id="conductor" class="section card"><h2>Vista móvil conductor</h2><p class="demo">${demoNotice} · Posición y trazo del vehículo asignado.</p>${renderDriverMobile()}</section>`; }
+function renderDriverSection() { return `<section id="conductor" class="section card"><h2>Vista móvil conductor</h2><p class="demo">${demoPrefix}Posición y trazo del vehículo asignado.</p>${renderDriverMobile()}</section>`; }
 // SW-054: every route row shared the exact same flat background (only the currently-selected one
 // stood out) — the Project Owner reported the list was hard to scan. `route-status-${status}` adds
 // a left-border tint per status (CSS, `.list.compact .row[class*="route-status-"]`), reusing the
@@ -1255,13 +1274,13 @@ async function refreshCitizenReportsBlock() {
 function renderSupervisor() {
   const pendingVerification = routes.filter((route) => route.status === 'completed');
   const openIncidents = incidents.filter((incident) => incident.status !== 'Cerrada');
-  return `<section id="supervisor" class="section card"><h2>Panel de supervisor</h2><p class="demo">${demoNotice} · Verificación de rutas completadas y gestión de incidencias. "Verificar" ruta escribe contra Supabase cuando hay backend real conectado; "Marcar resuelta" una incidencia demo sigue siendo solo local, pero los reportes ciudadanos reales (abajo) sí escriben contra Supabase.</p><div class="panel-grid">
+  return `<section id="supervisor" class="section card"><h2>Panel de supervisor</h2><p class="demo">${demoPrefix}Verificación de rutas completadas y gestión de incidencias. "Verificar" ruta escribe contra Supabase cuando hay backend real conectado; "Marcar resuelta" una incidencia demo sigue siendo solo local, pero los reportes ciudadanos reales (abajo) sí escriben contra Supabase.</p><div class="panel-grid">
     <div><h3>Rutas pendientes de verificación</h3>${pendingVerification.length ? pendingVerification.map((route) => `<article class="row"><div><strong>${route.name}</strong><br>${route.sectors.join(' · ')} · ${route.progress}% completado</div><div>${pill('completed')}<button class="btn-primary" data-verify-route="${route.id}">Verificar</button></div></article>`).join('') : '<p>No hay rutas completadas pendientes de verificación.</p>'}</div>
     <div><h3>Incidencias abiertas</h3>${openIncidents.length ? openIncidents.map((incident) => `<article class="row"><div><strong>${incident.type}</strong><br>${incident.sector} · ${incident.priority}</div><div>${pill('open')}<button class="btn-primary" data-resolve-incident="${incident.code}">Marcar resuelta</button></div></article>`).join('') : '<p>Sin incidencias abiertas.</p>'}</div>
     ${renderCitizenReportsBlock()}
   </div></section>`;
 }
-function renderCitizen() { return `<section id="ciudadania" class="section card"><h2>Portal ciudadano</h2><p class="demo">${demoNotice}</p><div class="panel-grid"><div><h3>Consulta de recogida</h3><select id="citizenSector">${sectors.map((s) => `<option value="${s.id}">${s.name}</option>`).join('')}</select><p id="pickupResult"></p><h3>Avisos municipales</h3>${notifications.map((n) => `<div class="row">🔔 ${n}</div>`).join('')}</div><form id="incidentForm"><h3>Reportar incidencia</h3><select name="type"><option>Basura no recogida</option><option>Vertedero improvisado</option></select><select name="sector" id="incidentSector">${sectors.map((s) => `<option value="${s.id}">${s.name}</option>`).join('')}</select><textarea name="description" placeholder="Descripción demo"></textarea><input id="manualAddress" name="address" placeholder="Dirección manual si no usa GPS"><button type="button" id="useGeo">Usar ubicación GPS del navegador</button><p id="geoStatus" class="demo">GPS requiere permiso del usuario.</p><input id="evidence" type="file" accept="image/png,image/jpeg,image/webp,application/pdf" aria-label="Adjuntar evidencia demo"><p id="evidencePreview" class="demo">Evidencia local; no upload real verificado.</p><button class="btn-primary">Obtener folio</button><p id="folio"></p></form><div><h3>Consultar estado</h3><input id="folioSearch" value="SW-FOLIO-1001"><button id="checkFolio">Consultar</button><p id="folioStatus"></p><h3>Futura relación</h3><p>Preparado para Chatbot Municipal: preguntas frecuentes, folios y avisos por sector.</p></div></div></section>`; }
+function renderCitizen() { return `<section id="ciudadania" class="section card"><h2>Portal ciudadano</h2><p class="demo">${demoNotice}</p><div class="panel-grid"><div><h3>Consulta de recogida</h3><select id="citizenSector">${sectors.map((s) => `<option value="${s.id}">${s.name}</option>`).join('')}</select><p id="pickupResult"></p><h3>Avisos municipales</h3>${notifications.map((n) => `<div class="row">🔔 ${n}</div>`).join('')}</div><form id="incidentForm"><h3>Reportar incidencia</h3><select name="type"><option>Basura no recogida</option><option>Vertedero improvisado</option></select><select name="sector" id="incidentSector">${sectors.map((s) => `<option value="${s.id}">${s.name}</option>`).join('')}</select><textarea name="description" aria-label="Descripción demo" placeholder="Descripción demo"></textarea><input id="manualAddress" name="address" aria-label="Dirección manual si no usa GPS" placeholder="Dirección manual si no usa GPS"><button type="button" id="useGeo">Usar ubicación GPS del navegador</button><p id="geoStatus" class="demo">GPS requiere permiso del usuario.</p><input id="evidence" type="file" accept="image/png,image/jpeg,image/webp,application/pdf" aria-label="Adjuntar evidencia demo"><p id="evidencePreview" class="demo">Evidencia local; no upload real verificado.</p><button class="btn-primary">Obtener folio</button><p id="folio"></p></form><div><h3>Consultar estado</h3><input id="folioSearch" value="SW-FOLIO-1001"><button id="checkFolio">Consultar</button><p id="folioStatus"></p><h3>Futura relación</h3><p>Preparado para Chatbot Municipal: preguntas frecuentes, folios y avisos por sector.</p></div></div></section>`; }
 
 const money = (value) => `RD$ ${Number(value).toLocaleString('es-DO', { maximumFractionDigits: 0 })}`;
 const num = (value, suffix = '') => `${Number(value).toLocaleString('es-DO', { maximumFractionDigits: 1 })}${suffix}`;
@@ -1364,6 +1383,15 @@ function renderRouteSavingsComparison(m) {
   // (ver docs/SW030_COST_PARAMETERS.md, sección "Fuera de alcance / pendiente").
   return `<p>${c.routesCompared} ruta(s) real(es) comparada(s).</p><p><b>${num(c.savedKm, ' km')}</b> (${c.savedPercent}%) potencialmente evitados optimizando el orden de paradas · <b>${num(c.savedFuelLiters, ' L')}</b> / <b>${money(c.savedFuelCost)}</b> potencial.</p><p class="demo">Orden guardado: ${num(c.manualDistanceKm, ' km')} · Optimizada: ${num(c.optimizedDistanceKm, ' km')}</p>`;
 }
+// SW-075: environmental estimate block. The assumptions used travel with the result and are always
+// shown next to the numbers; null means "pendiente de datos", never a fabricated 0 (rule 6/7).
+function renderEnvironmentalImpact(environmental) {
+  if (!environmental) return '<p class="demo">Pendiente de datos operativos reales — todavía no hay corridas medidas para este municipio.</p>';
+  const co2 = environmental.avoidedCo2Kg === null
+    ? '<p class="demo">CO2 evitado: pendiente de datos — falta comparar rutas reales (mínimo 3 paradas por ruta).</p>'
+    : `<p><b>${num(environmental.avoidedCo2Kg, ' kg')}</b> de CO2 potencialmente evitados (${num(environmental.avoidedLiters, ' L')} de combustible).</p>`;
+  return `<p><b>${num(environmental.estimatedKg, ' kg')}</b> de residuos recolectados (estimado).</p>${co2}<p class="demo">Supuestos: ${environmental.assumptions.kgPerStop} kg por casa · ${environmental.assumptions.co2KgPerLiter} kg de CO2 por litro. ${environmental.notice}</p>`;
+}
 function renderImpactCenter(assumptions = defaultImpactAssumptions, filters = {}) {
   const metrics = calculateImpactMetrics(assumptions, filters, impactRealData);
   return `<section id="impacto" class="section impact-center card">
@@ -1396,6 +1424,7 @@ function renderImpactCenter(assumptions = defaultImpactAssumptions, filters = {}
     <div class="impact-panel${impactTab === 'analisis' ? '' : ' hidden'}" data-impact-tab-panel="analisis">
       <div class="impact-grid"><article><h3>Visualizaciones operativas</h3>${renderImpactBars(metrics)}</article><article><h3>Antes del sistema vs. con SmartWaste</h3><p class="impact-notice small">${IMPACT_SCENARIO_NOTICE}</p>${renderBeforeAfter(metrics)}</article></div>
       <div class="impact-grid"><article><h3>Antes vs. después — datos reales</h3><div id="impactRealOperational">${renderRealOperationalComparison(metrics)}</div></article><article><h3>Ruta optimizada vs. manual — datos reales</h3><div id="impactRealRouteSavings">${renderRouteSavingsComparison(metrics)}</div></article></div>
+      <div class="impact-grid"><article><h3>Impacto ambiental — estimado</h3><div id="impactEnvironmental">${renderEnvironmentalImpact(impactRealData.environmental)}</div></article></div>
       <div class="impact-grid"><article><h3>Integración futura con datos reales</h3>${Object.entries(metricReadiness).map(([k,v])=>`<p><b>${k}</b>: ${v.join(', ')}</p>`).join('')}</article><article><h3>Incidencias y sectores</h3><p>Categorías: ${Object.entries(metrics.incidents.byCategory).map(([k,v])=>`${k} (${v})`).join(' · ')}</p><p>Sectores: ${Object.entries(metrics.incidents.bySector).map(([k,v])=>`${k} (${v})`).join(' · ')}</p><p>Zonas con más incidencias: ${metrics.coverage.topIncidentZones.map((z)=>`${z.name} (${z.incidents})`).join(' · ')}</p></article></div>
     </div>
   </section>`;
@@ -1445,7 +1474,7 @@ function renderMaster() { return `<section id="master" class="section card"><h2>
 // que cada despachador la elige para su propio equipo sin afectar a los demás. Apagada por defecto:
 // sin tocar esto, el flujo de asignación de ruta se comporta exactamente igual que en SW-048.
 function renderConfiguracion() {
-  return `<section id="configuracion" class="section card"><h2>Configuración</h2><p class="demo">${demoNotice} · Preferencias de este navegador/operador, no del municipio.</p>
+  return `<section id="configuracion" class="section card"><h2>Configuración</h2><p class="demo">${demoPrefix}Preferencias de este navegador/operador, no del municipio.</p>
     <div class="controls"><label><input type="checkbox" id="guidedAssignmentToggle"${guidedAssignmentEnabled ? ' checked' : ''}> Activar flujo guiado "Poner en marcha" en el detalle de ruta</label></div>
     <p class="demo">Con esta opción activa, el detalle de una ruta sin vehículo o sin chofer muestra un solo formulario y un solo botón para asignar todo lo que falte e iniciarla de una vez, en vez de los pasos separados (asignar vehículo, luego asignar chofer, luego iniciar).</p></section>`;
 }
@@ -2753,7 +2782,7 @@ async function hydrateCostParameters() {
 // showSection('impacto') and call this function again — an infinite loop. Patching two known ids
 // sidesteps that entirely.
 async function hydrateRealComparisonData() {
-  if (!realAdapter) { impactRealData = { operational: null, routeSavings: null }; return; }
+  if (!realAdapter) { impactRealData = { operational: null, routeSavings: null, environmental: null }; return; }
   const runsResult = await realAdapter.listRouteRuns();
   const operational = runsResult.ok ? summarizeRouteRunsForMunicipality(runsResult.data) : null;
   // Only real (Supabase-backed) routes ever had saveRouteStops() called against a real backend — a
@@ -2762,15 +2791,31 @@ async function hydrateRealComparisonData() {
   const realRoutes = routes.filter((route) => route.real_id);
   const stopsResults = await Promise.all(realRoutes.map((route) => realAdapter.listRouteStops(route.real_id)));
   const stopsLists = stopsResults.filter((result) => result.ok).map((result) => result.data);
+  const routeSavings = aggregateRouteSavings(stopsLists);
+  // SW-075: environmental estimate (kg + CO2). route_runs does not record which stops were collected,
+  // so a measured run counts all of its route's stops (see shared/environmental-impact.js). Stays null
+  // ("pendiente de datos") until at least one measured run exists — never a fabricated number.
+  const stopCountsByRouteId = {};
+  realRoutes.forEach((route, index) => { if (stopsResults[index].ok) stopCountsByRouteId[route.real_id] = stopsResults[index].data.length; });
+  const hasMeasuredRuns = Boolean(operational && operational.runsCount > 0);
   impactRealData = {
-    operational: operational && operational.runsCount > 0 ? operational : null,
-    routeSavings: aggregateRouteSavings(stopsLists)
+    operational: hasMeasuredRuns ? operational : null,
+    routeSavings,
+    environmental: hasMeasuredRuns
+      ? calculateEnvironmentalImpact({
+          completedStops: countCompletedStops(runsResult.data, stopCountsByRouteId),
+          avoidedKm: routeSavings?.savedKm,
+          fuelEfficiency: currentImpactAssumptions().fuelEfficiency
+        })
+      : null
   };
   const metrics = calculateImpactMetrics(currentImpactAssumptions(), currentImpactFilters(), impactRealData);
   const opEl = document.getElementById('impactRealOperational');
   if (opEl) opEl.innerHTML = renderRealOperationalComparison(metrics);
   const savingsEl = document.getElementById('impactRealRouteSavings');
   if (savingsEl) savingsEl.innerHTML = renderRouteSavingsComparison(metrics);
+  const envEl = document.getElementById('impactEnvironmental');
+  if (envEl) envEl.innerHTML = renderEnvironmentalImpact(impactRealData.environmental);
 }
 // SW-030: shared by the municipal Economía tab's save button (token 'municipal') and Master Admin's
 // per-municipality forms (token = that municipality's real id) — see renderMaster()/
@@ -2833,7 +2878,7 @@ async function bootstrapRealBackend(ctx) {
   backendMode = realAdapter.mode;
   driverAuthContext = ctx;
   const sourceLabel = document.querySelector('.sim-controls span');
-  if (sourceLabel) sourceLabel.textContent = `${simulationNotice} · fuente desacoplada: ${backendMode}`;
+  if (sourceLabel) sourceLabel.textContent = `${simulationPrefix}fuente desacoplada: ${backendMode}`;
   // Codex review on PR #54 (P1): un fallo transitorio de red/RLS deja *Result.ok en false sin
   // agregar ningún real_id — antes eso era indistinguible de "este municipio no tiene nada
   // todavía", así que un error de lectura podía vaciar datos reales ya existentes y ofrecer
