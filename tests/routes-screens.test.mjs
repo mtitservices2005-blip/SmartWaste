@@ -1,5 +1,7 @@
 // SW-086: pantallas de Rutas (tabla, filtros, historial, formulario de ruta nueva). HTML puro, sin DOM.
 import assert from 'node:assert/strict';
+import { FILTERS } from '../shared/route-list.js';
+import { DAY_CHIPS } from '../shared/route-schedule.js';
 import { renderRoutesTable, renderFilterChips, renderDayChips, renderHistory, renderDraftPreview } from '../frontend/components/routes-screens.js';
 
 const rows = [
@@ -16,18 +18,18 @@ assert.ok(table.includes('Ruta &lt;Norte&gt;') && !table.includes('<Norte>'), 'e
 assert.match(table, /EN CURSO/);
 assert.match(renderRoutesTable({ rows: [] }), /Todavía no hay rutas/);
 
-const chips = renderFilterChips({ filter: 'activas', counts: { todas: 2, activas: 1, programadas: 1, completas: 0 } });
+const chips = renderFilterChips({ filters: FILTERS, filter: 'activas', counts: { todas: 2, activas: 1, programadas: 1, completas: 0 } });
 assert.match(chips, /data-route-filter="activas"[^>]*aria-pressed="true"/);
 assert.match(chips, /data-route-filter="todas"[^>]*aria-pressed="false"/);
 assert.match(chips, /Completas · 0/);
 assert.match(chips, /Todas · 2/);
 
-const days = renderDayChips({ selected: [1, 3] });
+const days = renderDayChips({ chips: DAY_CHIPS, selected: [1, 3] });
 assert.match(days, /data-day="1"[^>]*aria-pressed="true"/);
 assert.match(days, /data-day="0"[^>]*aria-pressed="false"/);
 assert.equal((days.match(/data-day=/g) || []).length, 7);
 assert.ok(days.indexOf('data-day="1"') < days.indexOf('data-day="0"'), 'lunes primero, domingo al final');
-assert.match(renderDayChips({ selected: [] }), /Sin días marcados/i);
+assert.match(renderDayChips({ chips: DAY_CHIPS, selected: [] }), /Sin días marcados/i);
 
 const hist = renderHistory({ entries: [{ id: 'a', dateText: '14 oct', durationText: '1 h 05 min', distanceText: '4,3 km', driverName: 'Carlos' }], count: 1, avgDurationText: '1 h 05 min', avgDistanceText: '4,3 km' });
 assert.match(hist, /Promedio/);
