@@ -92,3 +92,14 @@ body { margin: 0; padding-left: 68px; }
   .sw-kpi__label { font-size: 11px; }
   .sw-kpi__hint { display: none; }
 }
+.sw-fleet .sw-fleet__list > li > .detail-drawer { margin-top: var(--space-2); }
+.sw-fleet .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); }
+/* Detalle compacto dentro de la lista de flota (como el diseño): menos alto, mismos datos. */
+.sw-fleet .drawer-close { position: absolute; top: var(--space-2); right: var(--space-2); width: auto; min-height: 44px; padding: 0 var(--space-3); }
+.sw-fleet .detail-drawer { position: relative; top: auto; left: auto; right: auto; bottom: auto; max-height: none; padding: var(--space-3); }
+.sw-fleet .detail-drawer .drawer-head { padding-right: 96px; }
+.sw-fleet .detail-drawer .drawer-head .eyebrow { display: none; }
+.sw-fleet .detail-drawer h2 { margin: 0; font-size: var(--font-size-2); }
+.sw-fleet .detail-grid { gap: var(--space-1); }
+.sw-fleet .detail-grid p { padding: var(--space-2); font-size: var(--font-size-1); }
+.sw-fleet .detail-grid p b { font-size: 0.7rem; }

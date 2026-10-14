@@ -46,3 +46,10 @@ assert.match(renderLiveChip({ freshness: 'SIN DATOS RECIENTES', demo: false }), 
 const demoChip = renderLiveChip({ freshness: 'EN VIVO · 8 s', demo: true });
 assert.ok(demoChip.includes('Datos demo · no producción') && !demoChip.includes('EN VIVO'));
 console.log('mando-control ok');
+
+// SW-084: el detalle del camión se coloca debajo de su fila y sobrevive al redibujado de la lista.
+import { readFileSync } from 'node:fs';
+const appSrc = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
+assert.match(appSrc, /function placeDetail\(\)/, 'existe placeDetail');
+assert.match(appSrc, /panel\.appendChild\(detail\);\s*\n\s*list\.innerHTML/, 'el detalle sale de la lista antes de redibujarla');
+assert.match(appSrc, /placeDetail\(\); \}/, 'openDetail coloca el detalle');
