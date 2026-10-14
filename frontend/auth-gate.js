@@ -11,6 +11,7 @@
 // .../202607150006_sw020_rls_fixes.sql) is what actually protects data, not this file.
 
 import { createIdentityProvider } from '../shared/core-ports.js';
+import { demoLine } from './ui-mode.js';
 
 // Which top-level <section id="..."> each role may see, per docs/ROLE_PERMISSION_MATRIX.md.
 // `null` means the section is public: always shown, logged in or not (the citizen portal is
@@ -161,7 +162,7 @@ function renderOverlay() {
   overlay.innerHTML = `
     <form id="authForm" class="auth-card">
       <h2>SmartWaste — acceso municipal</h2>
-      <p class="demo">Datos demo · no producción</p>
+      ${demoLine("Datos demo · no producción", readSupabaseConfig())}
       <label>Correo<input type="email" name="email" required autocomplete="username"></label>
       <label>Contraseña<input type="password" name="password" required autocomplete="current-password"></label>
       <button type="submit">Ingresar</button>
