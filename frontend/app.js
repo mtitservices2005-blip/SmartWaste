@@ -21,7 +21,11 @@ import { createDriverTelemetrySession, createPersistentTelemetryQueue } from '..
 import { parseFuelLiters, buildFuelEntry } from '../shared/fuel-entry.js';
 import { connectionStatusText } from '../shared/driver-app-status.js';
 import { createDriverBackgroundBridge, getOrCreateDriverDeviceId } from '../shared/driver-app-background.js';
-import { demoOnly } from './ui-mode.js';
+import { demoOnly, isDemoUi } from './ui-mode.js';
+import { mountShell } from './shell.js';
+import { renderFleetList, mapTruckStatus } from './components/fleet-panel.js';
+import { renderKpiBar, renderLiveChip } from './components/kpi-bar.js';
+import { computeOpsKpis } from '../shared/ops-kpis.js';
 // SW-082: en despliegues con hideDemo no se muestran avisos de demo/simulación.
 const demoNotice = demoOnly(rawDemoNotice, readSupabaseConfig());
 const simulationNotice = demoOnly(rawSimulationNotice, readSupabaseConfig());
@@ -428,15 +432,43 @@ function mapStartAction() {
 // removed) stacked above the map itself, duplicating numbers already on Resumen (renderSummary()),
 // before ever reaching the map. Trimmed to just: route selector + start action + the map. Anything
 // needing the broader operational KPIs is a click away on Resumen.
+// SW-084: centro de control Mando. Mismos elementos e ids de antes (realMap, mapStartAction, #detail,
+// data-sim, routeFocusSelect); cambia la composición: mapa a pantalla completa con paneles flotantes
+// (flota + detalle, indicadores) y los controles de simulación en un menú que solo existe en modo demo.
+function fleetRows() {
+  return trucks.map((truck) => ({ id: truck.id, unit: truck.unit, state: truck.state, routeName: truck.routeId ? routeName(truck.routeId) : null, progress: truck.progress, updatedAt: truck.updatedAt }));
+}
+function controlCenterKpis() {
+  let coverageRate = null;
+  try { coverageRate = calculateImpactMetrics(currentImpactAssumptions(), {}, impactRealData).coverage.coverageRate; } catch { /* sin dato */ }
+  const distanceKm = routes.length ? routes.reduce((total, route) => total + (Number(route.distanceKm) || 0), 0) : null;
+  const vehicles = trucks.map((truck) => ({ id: truck.id, status: mapTruckStatus(truck.state).kpi, lastCapturedAt: truck.real_id ? realPositions[truck.real_id]?.capturedAt ?? null : null }));
+  return computeOpsKpis({ vehicles, coverageRate, distanceKm, fuelLiters: null });
+}
+function refreshControlCenter() {
+  const list = $('#swFleetList');
+  if (!list) return;
+  list.innerHTML = renderFleetList({ trucks: fleetRows(), selectedId: selectedTruckId });
+  const kpis = controlCenterKpis();
+  const bar = $('#swKpis'); if (bar) bar.outerHTML = renderKpiBar(kpis);
+  const live = $('#swLive'); if (live) live.outerHTML = renderLiveChip({ freshness: kpis.freshness, demo: isDemoUi(readSupabaseConfig()) });
+}
 function renderMapPanel() {
-  return `<div class="map-card">
-      <div class="map-header">
-        <div><p class="eyebrow">${pilotMunicipality.branding.label}</p><h1>Mapa operativo real de ${pilotMunicipality.name}</h1><p class="demo">${demoPrefix}Las rutas son simuladas, no oficiales del ayuntamiento.</p><p class="demo gps-legend">● = posición GPS real · el resto son camiones simulados</p></div>
-        <div class="sim-controls" aria-label="Controles de simulación"><span>${simulationPrefix}fuente desacoplada: ${backendMode}</span>${routeFocusSelect()}<span id="mapStartAction">${mapStartAction()}</span><button class="btn-primary" data-sim="start">Iniciar</button><button data-sim="pause">Pausar</button><button data-sim="reset">Reiniciar</button><button class="btn-ghost" data-sim="speed">${simulationSpeed}×</button><button class="btn-ghost" data-sim="fullscreen">Pantalla completa</button></div>
-      </div>
+  const demoUi = isDemoUi(readSupabaseConfig());
+  const kpis = controlCenterKpis();
+  const sim = demoUi ? `<details class="sw-sim"><summary>Simulación</summary><div class="sim-controls" aria-label="Controles de simulación"><span>${simulationPrefix}fuente desacoplada: ${backendMode}</span><button class="btn-primary" data-sim="start">Iniciar</button><button data-sim="pause">Pausar</button><button data-sim="reset">Reiniciar</button><button class="btn-ghost" data-sim="speed">${simulationSpeed}×</button></div></details>` : '';
+  return `<div class="map-card sw-control">
       <div id="realMap" class="real-map" role="application" aria-label="Mapa OpenStreetMap de Laguna Salada"><div class="map-fallback"><strong>Mapa externo no disponible.</strong><span>Fallback operativo demo: use listas, paneles y coordenadas simuladas.</span></div></div>
-    </div>
-    <aside class="detail-drawer is-hidden" id="detail" aria-hidden="true"></aside>`;
+      <div class="map-header sw-control__top">
+        <div class="sw-control__title"><p class="eyebrow">${pilotMunicipality.branding.label}</p><h1>Mapa operativo real de ${pilotMunicipality.name}</h1>${renderLiveChip({ freshness: kpis.freshness, demo: demoUi })}<p class="demo">${demoPrefix}Las rutas son simuladas, no oficiales del ayuntamiento.</p><p class="demo gps-legend">● = posición GPS real · el resto son camiones simulados</p></div>
+        <div class="sw-control__actions">${routeFocusSelect()}<span id="mapStartAction">${mapStartAction()}</span><button class="btn-ghost" data-sim="fullscreen">Pantalla completa</button>${sim}</div>
+      </div>
+      <section class="sw-fleet" aria-label="Flota">
+        <div id="swFleetList">${renderFleetList({ trucks: fleetRows(), selectedId: selectedTruckId })}</div>
+        <aside class="detail-drawer is-hidden" id="detail" aria-hidden="true"></aside>
+      </section>
+      ${renderKpiBar(kpis)}
+    </div>`;
 }
 
 // SW-042 (docs/TECHNICAL_DEBT_REGISTER.md #24): there was no UI to assign a driver to a vehicle at
@@ -1480,6 +1512,10 @@ function renderConfiguracion() {
 }
 
 app.innerHTML = `${renderSummary()}${renderOperations()}${renderSupervisor()}${renderDriverSection()}${renderCitizen()}${renderImpactCenter()}${renderConfiguracion()}${renderMaster()}`;
+// SW-084: riel lateral Mando, selector de tema oscuro/claro y menú "Más" (frontend/shell.js).
+mountShell({ document, window, storage: (() => { try { return window.localStorage; } catch { return undefined; } })(), hideDemo: Boolean(readSupabaseConfig()?.hideDemo), onThemeChange: () => { drawMapLayers(); } });
+// SW-084: colores del tema para las capas del mapa (el CSS no llega a las polilíneas de Leaflet).
+function themeColor(name, fallback) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback; }
 
 // initMap() and initDriverMap() both call this at page load, before window.L exists yet — without
 // caching the in-flight promise, the second call would inject a second <script> tag, and whichever
@@ -1509,6 +1545,8 @@ function initMap() {
 // Selecting a truck/incident or closing the detail drawer clears selectedRouteId (see
 // selectTruck()/selectIncident()/closeDetail() below) and returns to showing everything.
 function drawMapLayers(L = window.L) {
+  refreshControlCenter(); // SW-084: la lista de flota y los indicadores siguen el mismo ritmo que el mapa
+  const colorPrimary = themeColor('--color-primary', '#0f7b4f'); const colorInfo = themeColor('--color-info', '#155eef');
   if (!mapReady) return;
   [...routeLayers, ...truckMarkers, ...incidentMarkers].forEach((layer) => layer.remove()); routeLayers = []; truckMarkers = []; incidentMarkers = [];
   const focusRoute = selectedRouteId ? routeById(selectedRouteId) : null;
@@ -1517,9 +1555,9 @@ function drawMapLayers(L = window.L) {
   const visibleIncidents = focusRoute ? incidents.filter((incident) => focusRoute.incidents.includes(incident.code)) : incidents;
   visibleRoutes.forEach((route) => {
     const path = routeGeometry(route.id); const cut = Math.max(1, Math.round((path.length - 1) * (route.progress / 100)));
-    routeLayers.push(L.polyline(path.slice(0, cut + 1), { color: '#0f7b4f', weight: 7, opacity: .9 }).addTo(map));
-    routeLayers.push(L.polyline(path.slice(cut), { color: '#155eef', weight: 6, opacity: .45, dashArray: '8 10' }).addTo(map).on('click', () => selectRoute(route.id)));
-    routeLayers.push(...path.map((point, index) => L.circleMarker(point, { radius: index <= cut ? 5 : 4, color: index <= cut ? '#0f7b4f' : '#155eef', fillOpacity: .85 }).addTo(map)));
+    routeLayers.push(L.polyline(path.slice(0, cut + 1), { color: colorPrimary, weight: 7, opacity: .9 }).addTo(map));
+    routeLayers.push(L.polyline(path.slice(cut), { color: colorInfo, weight: 6, opacity: .45, dashArray: '8 10' }).addTo(map).on('click', () => selectRoute(route.id)));
+    routeLayers.push(...path.map((point, index) => L.circleMarker(point, { radius: index <= cut ? 5 : 4, color: index <= cut ? colorPrimary : colorInfo, fillOpacity: .85 }).addTo(map)));
   });
   let focusTruckPosition = null;
   visibleTrucks.forEach((truck) => {

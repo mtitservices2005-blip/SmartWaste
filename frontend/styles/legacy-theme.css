@@ -1,0 +1,52 @@
+/* SW-084: adapta las pantallas aún no rediseñadas (styles.css) a los temas Mando. Se carga DESPUÉS de
+   styles.css y solo usa tokens: no hay colores fijos aquí. Cuando SW-086 a SW-088 rediseñen cada pantalla,
+   estas reglas se irán eliminando. */
+:root {
+  font-family: "IBM Plex Sans", Inter, Arial, sans-serif;
+  color: var(--color-text);
+  background: var(--color-background);
+  --card: var(--color-surface);
+  --green: var(--color-primary);
+  --blue: var(--color-info);
+  --amber: var(--color-warning);
+  --red: var(--color-danger);
+  --muted: var(--color-muted);
+  --ink: var(--color-text);
+}
+.card, .map-card, .detail-drawer { background: var(--color-surface); color: var(--color-text); border-color: var(--color-border); box-shadow: var(--shadow-1); }
+.kpi, .detail-grid p, .municipal-360 article, .impact-grid article { background: var(--color-background-alt); border-color: var(--color-border); }
+.comparison-table p { background: var(--color-surface); border-color: var(--color-border); }
+.kpi.alert { background: var(--color-danger-bg); }
+.kpi.attention, .alert, .impact-notice { background: var(--color-warning-bg); color: var(--color-warning); }
+.row, .incident-row, button.row, button.incident-row { background: var(--color-background-alt); border-color: var(--color-border); color: var(--color-text); }
+.row.selected, .incident-row.selected { background: var(--color-info-bg); border-color: var(--color-info); }
+.selectable:hover, .incident-row:hover { border-color: var(--color-info); }
+.row-link:hover { color: var(--color-info); }
+input, select, textarea { background: var(--color-surface); color: var(--color-text); border-color: var(--color-border-input); }
+button { background: var(--color-surface); color: var(--color-text); border-color: var(--color-border-input); }
+button:hover { border-color: var(--color-muted); }
+button.btn-primary, .ops-tab.active, details.create-route-toggle summary, .onboarding-steps li.done { background: var(--color-primary); color: var(--color-primary-contrast); border-color: var(--color-primary); }
+button.btn-primary:hover, details.create-route-toggle[open] summary { background: var(--color-primary-strong); border-color: var(--color-primary-strong); }
+button.btn-ghost { background: transparent; }
+button.btn-ghost:hover { background: var(--color-background-alt); border-color: var(--color-border); }
+.onboarding-steps li { background: var(--color-background-alt); color: var(--color-text); }
+.onboarding-steps li.active { background: var(--color-info); color: var(--color-background); }
+.ops-nav, details.create-route-toggle, details.create-route-toggle > .card { background: var(--color-surface); border-color: var(--color-border); }
+.drawer-close { background: var(--color-background-alt); color: var(--color-text); border: 1px solid var(--color-border); }
+.mobile { background: var(--color-surface); border-color: var(--color-border); }
+.timeline { border-left-color: var(--color-primary); }
+.progress, .mini-bar { background: var(--color-border); }
+.pill { background: var(--status-fuera-servicio-bg); color: var(--status-fuera-servicio); }
+.pill.delayed, .pill.open, .pill.needs_vehicle, .pill.needs_driver { background: var(--status-detenido-bg); color: var(--status-detenido); }
+.pill.active, .pill.verified, .pill.completed, .pill.in_progress, .pill.ready { background: var(--status-en-ruta-bg); color: var(--status-en-ruta); }
+.pill.offline { background: var(--status-fuera-servicio-bg); color: var(--status-fuera-servicio); }
+.pill.stopped { background: var(--status-sin-senal-bg); color: var(--status-sin-senal); }
+.pill.maintenance { background: var(--status-disponible-bg); color: var(--status-disponible); }
+.app-toast-success { background: var(--color-primary); color: var(--color-primary-contrast); }
+.app-toast-error { background: var(--color-danger); color: var(--color-background); }
+.real-map, .map-fallback { background: var(--map-bg, var(--color-background-alt)); border-color: var(--color-border); color: var(--color-text); }
+.leaflet-tile-pane { filter: var(--map-tile-filter, none); }
+.truck-icon small { background: var(--color-surface); color: var(--color-text); }
+.truck-icon.stopped { color: var(--status-detenido); }
+.truck-icon.offline { color: var(--status-fuera-servicio); }
+.leaflet-incident span { background: var(--color-warning-bg); border-color: var(--color-warning); }

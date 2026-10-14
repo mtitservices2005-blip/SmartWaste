@@ -20,7 +20,9 @@ assert.equal(IMPACT_DEMO_NOTICE, 'Datos simulados para demostración · no repre
 assert.equal(IMPACT_SCENARIO_NOTICE, 'Escenario simulado para demostración');
 assert.ok(app.includes('IMPACT_DEMO_NOTICE'));
 assert.ok(app.includes('IMPACT_SCENARIO_NOTICE'));
-assert.ok(html.includes('Impacto y Ahorros'));
+// SW-084: la navegación vive en components/rail.js (index.html solo trae el contenedor del riel).
+const rail = readFileSync(new URL('../frontend/components/rail.js', import.meta.url), 'utf8');
+assert.ok(html.includes('id="swRail"') && rail.includes('Impacto y Ahorros'));
 assert.ok(app.includes('tile.openstreetmap.org'));
 assert.ok(app.includes('Mapa externo no disponible'));
 assert.ok(app.includes('simulationNotice')); // imported from demo data and rendered in map controls
