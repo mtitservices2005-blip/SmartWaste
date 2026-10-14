@@ -1,0 +1,93 @@
+name: Android test APK
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/android-test-apk.yml'
+      - 'frontend/**'
+      - 'mobile/**'
+      - 'shared/**'
+      - 'tests/driver-app-background.test.mjs'
+      - 'tests/driver-app-telemetry.test.mjs'
+      - 'tests/frontend-no-service-role.test.mjs'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/android-test-apk.yml'
+      - 'frontend/**'
+      - 'mobile/**'
+      - 'shared/**'
+      - 'tests/driver-app-background.test.mjs'
+      - 'tests/driver-app-telemetry.test.mjs'
+      - 'tests/frontend-no-service-role.test.mjs'
+
+permissions:
+  contents: read
+
+jobs:
+  build-debug-apk:
+    name: Build signed debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      # Google retired the legacy `tools` SDK package (see android-actions/setup-android#537).
+      # setup-android@v3 requested it by default and failed with "Failed to find package 'tools'".
+      # Use @v4, whose default no longer includes `tools`, and pin the packages we actually need.
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
+
+      - name: Install Android SDK packages
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+
+      - name: Install locked mobile dependencies
+        working-directory: mobile
+        run: npm ci
+
+      - name: Run driver app and credential-safety unit tests
+        run: |
+          set -euo pipefail
+          node tests/driver-app-background.test.mjs
+          node tests/driver-app-telemetry.test.mjs
+          node tests/frontend-no-service-role.test.mjs
+
+      - name: Generate and synchronize the Android project
+        working-directory: mobile
+        run: npm run sync:android
+
+      - name: Build debug-signed test APK
+        working-directory: mobile/android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon assembleDebug
+
+      - name: Stage APK with a clear download name
+        run: cp mobile/android/app/build/outputs/apk/debug/app-debug.apk SmartWaste-Driver-debug.apk
+
+      - name: Upload SmartWaste Driver debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartWaste-Driver-debug-APK
+          path: SmartWaste-Driver-debug.apk
+          if-no-files-found: error
+          retention-days: 14

@@ -4,9 +4,10 @@
 // ---------------------------------------------------------------------------------------------
 // SCAN POLICY (what is — and is not — a finding)
 // ---------------------------------------------------------------------------------------------
-// Scope: text files (see TEXT_EXTENSIONS) discovered recursively under frontend/ and dist/. Files
+// Scope: text files (see TEXT_EXTENSIONS) discovered recursively under frontend/, dist/ and
+// mobile/ (sources), plus the artifact the mobile build actually packages into mobile/www/. Files
 // with any other extension (images, fonts, wasm, ...) are skipped as binary. node_modules/.git
-// subtrees are skipped. Only these two trees are scanned: comments/prose OUTSIDE them (docs,
+// subtrees are skipped. Only these trees are scanned: comments/prose OUTSIDE them (docs,
 // specs, shared/, tests) are deliberately out of scope and never reported.
 //
 // Inside the scanned trees the current sources legitimately contain the LITERAL string
@@ -33,12 +34,13 @@
 // written to an isolated OS temp dir (never inside frontend/ or dist/) and the malicious ones must
 // be reported. All fixtures are deleted in finally.
 //
-// The current frontend/ and a freshly built dist/ must yield ZERO findings; the test prints a
-// clear summary and exits 0.
+// The current frontend/, a freshly built dist/, mobile/ sources, and the freshly built mobile/www/
+// bundle must yield ZERO findings; the test prints a clear summary and exits 0.
 // ---------------------------------------------------------------------------------------------
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { join, extname } from 'node:path';
@@ -46,8 +48,12 @@ import { join, extname } from 'node:path';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const FRONTEND_DIR = join(ROOT, 'frontend');
 const DIST_DIR = join(ROOT, 'dist');
+const MOBILE_DIR = join(ROOT, 'mobile');
+const MOBILE_WWW_DIR = join(MOBILE_DIR, 'www');
 const BUILD_SCRIPT = fileURLToPath(new URL('../scripts/build-frontend-config.mjs', import.meta.url));
+const MOBILE_BUILD_SCRIPT = fileURLToPath(new URL('../mobile/scripts/build-web.mjs', import.meta.url));
 const INDEX_HTML = join(DIST_DIR, 'index.html');
+const MOBILE_INDEX_HTML = join(MOBILE_WWW_DIR, 'index.html');
 
 // Only these extensions are treated as scannable text. Everything else (png/svg binary content,
 // woff, wasm, ...) is skipped so we never read a binary blob as utf8.
@@ -133,12 +139,12 @@ export function scanContent(content, filePath = '<mem>') {
 /**
  * Recursively scans `rootDir` for text files and returns every finding.
  */
-export function scanTree(rootDir) {
+export function scanTree(rootDir, skipDirs = SKIP_DIRS) {
   const findings = [];
   const walk = (dir) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (entry.isDirectory()) {
-        if (SKIP_DIRS.has(entry.name)) continue;
+        if (skipDirs.has(entry.name)) continue;
         walk(join(dir, entry.name));
       } else if (entry.isFile()) {
         if (!TEXT_EXTENSIONS.has(extname(entry.name).toLowerCase())) continue;
@@ -170,6 +176,33 @@ const BUILD_ENV = {
   SUPABASE_ANON_KEY: 'anon-key-ficticia-de-prueba-sw072'
 };
 
+// SW-074 (CA5): the mobile bundle must be proven clean too — Claude's review flagged that the test
+// scanned mobile/ SOURCES but never the artifact actually packaged by Capacitor into mobile/www/.
+// Mirror the dist/ control exactly: run the real mobile build (mobile/scripts/build-web.mjs) in an
+// isolated child process with an explicit, fictional env, then scan the generated bundle.
+//
+// The mobile build needs esbuild + @capacitor/core from mobile/node_modules (see mobile/package.json).
+// tests.yml's dependency-free unit job does NOT install them; the Android APK workflow
+// (.github/workflows/android-test-apk.yml) runs `npm ci` inside mobile/ before this very test. So the
+// packaged-bundle pass runs wherever the mobile toolchain is present (Android workflow, local dev
+// after `cd mobile && npm ci`) and is reported — never silently claimed — when it is not.
+const MOBILE_BUILD_ENV = {
+  ...BASE_ENV,
+  SUPABASE_URL: 'https://mobile-scan.invalid',
+  SUPABASE_ANON_KEY: 'anon-key-ficticia-mobile-sw074'
+};
+
+function mobileToolchainAvailable() {
+  const require = createRequire(import.meta.url);
+  try {
+    require.resolve('esbuild', { paths: [MOBILE_DIR] });
+    require.resolve('@capacitor/core', { paths: [MOBILE_DIR] });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const tempDir = mkdtempSync(join(tmpdir(), 'sw072-scan-'));
 
 try {
@@ -178,13 +211,64 @@ try {
   assert.ok(existsSync(DIST_DIR), 'el build debe producir dist/');
   assert.ok(existsSync(INDEX_HTML), 'el build debe producir dist/index.html');
 
-  // a. El estado actual del repo (frontend/ + dist/ recién construido) no debe tener hallazgos.
-  for (const [label, dir] of [['frontend/', FRONTEND_DIR], ['dist/', DIST_DIR]]) {
-    const findings = scanTree(dir);
+  // a. El estado actual del repo no debe tener hallazgos: frontend/ (fuentes), dist/ (recién
+  // construido con env ficticio) y mobile/ (fuentes). scanTree() trata un directorio ausente como
+  // vacío, así que la puerta sigue activa sin depender de que exista mobile/.
+  const sourceTargets = [
+    ['frontend/', FRONTEND_DIR, SKIP_DIRS],
+    ['dist/', DIST_DIR, SKIP_DIRS],
+    // mobile/ sources, excluding the generated www/ bundle which is scanned separately below.
+    ['mobile/', MOBILE_DIR, new Set([...SKIP_DIRS, 'www'])]
+  ];
+  for (const [label, dir, skipDirs] of sourceTargets) {
+    const findings = scanTree(dir, skipDirs);
     assert.equal(
       findings.length,
       0,
       `${label} no debe contener service_role ni JWT: ${JSON.stringify(findings, null, 2)}`
+    );
+  }
+
+  // a'. SW-074 (CA5): build the real mobile bundle and scan the packaged artifact itself. The build
+  // runs as an isolated child with an explicit, fictional env (never the test process' full
+  // environment), exactly like the dist/ control above.
+  const mobileBundleBuilt = mobileToolchainAvailable();
+  if (mobileBundleBuilt) {
+    const mobileBuild = spawnSync(process.execPath, [MOBILE_BUILD_SCRIPT], {
+      env: MOBILE_BUILD_ENV,
+      cwd: MOBILE_DIR,
+      encoding: 'utf8'
+    });
+    assert.equal(
+      mobileBuild.status,
+      0,
+      `el build del bundle móvil debe terminar con exit 0 (stderr: ${mobileBuild.stderr})`
+    );
+    assert.ok(existsSync(MOBILE_INDEX_HTML), 'el build móvil debe producir mobile/www/index.html');
+    assert.ok(
+      existsSync(join(MOBILE_WWW_DIR, 'native-background-geolocation.js')),
+      'el build móvil debe producir el bundle nativo de geolocalización en mobile/www/'
+    );
+
+    // Prove the scanned artifact is the real, config-injected bundle (fictional anon key), not a
+    // stale or empty directory — and that no secret was injected instead.
+    const mobileIndex = readFileSync(MOBILE_INDEX_HTML, 'utf8');
+    assert.match(
+      mobileIndex,
+      /SMARTWASTE_SUPABASE_CONFIG/,
+      'el bundle móvil debe incluir el bloque de config inyectado en build time'
+    );
+    assert.match(
+      mobileIndex,
+      /anon-key-ficticia-mobile-sw074/,
+      'el bundle móvil debe llevar la anon key ficticia inyectada, no un secreto real'
+    );
+
+    const bundleFindings = scanTree(MOBILE_WWW_DIR);
+    assert.equal(
+      bundleFindings.length,
+      0,
+      `mobile/www/ (bundle empaquetado) no debe contener service_role ni JWT: ${JSON.stringify(bundleFindings, null, 2)}`
     );
   }
 
@@ -227,7 +311,18 @@ try {
   assert.ok(jwtFindings.some((f) => f.rule === 'R2-jwt'), 'R2 debe rechazar un JWT con forma eyJ...');
 
   console.log('frontend-no-service-role ok');
-  console.log(`  · built dist/ (env ficticio explícito) y escaneado frontend/ + dist/: 0 hallazgos`);
+  console.log(`  · built dist/ (env ficticio explícito) y escaneado frontend/ + dist/ + mobile/ (fuentes): 0 hallazgos`);
+  if (mobileBundleBuilt) {
+    console.log(`  · built mobile/www/ (env ficticio explícito) y escaneado el bundle empaquetado mobile/www/: 0 hallazgos`);
+  } else {
+    console.warn(
+      `  · mobile/www/: bundle empaquetado NO escaneado en este entorno — falta la toolchain móvil ` +
+      `(esbuild + @capacitor/core en mobile/node_modules).`
+    );
+    console.warn(
+      `    Instala las dependencias con \`cd mobile && npm ci\` o ejecuta el workflow Android para cubrir CA5.`
+    );
+  }
   console.log(`  · política: R1 service_role con valor / identificador *_SERVICE_ROLE_KEY (código, comentarios excluidos); R2 JWT eyJ... (cualquier parte)`);
 } catch (error) {
   console.error(error);

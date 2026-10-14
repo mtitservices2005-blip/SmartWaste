@@ -55,6 +55,8 @@ export function validateTelemetryPosition(position, { maxAgeMs = 1000 * 60 * 60 
   if (!Number.isFinite(Number(position?.longitude)) || Number(position.longitude) < -180 || Number(position.longitude) > 180) errors.push('longitude is invalid');
   if (!TELEMETRY_SOURCES.includes(position?.source)) errors.push('source is not recognized');
   if (position?.source === 'browser_geolocation' && !position?.route_run_id) errors.push('route_run_id is required for browser geolocation');
+  if (position?.source === 'driver_app' && !position?.route_run_id) errors.push('route_run_id is required for driver app telemetry');
+  if (position?.source === 'driver_app' && !position?.device_id) errors.push('device_id is required for driver app telemetry');
   if (position?.speed !== undefined && Number(position.speed) < 0) errors.push('speed cannot be negative');
   const recordedAt = Date.parse(position?.captured_at ?? position?.recorded_at ?? '');
   if (!Number.isFinite(recordedAt)) errors.push('timestamp is invalid');
