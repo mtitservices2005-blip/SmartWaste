@@ -1,7 +1,7 @@
 // SW-085 (CA2): "Rutas de hoy" del chofer. Fecha local de República Dominicana (America/Santo_Domingo, UTC-4,
 // sin horario de verano), orden por hora de inicio y luego por creación, y cuál es la siguiente pendiente.
 import assert from 'node:assert/strict';
-import { selectTodayRoutes, formatStartTime, localDateKey } from '../shared/driver-today.js';
+import { selectTodayRoutes, formatStartTime, localDateKey, formatTodayText } from '../shared/driver-today.js';
 
 // 14 oct 2026, 7:30 a. m. en Santo Domingo = 11:30 UTC.
 const now = new Date('2026-10-14T11:30:00Z');
@@ -63,4 +63,6 @@ assert.deepEqual(selectTodayRoutes([run('s')], { now }).items.map((r) => r.id), 
 assert.deepEqual(selectTodayRoutes([], { now }), { items: [], nextId: null, activeId: null });
 assert.deepEqual(selectTodayRoutes(undefined, { now }), { items: [], nextId: null, activeId: null });
 assert.deepEqual(selectTodayRoutes([null, {}], { now }).items, []);
+assert.equal(formatTodayText(new Date('2026-10-14T11:30:00Z')), 'Miércoles 14 de octubre');
+assert.equal(formatTodayText(new Date('2026-10-14T02:00:00Z')), 'Martes 13 de octubre', 'a las 10 p. m. del martes en RD sigue siendo martes');
 console.log('driver-today ok');

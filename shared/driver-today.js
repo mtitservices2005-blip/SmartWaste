@@ -44,3 +44,10 @@ export function selectTodayRoutes(runs, { now = new Date() } = {}) {
   const withSlot = items.map(({ _t, ...r }) => ({ ...r, slot: r.status === 'completed' ? 'completada' : r.id === activeId ? 'en-curso' : r.id === nextId ? 'siguiente' : 'proxima' }));
   return { items: withSlot, nextId, activeId };
 }
+
+// "Miércoles 14 de octubre", en la fecha local de República Dominicana.
+export function formatTodayText(now = new Date()) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('es-DO', { timeZone: TIME_ZONE, weekday: 'long', day: 'numeric', month: 'long' }).formatToParts(now).map((p) => [p.type, p.value]));
+  const weekday = `${parts.weekday.charAt(0).toUpperCase()}${parts.weekday.slice(1)}`;
+  return `${weekday} ${parts.day} de ${parts.month}`;
+}

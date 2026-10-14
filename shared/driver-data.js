@@ -21,7 +21,7 @@ export async function findDriverRow(client, { userId, municipalityId, email }) {
 }
 
 async function fetchRuns(client, driverId, withSchedule) {
-  const cols = `id,route_id,vehicle_id,status,created_at${withSchedule ? ',scheduled_start_at' : ''}`;
+  const cols = `id,route_id,vehicle_id,status,created_at,started_at${withSchedule ? ',scheduled_start_at' : ''}`;
   return client.from('route_runs').select(cols).eq('driver_id', driverId).in('status', RUN_STATUSES).order('created_at', { ascending: false }).limit(50);
 }
 
@@ -56,7 +56,7 @@ export async function loadDriverToday(client, { userId, municipalityId, email })
       const stops = (stopsRes.data ?? []).filter((s) => s.route_id === run.route_id).sort((a, b) => a.sequence - b.sequence);
       return {
         id: run.id, routeId: run.route_id, vehicleId: run.vehicle_id, status: run.status, createdAt: run.created_at,
-        scheduledStartAt: run.scheduled_start_at ?? null,
+        scheduledStartAt: run.scheduled_start_at ?? null, startedAt: run.started_at ?? null,
         routeName: nameById.get(run.route_id) ?? 'Ruta',
         stopsCount: stops.length, stops, distanceText: pathDistanceText(stops), estimatedMinutes: null
       };

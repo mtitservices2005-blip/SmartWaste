@@ -21,6 +21,7 @@ assert.ok(today.includes('8:00 a. m.'));
 assert.ok(today.includes('Disponible a las 11:00 a. m.') && today.includes('Disponible a las 2:00 p. m.'));
 assert.ok(today.includes('Al iniciar, tu ubicación se comparte con la central en tiempo real.'));
 
+assert.match(today, /data-driver-logout[^>]*>Cerrar sesión</, 'el chofer puede salir');
 const todayNoGps = renderDriverToday({ name: 'Ana', dateText: 'x', unit: 'C-02', gpsActive: false, routes: [] });
 assert.ok(!todayNoGps.includes('GPS activo'), 'sin GPS no dice que está activo');
 assert.ok(todayNoGps.includes('GPS inactivo'));

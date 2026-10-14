@@ -27,25 +27,26 @@ export function renderDriverToday({ name = '', dateText = '', unit = null, gpsAc
     <h2 class="sw-driver__label">Rutas de hoy · ${routes.length}</h2>
     ${list}
     <p class="sw-driver__foot">Al iniciar, tu ubicación se comparte con la central en tiempo real.</p>
+    <button type="button" class="sw-driver__link sw-driver__link--center" data-driver-logout>Cerrar sesión</button>
   </section>`;
 }
 
 export function renderDriverRun({ unit = null, connected = false, routeName = '', progressText = '—', nextStopLabel = null, nextStopDistance = '—', timeText = '—', distanceText = '—', pendingText = '—' } = {}) {
-  const stat = (label, value) => `<div class="sw-driver__stat"><span>${e(label)}</span><strong>${e(value)}</strong></div>`;
+  const stat = (label, value, field) => `<div class="sw-driver__stat"><span>${e(label)}</span><strong data-driver-field="${field}">${e(value)}</strong></div>`;
   return `<section class="sw-driver sw-driver--run" aria-label="Ruta en curso">
     <div id="driverRunMap" class="sw-driver__map" role="application" aria-label="Mapa de la ruta en curso"></div>
-    <div class="sw-driver__map-top"><span class="sw-driver__chip">Camión ${e(unit ?? '—')}</span><span class="sw-driver__chip${connected ? ' sw-driver__chip--on' : ' sw-driver__chip--off'}" role="status">${connected ? 'Conectado' : 'Sin conexión'}</span></div>
+    <div class="sw-driver__map-top"><span class="sw-driver__chip">Camión ${e(unit ?? '—')}</span><span data-driver-field="connected" class="sw-driver__chip${connected ? ' sw-driver__chip--on' : ' sw-driver__chip--off'}" role="status">${connected ? 'Conectado' : 'Sin conexión'}</span></div>
     <div class="sw-driver__sheet">
       <div class="sw-driver__grab" aria-hidden="true"></div>
-      <div class="sw-driver__sheet-top"><h2>${e(routeName)}</h2><span>${e(progressText)}</span></div>
-      <div class="sw-driver__next"><div><span>Siguiente parada</span><strong>${e(nextStopLabel ?? 'Sin paradas pendientes')}</strong></div><span class="sw-driver__dist">${e(nextStopDistance)}</span></div>
-      <div class="sw-driver__stats">${stat('Tiempo', timeText)}${stat('Distancia', distanceText)}${stat('Pendientes', pendingText)}</div>
+      <div class="sw-driver__sheet-top"><h2>${e(routeName)}</h2><span data-driver-field="progress">${e(progressText)}</span></div>
+      <div class="sw-driver__next"><div><span>Siguiente parada</span><strong data-driver-field="next-label">${e(nextStopLabel ?? 'Sin paradas pendientes')}</strong></div><span class="sw-driver__dist" data-driver-field="next-distance">${e(nextStopDistance)}</span></div>
+      <div class="sw-driver__stats">${stat('Tiempo', timeText, 'time')}${stat('Distancia', distanceText, 'distance')}${stat('Pendientes', pendingText, 'pending')}</div>
       <button type="button" class="sw-driver__cta sw-driver__cta--danger" data-driver-finish-open>Terminar ruta</button>
     </div>
   </section>`;
 }
 
-export function renderDriverFinish({ routeName = '', timeText = '—', distanceText = '—', stopsText = '—', errorMessage = '' } = {}) {
+export function renderDriverFinish({ routeName = '', timeText = '—', distanceText = '—', stopsText = '—', errorMessage = '', fuelValue = '' } = {}) {
   const stat = (label, value) => `<div class="sw-driver__stat"><span>${e(label)}</span><strong>${e(value)}</strong></div>`;
   const err = errorMessage ? `<p class="sw-driver__error" role="alert">${e(errorMessage)}</p>` : '<p class="sw-driver__error" role="alert"></p>';
   return `<section class="sw-driver sw-driver--finish" aria-label="Terminar ruta">
@@ -55,7 +56,7 @@ export function renderDriverFinish({ routeName = '', timeText = '—', distanceT
       <p class="sw-driver__sub">Revisa el resumen y anota el combustible.</p>
       <div class="sw-driver__stats">${stat('Tiempo', timeText)}${stat('Distancia', distanceText)}${stat('Paradas', stopsText)}</div>
       <label class="sw-driver__field-label" for="driverFuelLiters">Combustible usado (litros)</label>
-      <input class="sw-driver__input" id="driverFuelLiters" name="fuelLiters" type="text" inputmode="decimal" autocomplete="off" placeholder="Ejemplo: 18,5">
+      <input class="sw-driver__input" id="driverFuelLiters" name="fuelLiters" type="text" inputmode="decimal" autocomplete="off" placeholder="Ejemplo: 18,5" value="${e(fuelValue)}">
       ${err}
       <button type="button" class="sw-driver__cta" data-driver-finish-save>Guardar y terminar</button>
       <button type="button" class="sw-driver__cta sw-driver__cta--ghost" data-driver-finish-back>Volver a la ruta</button>
@@ -81,5 +82,13 @@ export function renderDriverAccess({ errorMessage = '' } = {}) {
       <button type="submit" class="sw-driver__cta">Entrar</button>
     </form>
     <p class="sw-driver__foot">¿No tienes acceso? Pídele a la central que registre tu correo.</p>
+  </section>`;
+}
+
+export function renderDriverLoadError({ message = '' } = {}) {
+  return `<section class="sw-driver sw-driver--error" aria-label="No se pudieron cargar tus rutas">
+    <div class="sw-driver__empty"><p><strong>No se pudieron cargar tus rutas.</strong></p><p>${e(message)}</p></div>
+    <button type="button" class="sw-driver__cta" data-driver-retry>Reintentar</button>
+    <button type="button" class="sw-driver__link sw-driver__link--center" data-driver-logout>Cerrar sesión</button>
   </section>`;
 }
