@@ -7,7 +7,7 @@ const G_LOGO = '<span class="sw-driver__glogo" aria-hidden="true">G</span>';
 
 function routeCard(r) {
   const meta = [`${Number(r.stopsCount) || 0} paradas`, r.distanceText || '—'];
-  if (r.slot === 'siguiente') meta.push(`tiempo estimado ${Number(r.estimatedMinutes) || 0} min`);
+  if (r.slot === 'siguiente' && Number(r.estimatedMinutes) > 0) meta.push(`tiempo estimado ${Math.round(Number(r.estimatedMinutes))} min`);
   const time = r.startLabel ? `<span class="sw-driver__time">${e(r.startLabel)}</span>` : '';
   let action = '';
   if (r.slot === 'siguiente') action = `<button type="button" class="sw-driver__cta" data-driver-start-route="${e(r.id)}">Iniciar ruta</button>`;

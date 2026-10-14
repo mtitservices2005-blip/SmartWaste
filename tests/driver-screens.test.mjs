@@ -37,6 +37,11 @@ assert.ok(!todayActive.includes('data-driver-start-route'));
 const todayDone = renderDriverToday({ name: 'Luis', dateText: 'x', unit: 'C-03', gpsActive: true, routes: [route('H', { slot: 'completada' })] });
 assert.ok(todayDone.includes('Completada'));
 
+// Sin tiempo estimado conocido no se inventa uno ("0 min").
+const todayNoEta = renderDriverToday({ name: 'Ana', dateText: 'x', unit: 'C-01', gpsActive: true, routes: [route('E', { slot: 'siguiente', estimatedMinutes: null })] });
+assert.ok(!todayNoEta.includes('tiempo estimado') && !todayNoEta.includes('0 min'));
+assert.ok(todayNoEta.includes('12 paradas · 6,4 km'));
+
 const evil = renderDriverToday({ name: '<img src=x onerror=1>', dateText: 'x', unit: '<b>', gpsActive: true, routes: [route('<script>', { slot: 'siguiente' })] });
 assert.ok(!evil.includes('<img') && !evil.includes('<script>') && !evil.includes('<b>'), 'todo texto se escapa');
 
