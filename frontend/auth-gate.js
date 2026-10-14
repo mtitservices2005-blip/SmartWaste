@@ -10,6 +10,7 @@
 // public; RLS (supabase/migrations/202607150004_sw014_auth_rls_policies.sql,
 // .../202607150006_sw020_rls_fixes.sql) is what actually protects data, not this file.
 
+import { driverAuthOptions, isConnectivityError } from '../shared/session-restore.js';
 import { createIdentityProvider } from '../shared/core-ports.js';
 import { demoLine } from './ui-mode.js';
 import { renderDriverAccess } from './components/driver-screens.js';
@@ -222,7 +223,7 @@ export async function initAuthGate() {
   // the whole auth gate — no login overlay, no error shown, just the raw demo dashboard unfiltered.
   const { createClient } = await import('./vendor/supabase-js.mjs');
   const driverApp = isDriverApp();
-  const client = createClient(config.url, config.anonKey, driverApp ? { auth: { flowType: 'pkce' } } : undefined);
+  const client = createClient(config.url, config.anonKey, driverApp ? driverAuthOptions() : undefined);
   authClient = client;
   const identity = createIdentityProvider(client);
 
@@ -280,8 +281,9 @@ export async function initAuthGate() {
     try {
       const driver = await findDriverRow(client, { userId: resolved.user.id, municipalityId: resolved.ctx.municipality_id, email: resolved.user.email });
       return decideDriverAccess({ authEmail: resolved.user.email, role: resolved.ctx.role, municipalityId: resolved.ctx.municipality_id, driver, userId: resolved.user.id });
-    } catch {
-      return { allowed: false, message: 'No se pudo comprobar tu acceso. Revisa tu conexión e inténtalo de nuevo.' };
+    } catch (error) {
+      // Sin señal no es lo mismo que "correo no registrado": la sesión guardada se conserva.
+      return { allowed: false, connectivity: isConnectivityError(error), message: 'No se pudo comprobar tu acceso. Revisa tu conexión e inténtalo de nuevo.' };
     }
   }
 
@@ -295,7 +297,7 @@ export async function initAuthGate() {
       grantApplicationAccess(existing.ctx);
       return existing.ctx;
     }
-    await client.auth.signOut();
+    if (!access.connectivity) await client.auth.signOut();
     initialError = access.message ?? DRIVER_ACCESS_DENIED_MESSAGE;
   }
 

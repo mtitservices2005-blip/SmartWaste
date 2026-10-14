@@ -10,8 +10,9 @@ assert.equal(isDriverApp({}), false);
 assert.equal(isDriverApp(undefined), false);
 
 const src = readFileSync(new URL('../frontend/auth-gate.js', import.meta.url), 'utf8');
-assert.match(src, /flowType: 'pkce'/, 'PKCE solo en el APK');
-assert.match(src, /driverApp \? \{ auth: \{ flowType: 'pkce' \} \} : undefined/, 'el cliente del personal no cambia');
+const restore = readFileSync(new URL('../shared/session-restore.js', import.meta.url), 'utf8');
+assert.match(restore, /flowType: 'pkce'/, 'PKCE solo en el APK');
+assert.match(src, /driverApp \? driverAuthOptions\(\) : undefined/, 'el cliente del personal no cambia');
 assert.match(src, /checkDriverAccess\(existing\)/, 'la sesión guardada también pasa por la regla de acceso');
 assert.match(src, /checkDriverAccess\(resolved\)/, 'cada inicio de sesión pasa por la regla de acceso');
 assert.match(src, /await client\.auth\.signOut\(\);\s*\n\s*initialError|showError\(access\.message\); await client\.auth\.signOut\(\)/, 'si no está registrado se cierra la sesión');
