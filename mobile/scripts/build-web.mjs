@@ -25,7 +25,8 @@ function stripGeneratedConfig(html) {
 
 function injectSupabaseConfig(config) {
   const configScript = config ? `  <script>\n    window.SMARTWASTE_SUPABASE_CONFIG = ${JSON.stringify(config)};\n  </script>\n` : '';
-  const block = `${configStart}\n${configScript}  <script src="./native-background-geolocation.js"></script>\n  ${configEnd}\n`;
+  const driverFlag = '  <script>\n    window.SMARTWASTE_DRIVER_APP = true;\n  </script>\n';
+  const block = `${configStart}\n${driverFlag}${configScript}  <script src="./native-background-geolocation.js"></script>\n  ${configEnd}\n`;
   const html = stripGeneratedConfig(readFileSync(indexPath, 'utf8'));
   const scriptTag = '<script type="module" src="./app.js"></script>';
   if (!html.includes(scriptTag)) throw new Error(`Expected ${scriptTag} in copied frontend/index.html.`);

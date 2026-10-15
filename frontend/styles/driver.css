@@ -1,0 +1,69 @@
+/* SW-085: app del conductor (Hoy, En ruta, Terminar ruta, Acceso). Usa solo tokens, así sigue los temas oscuro y claro. */
+.sw-driver { box-sizing: border-box; max-width: 480px; margin: 0 auto; min-height: 100dvh; padding: var(--space-5) var(--space-4) var(--space-5); background: var(--color-background); color: var(--color-text); display: flex; flex-direction: column; gap: var(--space-3); font-family: 'IBM Plex Sans', Inter, Arial, sans-serif; }
+.sw-driver * { box-sizing: border-box; }
+.sw-driver h1 { margin: 0; font-size: 1.7rem; line-height: 1.1; }
+.sw-driver h2, .sw-driver h3 { margin: 0; }
+.sw-driver__head { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-3); }
+.sw-driver__date { margin: 0 0 var(--space-1); color: var(--color-muted); font-size: var(--font-size-1); }
+.sw-driver__chip { display: inline-flex; align-items: center; min-height: 36px; padding: 0 var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-2); background: var(--color-surface); color: var(--color-text); font-weight: 600; font-size: var(--font-size-1); white-space: nowrap; }
+.sw-driver__chip--on { color: var(--color-primary); }
+.sw-driver__chip--off { color: var(--color-warning); border-color: var(--color-warning); }
+.sw-driver__label { margin: var(--space-3) 0 0; color: var(--color-muted); font-size: var(--font-size-2); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.sw-driver__routes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.sw-driver__route { padding: var(--space-4); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-3); display: flex; flex-direction: column; gap: var(--space-3); }
+.sw-driver__route--next { border-color: var(--color-primary); }
+.sw-driver__route-top { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-3); }
+.sw-driver__route h3 { font-size: 1.3rem; }
+.sw-driver__time { font-family: ui-monospace, 'IBM Plex Mono', Consolas, monospace; color: var(--color-muted); font-size: var(--font-size-2); white-space: nowrap; }
+.sw-driver__meta, .sw-driver__note, .sw-driver__sub { margin: 0; color: var(--color-muted); font-size: var(--font-size-2); }
+.sw-driver__badge { display: inline-block; padding: var(--space-1) var(--space-3); border-radius: 999px; background: var(--status-disponible-bg); color: var(--status-disponible); font-weight: 700; font-size: var(--font-size-1); }
+.sw-driver__cta { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 52px; border: 1px solid transparent; border-radius: var(--radius-2); background: var(--color-primary); color: var(--color-primary-contrast); font: inherit; font-weight: 700; font-size: 1rem; cursor: pointer; }
+.sw-driver__cta--danger { background: var(--color-danger); color: var(--color-primary-contrast); }
+.sw-driver__cta--ghost { background: transparent; color: var(--color-text); border-color: var(--color-border); }
+.sw-driver__empty { padding: var(--space-5); background: var(--color-surface); border: 1px dashed var(--color-border-input); border-radius: var(--radius-3); color: var(--color-muted); }
+.sw-driver__empty p { margin: 0 0 var(--space-2); }
+.sw-driver__foot { margin: auto 0 0; padding-top: var(--space-4); text-align: center; color: var(--color-muted); font-size: var(--font-size-2); }
+.sw-driver__error { margin: 0; min-height: 0; color: var(--color-danger); font-weight: 600; font-size: var(--font-size-2); }
+.sw-driver__error:empty { display: none; }
+/* En ruta: mapa a pantalla completa con hoja inferior */
+.sw-driver--run { position: fixed; inset: 0; max-width: none; padding: 0; gap: 0; }
+.sw-driver__map { position: absolute !important; inset: 0; isolation: isolate; z-index: 0; background: var(--map-bg, var(--color-background-alt)); }
+.sw-driver__map .leaflet-tile-pane { filter: var(--map-tile-filter, none); }
+.sw-driver__map-top { position: absolute; z-index: 5; top: var(--space-4); left: var(--space-4); right: var(--space-4); display: flex; justify-content: space-between; gap: var(--space-3); pointer-events: none; }
+.sw-driver__sheet { position: absolute; z-index: 5; left: 0; right: 0; bottom: 0; max-width: 480px; margin: 0 auto; padding: var(--space-3) var(--space-4) calc(var(--space-4) + env(safe-area-inset-bottom)); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-3) var(--radius-3) 0 0; box-shadow: var(--shadow-2); display: flex; flex-direction: column; gap: var(--space-3); }
+.sw-driver__grab { width: 44px; height: 4px; margin: 0 auto var(--space-1); border-radius: 4px; background: var(--color-border-input); opacity: .6; }
+.sw-driver__sheet-top { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-3); }
+.sw-driver__sheet-top h2 { font-size: 1.3rem; }
+.sw-driver__sheet-top span { color: var(--color-muted); font-size: var(--font-size-2); }
+.sw-driver__next { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); background: var(--color-background-alt); border: 1px solid var(--color-border); border-radius: var(--radius-2); }
+.sw-driver__next > div { display: flex; flex-direction: column; min-width: 0; }
+.sw-driver__next span { color: var(--color-muted); font-size: var(--font-size-1); }
+.sw-driver__next strong { font-size: 1.15rem; overflow-wrap: anywhere; }
+.sw-driver__next .sw-driver__dist { color: var(--color-primary); font-family: ui-monospace, 'IBM Plex Mono', Consolas, monospace; font-weight: 700; font-size: 1.15rem; white-space: nowrap; }
+.sw-driver__stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-2); }
+.sw-driver__stat { display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-3); background: var(--color-background-alt); border: 1px solid var(--color-border); border-radius: var(--radius-2); min-width: 0; }
+.sw-driver__stat span { color: var(--color-muted); font-size: var(--font-size-1); }
+.sw-driver__stat strong { font-family: ui-monospace, 'IBM Plex Mono', Consolas, monospace; font-size: 1.35rem; overflow-wrap: anywhere; }
+/* Terminar */
+.sw-driver--finish { position: fixed; inset: 0; max-width: none; padding: 0; }
+.sw-driver__sheet--full h2 { font-size: 1.6rem; }
+.sw-driver__field-label { color: var(--color-muted); font-size: var(--font-size-2); font-weight: 600; }
+.sw-driver__input { width: 100%; min-height: 56px; padding: 0 var(--space-4); background: var(--color-background-alt); color: var(--color-text); border: 1px solid var(--color-border); border-radius: var(--radius-2); font: inherit; font-size: 1.1rem; }
+.sw-driver__input:focus-visible, .sw-driver__cta:focus-visible, .sw-driver__google:focus-visible, .sw-driver__link:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 2px; }
+.sw-driver__input::placeholder { color: var(--color-muted); }
+/* Acceso */
+.sw-driver--access { padding-top: var(--space-6); }
+.sw-driver__brand { display: flex; align-items: center; gap: var(--space-3); font-weight: 700; font-size: 1.2rem; margin-bottom: var(--space-4); }
+.sw-driver__logo { display: inline-flex; align-items: center; justify-content: center; width: 46px; height: 46px; border-radius: var(--radius-2); background: var(--color-primary); color: var(--color-primary-contrast); font-weight: 800; }
+.sw-driver__google { display: flex; align-items: center; justify-content: center; gap: var(--space-3); width: 100%; min-height: 56px; background: var(--color-surface); color: var(--color-text); border: 1px solid var(--color-border-input); border-radius: var(--radius-2); font: inherit; font-weight: 600; font-size: 1.05rem; cursor: pointer; }
+.sw-driver__glogo { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 50%; background: #fff; color: #4285f4; font-weight: 800; font-size: .95rem; }
+.sw-driver__or { display: flex; align-items: center; gap: var(--space-3); margin: var(--space-3) 0; color: var(--color-muted); font-size: var(--font-size-2); }
+.sw-driver__or::before, .sw-driver__or::after { content: ''; flex: 1; height: 1px; background: var(--color-border); }
+.sw-driver__form { display: flex; flex-direction: column; gap: var(--space-2); flex: 1; }
+.sw-driver__form .sw-driver__cta { margin-top: auto; }
+.sw-driver__link { align-self: flex-end; min-height: 44px; padding: 0; background: none; border: 0; color: var(--color-primary); font: inherit; font-size: var(--font-size-2); cursor: pointer; }
+.sw-driver__link--center { align-self: center; }
+
+/* SW-085: en el APK del conductor solo se ve su pantalla */
+body.sw-driver-mode > *:not(#driverApp):not(script):not(.sw-driver-overlay):not(#swToast):not(.toast) { display: none !important; }
+body.sw-driver-mode #driverApp { display: block; }

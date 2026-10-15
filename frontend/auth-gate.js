@@ -12,6 +12,10 @@
 
 import { createIdentityProvider } from '../shared/core-ports.js';
 import { demoLine } from './ui-mode.js';
+import { renderDriverAccess } from './components/driver-screens.js';
+import { decideDriverAccess, DRIVER_ACCESS_DENIED_MESSAGE } from '../shared/driver-access.js';
+import { findDriverRow } from '../shared/driver-data.js';
+import { DRIVER_REDIRECT_URL, extractAuthCode, needsOwnPassword } from '../shared/driver-oauth.js';
 
 // Which top-level <section id="..."> each role may see, per docs/ROLE_PERMISSION_MATRIX.md.
 // `null` means the section is public: always shown, logged in or not (the citizen portal is
@@ -83,6 +87,10 @@ export function readSupabaseConfig(win = typeof window !== 'undefined' ? window 
 // actually run and resolved a config (mirrors this file's opt-in-only behavior).
 let authClient = null;
 export function getAuthClient() { return authClient; }
+
+// SW-085: el APK del conductor (mobile/scripts/build-web.mjs) fija window.SMARTWASTE_DRIVER_APP = true.
+// Solo en ese modo el acceso usa la pantalla del conductor, el botón de Google y la regla de "solo registrados".
+export const isDriverApp = (win = globalThis.window) => win?.SMARTWASTE_DRIVER_APP === true;
 
 // Provisioned accounts receive this Auth-owned marker when their initial credential is temporary.
 // The marker, rather than the account role, is the source of truth: drivers, municipal admins, and
@@ -173,6 +181,15 @@ function renderOverlay() {
   return overlay;
 }
 
+function renderDriverOverlay(errorMessage = '') {
+  const overlay = document.createElement('div');
+  overlay.id = 'authOverlay';
+  overlay.className = 'sw-driver-overlay';
+  overlay.innerHTML = renderDriverAccess({ errorMessage });
+  document.body.append(overlay);
+  return overlay;
+}
+
 export function renderPasswordChangeOverlay() {
   const overlay = document.createElement('div');
   overlay.id = 'authOverlay';
@@ -204,7 +221,8 @@ export async function initAuthGate() {
   // esm.sh being unreachable from the visitor's network (corporate firewall, etc.) silently killed
   // the whole auth gate — no login overlay, no error shown, just the raw demo dashboard unfiltered.
   const { createClient } = await import('./vendor/supabase-js.mjs');
-  const client = createClient(config.url, config.anonKey);
+  const driverApp = isDriverApp();
+  const client = createClient(config.url, config.anonKey, driverApp ? { auth: { flowType: 'pkce' } } : undefined);
   authClient = client;
   const identity = createIdentityProvider(client);
 
@@ -255,39 +273,93 @@ export async function initAuthGate() {
     });
   }
 
-  // Reload with an existing signed-in session: skip the form if we can resolve a context.
-  const existing = await resolveAuthenticatedUser();
-  if (existing) {
-    if (requiresPasswordChange(existing.user)) return requireOwnPassword(existing);
-    grantApplicationAccess(existing.ctx);
-    return existing.ctx;
+  // SW-085 (CA7): en el APK del conductor, tras CUALQUIER inicio de sesión se comprueba que el correo esté
+  // registrado como conductor activo. Si no, se cierra la sesión. Las reglas de seguridad (RLS) son la última capa.
+  async function checkDriverAccess(resolved) {
+    if (!driverApp) return { allowed: true };
+    try {
+      const driver = await findDriverRow(client, { userId: resolved.user.id, municipalityId: resolved.ctx.municipality_id, email: resolved.user.email });
+      return decideDriverAccess({ authEmail: resolved.user.email, role: resolved.ctx.role, municipalityId: resolved.ctx.municipality_id, driver, userId: resolved.user.id });
+    } catch {
+      return { allowed: false, message: 'No se pudo comprobar tu acceso. Revisa tu conexión e inténtalo de nuevo.' };
+    }
   }
 
-  const overlay = renderOverlay();
+  // Reload with an existing signed-in session: skip the form if we can resolve a context.
+  let initialError = '';
+  const existing = await resolveAuthenticatedUser();
+  if (existing) {
+    const access = await checkDriverAccess(existing);
+    if (access.allowed) {
+      if (needsOwnPassword(existing.user)) return requireOwnPassword(existing);
+      grantApplicationAccess(existing.ctx);
+      return existing.ctx;
+    }
+    await client.auth.signOut();
+    initialError = access.message ?? DRIVER_ACCESS_DENIED_MESSAGE;
+  }
+
+  const overlay = driverApp ? renderDriverOverlay(initialError) : renderOverlay();
   return new Promise((resolve) => {
-    overlay.querySelector('#skipToPublic').addEventListener('click', (event) => {
+    const errorEl = overlay.querySelector('#authError, [role="alert"]');
+    const showError = (message) => { if (errorEl) errorEl.textContent = message; };
+
+    async function finishSignIn() {
+      const resolved = await resolveAuthenticatedUser();
+      if (!resolved) { showError(driverApp ? DRIVER_ACCESS_DENIED_MESSAGE : 'Sesión iniciada, pero sin membresía activa en ningún municipio.'); await client.auth.signOut(); return; }
+      const access = await checkDriverAccess(resolved);
+      if (!access.allowed) { showError(access.message); await client.auth.signOut(); return; }
+      overlay.remove();
+      // D5: quien entra con Google no repite la contraseña temporal; con correo y contraseña sí.
+      if (needsOwnPassword(resolved.user)) { resolve(await requireOwnPassword(resolved)); return; }
+      grantApplicationAccess(resolved.ctx);
+      resolve(resolved.ctx);
+    }
+
+    overlay.querySelector('#skipToPublic')?.addEventListener('click', (event) => {
       event.preventDefault();
       overlay.remove();
       applySectionVisibility(pickVisibleSections(null));
       applyOpsViewVisibility(pickVisibleOpsViews(null));
       resolve(null);
     });
-    overlay.querySelector('#authForm').addEventListener('submit', async (event) => {
+
+    overlay.querySelector('#driverLoginForm, #authForm').addEventListener('submit', async (event) => {
       event.preventDefault();
-      const errorEl = overlay.querySelector('#authError');
-      errorEl.textContent = '';
+      showError('');
       const formData = new FormData(event.target);
       const { error: signInError } = await client.auth.signInWithPassword({ email: formData.get('email'), password: formData.get('password') });
-      if (signInError) { errorEl.textContent = 'Credenciales inválidas.'; return; }
-      const resolved = await resolveAuthenticatedUser();
-      if (!resolved) { errorEl.textContent = 'Sesión iniciada, pero sin membresía activa en ningún municipio.'; await client.auth.signOut(); return; }
-      overlay.remove();
-      if (requiresPasswordChange(resolved.user)) {
-        resolve(await requireOwnPassword(resolved));
-        return;
-      }
-      grantApplicationAccess(resolved.ctx);
-      resolve(resolved.ctx);
+      if (signInError) { showError('Credenciales inválidas.'); return; }
+      await finishSignIn();
     });
+
+    if (driverApp) {
+      const native = Boolean(globalThis.window?.Capacitor?.isNativePlatform?.());
+      const plugins = globalThis.window?.Capacitor?.Plugins ?? {};
+      overlay.querySelector('[data-driver-google]')?.addEventListener('click', async () => {
+        showError('');
+        const redirectTo = native ? DRIVER_REDIRECT_URL : globalThis.window.location.href.split('#')[0];
+        const { data, error } = await client.auth.signInWithOAuth({ provider: 'google', options: { redirectTo, skipBrowserRedirect: true } });
+        if (error || !data?.url) { showError('No se pudo abrir Google. Inténtalo de nuevo.'); return; }
+        if (native && plugins.Browser?.open) await plugins.Browser.open({ url: data.url });
+        else globalThis.window.location.assign(data.url);
+      });
+      // Regreso de Google al enlace profundo de la app: se completa la sesión con el código (PKCE).
+      plugins.App?.addListener?.('appUrlOpen', async ({ url }) => {
+        const result = extractAuthCode(url);
+        if (!result) return;
+        plugins.Browser?.close?.();
+        if (result.error) { showError(/sign.?ups?|not allowed|database error/i.test(result.error) ? DRIVER_ACCESS_DENIED_MESSAGE : 'No se pudo entrar con Google. Inténtalo de nuevo.'); return; }
+        const { error } = await client.auth.exchangeCodeForSession(result.code);
+        if (error) { showError('No se pudo entrar con Google. Inténtalo de nuevo.'); return; }
+        await finishSignIn();
+      });
+      overlay.querySelector('[data-driver-forgot]')?.addEventListener('click', async () => {
+        const email = String(overlay.querySelector('input[name="email"]')?.value ?? '').trim();
+        if (!email) { showError('Escribe tu correo arriba y vuelve a tocar "¿Olvidaste tu contraseña?".'); return; }
+        await client.auth.resetPasswordForEmail(email);
+        showError('Si tu correo está registrado, recibirás un enlace para cambiar tu contraseña.');
+      });
+    }
   });
 }
