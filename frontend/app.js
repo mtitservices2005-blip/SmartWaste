@@ -32,6 +32,8 @@ import { FILTERS, buildRouteRows, filterRows, countByFilter, headerText } from '
 import { addPoint, movePoint, undoPoint, clearPoints, validateDraft, previewDraft } from '../shared/route-draft.js';
 import { buildRouteHistory } from '../shared/route-history.js';
 import { DAY_CHIPS, normalizeDays, normalizeStartTime, formatDays, formatTimeOfDay } from '../shared/route-schedule.js';
+import { buildVehicleRows, buildDriverRows, fleetHeader, validateVehicleForm, validateDriverForm } from '../shared/fleet-list.js';
+import { renderFleetTabs, renderVehiclesTable, renderDriversTable, renderVehicleForm, renderDriverForm } from './components/fleet-screens.js';
 import { renderRoutesTable, renderFilterChips, renderDayChips, renderHistory, renderDraftPreview } from './components/routes-screens.js';
 // SW-082: en despliegues con hideDemo no se muestran avisos de demo/simulación.
 const demoNotice = demoOnly(rawDemoNotice, readSupabaseConfig());
@@ -286,6 +288,7 @@ const REAL_GPS_FRESHNESS_MS = 30000;
 // entries already have, so it can go straight into generateRouteStopPoints()/routePaths[id] once
 // finished.
 let drawnRoutePoints = [];
+let fleetTab = 'camiones'; // SW-087: pestaña activa de Flotilla
 let rutasFocusId = null;
 let routeFilter = 'todas'; // SW-086: filtro de la tabla de Rutas
 let createRouteSaving = false;
@@ -641,13 +644,19 @@ function renderRutasPanel() {
 // vehicles and drivers now follow the same top-to-bottom pattern — creation forms first, lists
 // after — instead of the old inconsistency (vehicle list rendered before any form; driver list
 // rendered after its own form but vehicle form had none below it).
+function fleetHeaderLine() {
+  const count = fleetTab === 'conductores' ? drivers.length : trucks.length;
+  return fleetHeader({ tab: fleetTab, count, demo: !realAdapter });
+}
+function renderFleetTable() {
+  return fleetTab === 'conductores' ? renderDriversTable({ rows: buildDriverRows(drivers, trucks) }) : renderVehiclesTable({ rows: buildVehicleRows(trucks) });
+}
 function renderFlotaPanel() {
-  return `<h2>Flotilla</h2><p class="demo">${demoNotice}</p>
-    ${renderFleetManagement()}
-    <h3>Vehículos y choferes</h3>
-    <div class="panel-grid two-col">
-      <div><h4>Vehículos</h4><div id="vehicleList">${renderVehicleList()}</div></div>
-      <div><h4>Choferes</h4><div class="list" id="driverList">${renderDriverList()}</div></div>
+  return `<div class="sw-rutas__head"><div><h2>Flotilla</h2><p class="sw-rutas__sub" id="fleetHeaderText">${escapeHtmlText(fleetHeaderLine())}</p><p class="demo sw-rutas__demo">${demoNotice}</p></div></div>
+    <div id="fleetTabs">${renderFleetTabs({ tab: fleetTab })}</div>
+    <div class="sw-rutas__body">
+      <div class="sw-rutas__main" id="fleetTable">${renderFleetTable()}</div>
+      <aside class="sw-rutas__side">${renderFleetManagement()}</aside>
     </div>`;
 }
 function renderIncidenciasPanel() {
@@ -768,37 +777,19 @@ function renderDriverList() {
 // driverAuthContext solo existe una vez que bootstrapRealBackend() resolvió una sesión real.
 function renderFleetManagement() {
   if (driverAuthContext?.role === 'driver') {
-    return `<div class="card" id="fleetManagement">
-      <h3>Registrar nuevo vehículo o chofer</h3>
-      <p class="demo">Solo dispatcher o municipal_admin pueden dar de alta vehículos o choferes.</p>
-    </div>`;
+    return `<div class="sw-fleet-form" id="fleetManagement"><h3>Solo lectura</h3><p class="sw-rutas__muted">Solo el despachador o el administrador municipal pueden dar de alta camiones o conductores.</p></div>`;
   }
-  return `<div class="card" id="fleetManagement">
-    <h3>Registrar nuevo vehículo o chofer</h3>
-    <p class="demo">${demoPrefix}El chofer queda registrado sin cuenta de acceso todavía.</p>
-    <div class="panel-grid two-col">
-      <div>
-        <h4>Nuevo vehículo</h4>
-        <div class="controls"><input id="fleetVehicleUnit" aria-label="Unidad" placeholder="Unidad (p. ej. SW-LS-07)"><input id="fleetVehiclePlate" aria-label="Matrícula" placeholder="Matrícula"><input id="fleetVehicleMaxStops" type="number" min="1" aria-label="Paradas máx. por viaje" placeholder="Paradas máx. por viaje" value="20"></div>
-        <div class="controls"><button type="button" class="btn-primary" data-fleet="create-vehicle">Registrar vehículo</button></div>
-        <p id="fleetVehicleStatus" class="demo"></p>
-      </div>
-      <div>
-        <h4>Nuevo chofer</h4>
-        <div class="controls"><input id="fleetDriverName" aria-label="Nombre del chofer" placeholder="Nombre del chofer"><input id="fleetDriverPhone" aria-label="Teléfono" placeholder="Teléfono"><input id="fleetDriverEmail" type="email" aria-label="Correo (para cuenta de acceso, opcional)" placeholder="Correo (para cuenta de acceso, opcional)"></div>
-        <div class="controls"><button type="button" class="btn-primary" data-fleet="create-driver">Registrar chofer</button></div>
-        <p id="fleetDriverStatus" class="demo"></p>
-      </div>
-    </div>
-  </div>`;
+  return `<div id="fleetManagement">${fleetTab === 'conductores' ? renderDriverForm() : renderVehicleForm()}</div>`;
+}
+function refreshFleetView() {
+  const table = $('#fleetTable'); if (table) table.innerHTML = renderFleetTable();
+  const head = $('#fleetHeaderText'); if (head) head.textContent = fleetHeaderLine();
+  const tabs = $('#fleetTabs'); if (tabs) tabs.innerHTML = renderFleetTabs({ tab: fleetTab });
 }
 function refreshFleetSelects() {
   const createRouteVehicleSelect = $('#createRouteVehicle');
   if (createRouteVehicleSelect) createRouteVehicleSelect.innerHTML = `<option value="">Sin vehículo asignado (asignar después)</option>${trucks.filter(isTruckAvailable).map((truck) => `<option value="${truck.id}">${truck.unit}</option>`).join('')}`;
-  const vehicleList = $('#vehicleList');
-  if (vehicleList) vehicleList.innerHTML = renderVehicleList();
-  const driverList = $('#driverList');
-  if (driverList) driverList.innerHTML = renderDriverList();
+  refreshFleetView();
   // SW-043: routeFocusSelect()'s dropdown must pick up routes created/hydrated after page load —
   // outerHTML (not innerHTML) since routeFocusSelect() also decides whether the element is disabled.
   const simVehicleSelect = $('#simVehicle');
@@ -810,8 +801,10 @@ function refreshFleetSelects() {
   // real seguía viendo el formulario de alta aunque el código ya "supiera" que debía ocultarlo.
   // refreshFleetSelects() ya se llama desde bootstrapRealBackend() tras resolver la sesión, así que
   // es el lugar correcto para también re-dibujar esta tarjeta con el rol ya conocido.
+  // SW-087: solo se redibuja el panel de alta si cambió el rol (o la pestaña); si no, se conserva lo que el usuario está escribiendo.
   const fleetManagement = $('#fleetManagement');
-  if (fleetManagement) fleetManagement.outerHTML = renderFleetManagement();
+  const readOnlyNow = driverAuthContext?.role === 'driver';
+  if (fleetManagement && (fleetManagement.classList.contains('sw-fleet-form') !== readOnlyNow)) fleetManagement.outerHTML = renderFleetManagement();
 }
 // SW-063 (cutover a producción, ver docs/TECHNICAL_DEBT_REGISTER.md): cuando hay backend real
 // configurado, deja de ser un espejo "mejor esfuerzo" — es la única fuente de verdad. Si la
@@ -862,11 +855,17 @@ async function createDriver({ name, phone = '', email } = {}, status) {
   // necesario para que createDriverAccount() pueda llamar a la Edge Function sobre una fila que
   // de verdad existe en Supabase (SW-050: el email también se persiste ahí, no solo en memoria).
   if (realAdapter) {
-    const result = await requireRealAdapter(
-      realAdapter.createDriver({ display_name: name, email }),
-      status,
+    // SW-087: el teléfono se guarda en drivers.phone. Si la migración aún no está aplicada, se guarda el
+    // conductor sin teléfono y se avisa, en vez de fallar el alta.
+    let result = await requireRealAdapter(
+      realAdapter.createDriver({ display_name: name, email, ...(phone ? { phone } : {}) }),
+      phone ? null : status,
       (message) => `No se pudo crear el chofer en la base real: ${message}`
     );
+    if (!result.ok && phone) {
+      result = await requireRealAdapter(realAdapter.createDriver({ display_name: name, email }), status, (message) => `No se pudo crear el chofer en la base real: ${message}`);
+      if (result.ok && status) status.textContent = 'Conductor guardado, pero el teléfono no se pudo guardar todavía (falta aplicar la migración del teléfono).';
+    }
     if (!result.ok) return null;
     const created = operationsAdapter.createDriver({ name, phone, email });
     created.real_id = result.data.id;
@@ -880,22 +879,23 @@ async function createDriver({ name, phone = '', email } = {}, status) {
   return created;
 }
 async function createVehicleFromForm() {
-  const unitInput = $('#fleetVehicleUnit'); const plateInput = $('#fleetVehiclePlate'); const maxStopsInput = $('#fleetVehicleMaxStops'); const status = $('#fleetVehicleStatus');
-  const unit = unitInput?.value.trim();
-  if (!unit) { if (status) status.textContent = 'Ingresa una unidad para el vehículo.'; return; }
-  const created = await createVehicle({ unit, plate: plateInput?.value.trim() ?? '', maxStops: Number(maxStopsInput?.value) || DEFAULT_MAX_STOPS }, status);
+  const status = $('#fleetVehicleStatus');
+  const check = validateVehicleForm({ unit: $('#fleetVehicleUnit')?.value, plate: $('#fleetVehiclePlate')?.value, maxStops: $('#fleetVehicleMaxStops')?.value });
+  if (!check.ok) { if (status) status.textContent = check.message; return; }
+  const created = await createVehicle(check.values, status);
   if (!created) return; // requireRealAdapter() ya puso el mensaje de error en `status`
+  const unitInput = $('#fleetVehicleUnit'); const plateInput = $('#fleetVehiclePlate'); const maxStopsInput = $('#fleetVehicleMaxStops');
   if (unitInput) unitInput.value = ''; if (plateInput) plateInput.value = ''; if (maxStopsInput) maxStopsInput.value = '20';
-  if (status) status.textContent = `Vehículo "${created.unit}" registrado.`;
+  const done = $('#fleetVehicleStatus'); if (done) done.textContent = `Camión "${created.unit}" guardado.`;
 }
 async function createDriverFromForm() {
-  const nameInput = $('#fleetDriverName'); const phoneInput = $('#fleetDriverPhone'); const emailInput = $('#fleetDriverEmail'); const status = $('#fleetDriverStatus');
-  const name = nameInput?.value.trim();
-  if (!name) { if (status) status.textContent = 'Ingresa un nombre para el chofer.'; return; }
-  const created = await createDriver({ name, phone: phoneInput?.value.trim() ?? '', email: emailInput?.value.trim() || undefined }, status);
+  const status = $('#fleetDriverStatus');
+  const check = validateDriverForm({ name: $('#fleetDriverName')?.value, phone: $('#fleetDriverPhone')?.value, email: $('#fleetDriverEmail')?.value });
+  if (!check.ok) { if (status) status.textContent = check.message; return; }
+  const created = await createDriver(check.values, status);
   if (!created) return; // requireRealAdapter() ya puso el mensaje de error en `status`
-  if (nameInput) nameInput.value = ''; if (phoneInput) phoneInput.value = ''; if (emailInput) emailInput.value = '';
-  if (status) status.textContent = `Chofer "${created.name}" registrado (sin cuenta de acceso todavía).`;
+  for (const id of ['#fleetDriverName', '#fleetDriverPhone', '#fleetDriverEmail']) { const el = $(id); if (el) el.value = ''; }
+  const done = $('#fleetDriverStatus'); if (done) done.textContent = created.email ? `Conductor "${created.name}" guardado. Puede entrar a la app con Google usando ${created.email}.` : `Conductor "${created.name}" guardado (sin acceso a la app hasta que tenga correo).`;
 }
 function renderOnboardingOverlay() {
   const step = !onboardingVehicle ? 1 : !onboardingDriver ? 2 : 3;
@@ -986,7 +986,7 @@ async function createDriverAccount(driverId) {
   // auth.admin.createUser, email_confirm:true) instead of an invite link — Supabase's invite/
   // recovery links proved unreliable in staging (instant "invalid or expired", redirect config
   // dependent). The driver logs in with this password through the existing email+password form.
-  if (status) status.textContent = data.temporary_password ? `Cuenta creada para "${driver.name}". Contraseña temporal: ${data.temporary_password} — compartísela al chofer para que inicie sesión con su email y esta contraseña.` : `Cuenta creada para "${driver.name}".`;
+  if (status) status.textContent = data.temporary_password ? `Cuenta creada para "${driver.name}". Contraseña temporal: ${data.temporary_password} — compártela con el conductor para que inicie sesión con su email y esta contraseña.` : `Cuenta creada para "${driver.name}".`;
   refreshFleetSelects();
 }
 // SW-050 (revisión): calls the supabase/functions/resend-driver-invite Edge Function for a driver
@@ -1002,7 +1002,7 @@ async function resendDriverInvite(driverId) {
   if (status) status.textContent = `Restableciendo la contraseña de "${driver.name}"...`;
   const { data, error } = await client.functions.invoke('resend-driver-invite', { body: { driver_id: driver.real_id } });
   if (error) { if (status) status.textContent = `No se pudo restablecer la contraseña: ${error.message}`; return; }
-  if (status) status.textContent = `Nueva contraseña temporal para "${driver.name}": ${data.temporary_password} — compartísela para que inicie sesión con su email y esta contraseña.`;
+  if (status) status.textContent = `Nueva contraseña temporal para "${driver.name}": ${data.temporary_password} — compártela para que inicie sesión con su email y esta contraseña.`;
 }
 // SW-027: municipal_admin/supervisor/dispatcher only in real Supabase (RLS: tenant_insert_staff on
 // routes and, per 202607150009_sw027_route_paths.sql, on route_paths too — same 3 roles as
@@ -2549,6 +2549,8 @@ document.addEventListener('click', (event) => {
   // itself, so this only needs to wait a frame for that to settle before scrolling).
   const scrollTarget = event.target.closest('[data-scroll-to]');
   if (scrollTarget) requestAnimationFrame(() => $(`#${scrollTarget.dataset.scrollTo}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  const fleetTabButton = event.target.closest('[data-fleet-tab]');
+  if (fleetTabButton) { fleetTab = fleetTabButton.dataset.fleetTab; refreshFleetView(); const side = $('#fleetManagement'); if (side && !side.classList.contains('sw-fleet-form')) side.outerHTML = renderFleetManagement(); }
   const filterChip = event.target.closest('[data-route-filter]');
   if (filterChip) { routeFilter = filterChip.dataset.routeFilter; refreshRoutesList(); }
   const dayChip = event.target.closest('[data-day]');
@@ -2750,7 +2752,7 @@ async function hydrateVehiclesAndDrivers() {
       // SW-050: email now hydrates from the real row (supabase/migrations/
       // 202607150014_sw050_driver_email.sql) instead of only ever existing in the tab that created
       // it — this is what keeps "Crear cuenta de acceso" available across a page reload.
-      drivers.push({ id: row.id, real_id: row.id, name: row.display_name, phone: '', email: row.email ?? null, status: DRIVER_STATUS_LABELS[row.status] ?? row.status, profile_id: row.profile_id ?? null });
+      drivers.push({ id: row.id, real_id: row.id, name: row.display_name, phone: row.phone ?? '', email: row.email ?? null, status: DRIVER_STATUS_LABELS[row.status] ?? row.status, profile_id: row.profile_id ?? null });
     });
   }
   // SW-042 (docs/TECHNICAL_DEBT_REGISTER.md #24): the two pushes above always hardcoded
