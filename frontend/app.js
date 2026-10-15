@@ -1373,6 +1373,21 @@ function setCreateRouteMode(route) {
   set('#createRouteFinish', route ? 'Guardar cambios' : 'Guardar ruta');
   const notice = $('#createRouteNotice'); if (notice) { notice.hidden = true; notice.textContent = ''; }
   $('#createRoute')?.classList.remove('sw-newroute__panel--locked');
+  if (!route) resetCreateRouteForm();
+}
+// SW-086c: "Nueva ruta" siempre abre el formulario vacío, también después de editar o cancelar una edición.
+function resetCreateRouteForm() {
+  const nameEl = $('#createRouteName'); if (nameEl) nameEl.value = '';
+  const startEl = $('#createRouteStart'); if (startEl) startEl.value = '';
+  const optimizeEl = $('#createRouteOptimize'); if (optimizeEl) optimizeEl.checked = false;
+  draftDays = [];
+  const daysEl = $('#createRouteDays'); if (daysEl) daysEl.innerHTML = renderDayChips({ chips: DAY_CHIPS, selected: draftDays });
+  const vehicleEl = $('#createRouteVehicle');
+  if (vehicleEl) vehicleEl.innerHTML = `<option value="">Sin camión (asignar después)</option>${trucks.filter(isTruckAvailable).map((t) => `<option value="${t.id}">${t.unit}${t.plate ? ` · ${t.plate}` : ''}</option>`).join('')}`;
+  drawnRoutePoints = clearPoints();
+  redrawCreateRouteTrace();
+  const status = $('#createRouteStatus'); if (status) status.textContent = '';
+  const trip = $('#createRouteTripPreview'); if (trip) trip.textContent = '';
 }
 function openEditRoute(routeId) {
   const route = routeById(routeId); if (!route) return;
