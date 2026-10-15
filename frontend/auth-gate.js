@@ -12,7 +12,9 @@
 
 import { driverAuthOptions, isConnectivityError } from '../shared/session-restore.js';
 import { createIdentityProvider } from '../shared/core-ports.js';
-import { demoLine } from './ui-mode.js';
+import { demoLine, isDemoUi } from './ui-mode.js';
+import { renderStaffLogin } from './components/login-screens.js';
+import { validateLogin, loginErrorMessage, googleErrorMessage, FORGOT_MESSAGE, NO_ACCESS_MESSAGE } from '../shared/login-form.js';
 import { renderDriverAccess } from './components/driver-screens.js';
 import { decideDriverAccess, DRIVER_ACCESS_DENIED_MESSAGE } from '../shared/driver-access.js';
 import { findDriverRow } from '../shared/driver-data.js';
@@ -78,7 +80,7 @@ export function readSupabaseConfig(win = typeof window !== 'undefined' ? window 
   // trucks/routes/drivers/incidents on module init when this is true) — defaults to false/absent,
   // so every existing deployment (including a plain frontend/index.html with no config at all)
   // keeps behaving exactly as before.
-  return { url: config.url, anonKey: config.anonKey, municipality_id: config.municipality_id ?? null, hideDemo: Boolean(config.hideDemo) };
+  return { url: config.url, anonKey: config.anonKey, municipality_id: config.municipality_id ?? null, hideDemo: Boolean(config.hideDemo), ...(config.googleLogin === true ? { googleLogin: true } : {}) };
 }
 
 // SW-032: the client initAuthGate() creates below is what carries the signed-in session (JWT) —
@@ -164,20 +166,13 @@ function renderLogoutButton(client) {
   topbar.append(button);
 }
 
-function renderOverlay() {
+// SW-088: acceso web del personal (diseño Mando). Sin registro: las cuentas las crea el administrador.
+function renderOverlay(errorMessage = '') {
+  const config = readSupabaseConfig();
   const overlay = document.createElement('div');
   overlay.id = 'authOverlay';
-  overlay.className = 'auth-overlay';
-  overlay.innerHTML = `
-    <form id="authForm" class="auth-card">
-      <h2>SmartWaste — acceso municipal</h2>
-      ${demoLine("Datos demo · no producción", readSupabaseConfig())}
-      <label>Correo<input type="email" name="email" required autocomplete="username"></label>
-      <label>Contraseña<input type="password" name="password" required autocomplete="current-password"></label>
-      <button type="submit">Ingresar</button>
-      <p id="authError" class="auth-error" role="alert"></p>
-      <p class="demo">¿Sos ciudadano? <a href="#ciudadania" id="skipToPublic">Ir al portal ciudadano sin iniciar sesión</a>.</p>
-    </form>`;
+  overlay.className = 'sw-login-overlay';
+  overlay.innerHTML = renderStaffLogin({ demo: isDemoUi(config), googleEnabled: Boolean(config?.googleLogin), errorMessage });
   document.body.append(overlay);
   return overlay;
 }
@@ -223,6 +218,10 @@ export async function initAuthGate() {
   // the whole auth gate — no login overlay, no error shown, just the raw demo dashboard unfiltered.
   const { createClient } = await import('./vendor/supabase-js.mjs');
   const driverApp = isDriverApp();
+  // Antes de crear el cliente (que limpia la URL): ¿venimos de regresar de Google o de un enlace de recuperación?
+  const returnUrl = `${globalThis.window?.location?.search ?? ''}${globalThis.window?.location?.hash ?? ''}`;
+  const oauthReturn = !driverApp && /access_token=|[?&]code=/.test(returnUrl);
+  const recoveryReturn = !driverApp && /type=recovery/.test(returnUrl);
   const client = createClient(config.url, config.anonKey, driverApp ? driverAuthOptions() : undefined);
   authClient = client;
   const identity = createIdentityProvider(client);
@@ -293,7 +292,7 @@ export async function initAuthGate() {
   if (existing) {
     const access = await checkDriverAccess(existing);
     if (access.allowed) {
-      if (needsOwnPassword(existing.user)) return requireOwnPassword(existing);
+      if (needsOwnPassword(existing.user) || recoveryReturn) return requireOwnPassword(existing);
       grantApplicationAccess(existing.ctx);
       return existing.ctx;
     }
@@ -301,7 +300,12 @@ export async function initAuthGate() {
     initialError = access.message ?? DRIVER_ACCESS_DENIED_MESSAGE;
   }
 
-  const overlay = driverApp ? renderDriverOverlay(initialError) : renderOverlay();
+  // SW-088: regresó de Google pero esa cuenta no tiene membresía: se cierra la sesión y se explica (nunca se crea nada).
+  if (!existing && oauthReturn) {
+    const stored = await client.auth.getSession().catch(() => null);
+    if (stored?.data?.session) { await client.auth.signOut(); initialError = NO_ACCESS_MESSAGE; }
+  }
+  const overlay = driverApp ? renderDriverOverlay(initialError) : renderOverlay(initialError);
   return new Promise((resolve) => {
     const errorEl = overlay.querySelector('#authError, [role="alert"]');
     const showError = (message) => { if (errorEl) errorEl.textContent = message; };
@@ -330,10 +334,33 @@ export async function initAuthGate() {
       event.preventDefault();
       showError('');
       const formData = new FormData(event.target);
-      const { error: signInError } = await client.auth.signInWithPassword({ email: formData.get('email'), password: formData.get('password') });
-      if (signInError) { showError('Credenciales inválidas.'); return; }
+      let credentials = { email: formData.get('email'), password: formData.get('password') };
+      if (!driverApp) {
+        const check = validateLogin(credentials);
+        if (!check.ok) { showError(check.message); return; }
+        credentials = check.values;
+      }
+      const { error: signInError } = await client.auth.signInWithPassword(credentials);
+      if (signInError) { showError(driverApp ? 'Credenciales inválidas.' : loginErrorMessage(signInError)); return; }
       await finishSignIn();
     });
+
+    if (!driverApp) {
+      // Google solo entra a cuentas que ya existen (los registros nuevos van desactivados en Supabase).
+      overlay.querySelector('[data-staff-google]')?.addEventListener('click', async () => {
+        showError('');
+        const redirectTo = `${globalThis.window.location.origin}${globalThis.window.location.pathname}`;
+        const { error } = await client.auth.signInWithOAuth({ provider: 'google', options: { redirectTo } });
+        if (error) showError(googleErrorMessage(error.message));
+      });
+      overlay.querySelector('[data-staff-forgot]')?.addEventListener('click', async () => {
+        const email = String(overlay.querySelector('input[name="email"]')?.value ?? '').trim();
+        if (!email) { showError('Escribe tu correo arriba y vuelve a tocar "¿Olvidaste tu contraseña?".'); return; }
+        const redirectTo = `${globalThis.window.location.origin}${globalThis.window.location.pathname}`;
+        try { await client.auth.resetPasswordForEmail(email, { redirectTo }); } catch { /* mensaje neutro igual */ }
+        showError(FORGOT_MESSAGE);
+      });
+    }
 
     if (driverApp) {
       const native = Boolean(globalThis.window?.Capacitor?.isNativePlatform?.());
