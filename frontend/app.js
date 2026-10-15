@@ -28,6 +28,11 @@ import { renderFleetList, mapTruckStatus } from './components/fleet-panel.js';
 import { readMapLabels, saveMapLabels, applyMapLabels } from './map-prefs.js';
 import { renderKpiBar, renderLiveChip } from './components/kpi-bar.js';
 import { computeOpsKpis } from '../shared/ops-kpis.js';
+import { FILTERS, buildRouteRows, filterRows, countByFilter, headerText } from '../shared/route-list.js';
+import { addPoint, movePoint, undoPoint, clearPoints, validateDraft, previewDraft } from '../shared/route-draft.js';
+import { buildRouteHistory } from '../shared/route-history.js';
+import { DAY_CHIPS, normalizeDays, normalizeStartTime, formatDays, formatTimeOfDay } from '../shared/route-schedule.js';
+import { renderRoutesTable, renderFilterChips, renderDayChips, renderHistory, renderDraftPreview } from './components/routes-screens.js';
 // SW-082: en despliegues con hideDemo no se muestran avisos de demo/simulación.
 const demoNotice = demoOnly(rawDemoNotice, readSupabaseConfig());
 const simulationNotice = demoOnly(rawSimulationNotice, readSupabaseConfig());
@@ -281,6 +286,10 @@ const REAL_GPS_FRESHNESS_MS = 30000;
 // entries already have, so it can go straight into generateRouteStopPoints()/routePaths[id] once
 // finished.
 let drawnRoutePoints = [];
+let rutasFocusId = null;
+let routeFilter = 'todas'; // SW-086: filtro de la tabla de Rutas
+let createRouteSaving = false;
+let draftDays = []; // SW-086: días marcados en la ruta nueva (vacío = todos los días)
 let createRouteMap;
 let createRouteMapReady = false;
 let createRoutePolyline = null;
@@ -596,9 +605,9 @@ function renderRouteDetail(route) {
   // Only real/hydrated routes can have more than one corrida to compare (a demo route is always
   // "the same object", never a history of separate route_runs) — refreshRouteDurationHistory()
   // (called from selectRoute()) fills this in asynchronously since it's a network read.
-  const durationHistoryPlaceholder = route.real_id ? `<p id="routeDurationHistory" class="demo">Cargando histórico de corridas…</p>` : '';
+  const durationHistoryPlaceholder = route.real_id ? `<h3>Historial de corridas</h3><div id="routeDurationHistory" class="sw-routes__historywrap">Cargando histórico de corridas…</div>` : '';
   return `<div class="drawer-head"><p class="eyebrow">Detalle de ruta</p><h2>${route.name}</h2>${pill(readinessStage ?? routeStatus(route))}</div>
-    <div class="detail-grid"><p><b>Unidad asignada</b><span>${assignedTruck ? `<button type="button" class="row-link" data-truck="${assignedTruck.id}">${route.truckId}</button>` : route.truckId}</span></p><p><b>Conductor</b><span>${driverName(assignedTruck?.driverId)}</span></p><p><b>Paradas</b><span>${route.covered} completadas · ${route.pending} pendientes</span></p>${durationRow}${distanceRow}${fuelRow}${gpsEvidenceRow}</div>
+    <div class="detail-grid"><p><b>Unidad asignada</b><span>${assignedTruck ? `<button type="button" class="row-link" data-truck="${assignedTruck.id}">${route.truckId}</button>` : route.truckId}</span></p><p><b>Conductor</b><span>${driverName(assignedTruck?.driverId)}</span></p><p><b>Paradas</b><span>${route.covered} completadas · ${route.pending} pendientes</span></p><p><b>Hora de inicio</b><span>${formatTimeOfDay(route.startTime) ?? '—'}</span></p><p><b>Días</b><span>${formatDays(route.days)}</span></p>${durationRow}${distanceRow}${fuelRow}${gpsEvidenceRow}</div>
     ${durationHistoryPlaceholder}
     ${guidedAction || `${assignAction}${driverAssignAction}`}${startAction}${completeAction}${reoptimizeAction}
     <details class="detail-more"><summary>Ver detalles técnicos</summary>
@@ -617,10 +626,15 @@ function renderIncidentDetail(incident) { return `<div class="drawer-head"><p cl
 // route-detail actions) so it can have its own alignment without affecting every other `.controls`
 // block in the app.
 function renderRutasPanel() {
-  return `<h2>Rutas</h2><p class="demo">${demoPrefix}Municipio piloto configurable: ${pilotMunicipality.name}, ${pilotMunicipality.country}</p>
-    <details class="create-route-toggle" id="createRouteToggle"><summary>+ Nueva ruta</summary>${renderCreateRoute()}</details>
-    <div class="search-bar"><input id="search" aria-label="Buscar ruta, camión o sector" placeholder="Buscar ruta, camión o sector"><select id="sectorFilter"><option value="">Todos los sectores</option>${sectors.map((s) => `<option>${s.name}</option>`).join('')}</select></div>
-    <h3>Rutas del día</h3><div class="list compact" id="routeList">${renderRoutes(routes)}</div>`;
+  return `<div class="sw-rutas" id="rutasView">
+    <div class="sw-rutas__head"><div><h2>Rutas</h2><p class="sw-rutas__sub" id="routesHeaderText">${escapeHtmlText(routesHeaderLine())}</p><p class="demo sw-rutas__demo">${demoPrefix}Municipio piloto configurable: ${pilotMunicipality.name}, ${pilotMunicipality.country}</p></div>
+      <button type="button" class="sw-rutas__new" data-route-new><span aria-hidden="true">+</span> Nueva ruta</button></div>
+    <div class="sw-rutas__body">
+      <div class="sw-rutas__main"><div id="routesChips">${renderRoutesChips()}</div><div class="sw-routes" id="routeList">${renderRoutes(routes)}</div></div>
+      <aside class="sw-rutas__side"><div id="rutasMiniMap" class="sw-rutas__mini" aria-label="Trazo de la ruta seleccionada"></div><div id="rutasCard" class="sw-rutas__card">${renderRutasCard()}</div></aside>
+    </div>
+  </div>
+  <div class="sw-newroute" id="newRouteView" hidden>${renderCreateRoute()}</div>`;
 }
 // SW-054: renamed "Flota" -> "Flotilla" (display label only, OPS_VIEW_LABELS above — the
 // #operaciones/flota hash/ids are untouched so existing links keep working). Reordered so both
@@ -943,8 +957,8 @@ function finishOnboardingHandoff() {
   $('#onboardingOverlay')?.remove();
   location.hash = 'operaciones/rutas';
   requestAnimationFrame(() => {
-    const toggle = $('#createRouteToggle');
-    if (toggle && !toggle.open) toggle.open = true;
+    const toggle = $('#newRouteView');
+    openNewRoute();
     const vehicleSelect = $('#createRouteVehicle');
     if (vehicleSelect && onboardingVehicle) vehicleSelect.value = onboardingVehicle.id;
     const status = $('#createRouteStatus');
@@ -998,16 +1012,24 @@ async function resendDriverInvite(driverId) {
 // real once this UI is pointed at Supabase.
 function renderCreateRoute() {
   const availableTrucks = trucks.filter(isTruckAvailable);
-  return `<div class="card" id="createRoute">
-    <h3>Crear ruta</h3>
-    <p class="demo">${demoPrefix}Clic en el mapa para agregar puntos al trazo, en orden. Al finalizar se intenta ajustar el trazo a calles reales (OSRM); si no es posible, se usa línea recta entre los puntos. Opcionalmente, puedes optimizar el orden de las paradas (excepto la primera) para minimizar la distancia recorrida antes de ajustar a calles.</p>
-    <div class="controls"><input id="createRouteName" aria-label="Nombre de la ruta" placeholder="Nombre de la ruta"><select id="createRouteVehicle"><option value="">Sin vehículo asignado (asignar después)</option>${availableTrucks.map((t) => `<option value="${t.id}">${t.unit}</option>`).join('')}</select></div>
-    <div class="controls"><label><input type="checkbox" id="createRouteOptimize"> Optimizar orden de paradas (mantiene el primer punto como inicio)</label></div>
-    <div id="createRouteMap" class="real-map driver-map" role="application" aria-label="Dibujar trazo de ruta nueva"></div>
-    <div class="controls"><button type="button" class="btn-ghost" data-create-route="undo">Deshacer último punto</button><button type="button" class="btn-primary" data-create-route="finish">Finalizar y guardar</button></div>
-    <p id="createRouteStatus" class="demo">${drawnRoutePoints.length} punto(s) trazado(s).</p>
-    <p id="createRouteTripPreview" class="demo"></p>
-  </div>`;
+  const preview = previewDraft({ points: drawnRoutePoints });
+  return `<section class="sw-newroute__panel" id="createRoute">
+    <div><h2>Nueva ruta</h2><p class="sw-newroute__sub">Dibuja el recorrido sobre el mapa.</p></div>
+    <div class="sw-newroute__field"><label for="createRouteName">Nombre de la ruta</label><input id="createRouteName" autocomplete="off"></div>
+    <div class="sw-newroute__field"><label for="createRouteVehicle">Camión <span>(opcional)</span></label><select id="createRouteVehicle"><option value="">Sin camión (asignar después)</option>${availableTrucks.map((t) => `<option value="${t.id}">${t.unit}${t.plate ? ` · ${t.plate}` : ''}</option>`).join('')}</select></div>
+    <div class="sw-newroute__field"><label for="createRouteStart">Hora de inicio</label><input type="time" id="createRouteStart"></div>
+    <div class="sw-newroute__field"><span class="sw-newroute__label">Días en que corre</span><div id="createRouteDays">${renderDayChips({ chips: DAY_CHIPS, selected: draftDays })}</div></div>
+    <label class="sw-newroute__opt"><input type="checkbox" id="createRouteOptimize"><span><strong>Optimizar el orden de las paradas</strong><small>Reordena los puntos para recorrer menos distancia.</small></span></label>
+    <div id="createRoutePreview">${renderDraftPreview(preview)}</div>
+    <p id="createRouteStatus" class="sw-newroute__status" role="status"></p>
+    <p id="createRouteTripPreview" class="sw-newroute__status"></p>
+    <div class="sw-newroute__actions"><button type="button" class="sw-rutas__btn" data-create-route="cancel">Cancelar</button><button type="button" class="sw-rutas__btn sw-rutas__btn--primary" data-create-route="finish">Guardar ruta</button></div>
+  </section>
+  <section class="sw-newroute__mapwrap">
+    <div id="createRouteMap" class="sw-newroute__map" role="application" aria-label="Dibujar trazo de ruta nueva"></div>
+    <div class="sw-newroute__tools" role="toolbar" aria-label="Herramientas del trazo"><button type="button" aria-pressed="true" aria-label="Dibujar" class="sw-newroute__tool sw-newroute__tool--on">✎</button><button type="button" aria-label="Deshacer último punto" class="sw-newroute__tool" data-create-route="undo">↶</button><button type="button" aria-label="Borrar todo" class="sw-newroute__tool" data-create-route="clear">🗑</button></div>
+    <p class="sw-newroute__hint">Toca el mapa para añadir un punto. Arrastra un punto para moverlo.</p>
+  </section>`;
 }
 // SW-044 (revisión tras pruebas en staging): el flujo principal es 100% del chofer — "Iniciar
 // recorrido" arranca la ruta Y prende el GPS real en un solo toque; "Finalizar recorrido" la
@@ -1289,7 +1311,67 @@ function renderDriverSection() { return `<section id="conductor" class="section 
 // stood out) — the Project Owner reported the list was hard to scan. `route-status-${status}` adds
 // a left-border tint per status (CSS, `.list.compact .row[class*="route-status-"]`), reusing the
 // same status keyword `pill()` already renders (no new vocabulary, just a second surface for it).
-function renderRoutes(items) { return items.map((route) => { const status = routeReadinessStage(route, trucks.find((truck) => truck.routeId === route.id)) ?? routeStatus(route); return `<article class="row selectable route-status-${status}${route.id === selectedRouteId ? ' selected' : ''}" data-route="${route.id}"><div><strong>${route.name}</strong><br>${route.sectors.join(' · ')} · ETA ${route.eta}<br>${progress(route.progress)}</div><div>${pill(status)}<br>${route.covered}/${route.stops} paradas</div></article>`; }).join(''); }
+// SW-086: la tabla de Rutas del diseño Mando. Cada fila conserva data-route (selectRoute/markSelection) y se
+// recalcula con el filtro activo; los items ya vienen filtrados por búsqueda/sector.
+function routeListItem(route) {
+  const truck = trucks.find((item) => item.routeId === route.id);
+  const unit = truck?.unit ?? (route.truckId && route.truckId !== 'Sin asignar' ? route.truckId : null);
+  return {
+    id: route.id, name: route.name, status: route.status, unit,
+    driverName: truck?.driverId ? driverName(truck.driverId) : null,
+    stopsCount: route.stops, lengthMeters: route.distanceKm ? route.distanceKm * 1000 : 0,
+    startTime: route.startTime ?? null, days: route.days ?? null, lastCompletedAt: route.lastCompletedAt ?? null
+  };
+}
+function renderRoutes(items) {
+  const rows = buildRouteRows(items.map(routeListItem));
+  return renderRoutesTable({ rows: filterRows(rows, routeFilter), selectedId: rutasFocusRoute()?.id ?? null });
+}
+function routesHeaderLine() {
+  const rows = buildRouteRows(routes.map(routeListItem));
+  return headerText({ count: rows.length, municipality: pilotMunicipality.name, demo: !realAdapter });
+}
+function renderRoutesChips() {
+  const rows = buildRouteRows(routes.map(routeListItem));
+  return renderFilterChips({ filters: FILTERS, filter: routeFilter, counts: countByFilter(rows) });
+}
+// SW-086: tarjeta de la ruta seleccionada (junto al mini mapa). La fila que se ve marcada es la de rutasFocusId.
+function rutasFocusRoute() { return routeById(rutasFocusId) ?? routes[0] ?? null; }
+function renderRutasCard() {
+  const route = rutasFocusRoute();
+  if (!route) return '<p class="sw-rutas__muted">Selecciona una ruta para ver su resumen.</p>';
+  const minutes = Number.isFinite(Number(route.estimatedMinutes)) && route.estimatedMinutes !== '' ? Number(route.estimatedMinutes) : Math.round((route.stops ?? 0) * 2.5);
+  const km = route.distanceKm ? `${String(route.distanceKm).replace('.', ',')} km` : '—';
+  const when = `${formatTimeOfDay(route.startTime) ?? 'Sin hora'} · ${formatDays(route.days)}`;
+  return `<h3>${escapeHtmlText(route.name)}</h3><p class="sw-rutas__muted">${route.stops ?? 0} paradas · ${km} · tiempo estimado ${minutes ? `${minutes} min` : '—'}</p><p class="sw-rutas__muted">Sale: ${escapeHtmlText(when)}</p><div class="sw-rutas__actions"><button type="button" class="sw-rutas__btn" data-route-open="${escapeHtmlText(route.id)}">Editar</button><button type="button" class="sw-rutas__btn" data-route-open="${escapeHtmlText(route.id)}">Asignar</button></div>`;
+}
+let rutasMiniMap = null; let rutasMiniLine = null;
+function drawRutasMiniMap() {
+  const el = $('#rutasMiniMap'); const route = rutasFocusRoute();
+  if (!el || !route) return;
+  loadLeaflet().then((L) => {
+    if (!rutasMiniMap || rutasMiniMap.getContainer() !== el) {
+      rutasMiniMap = L.map(el, { zoomControl: false, attributionControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false, touchZoom: false, keyboard: false }).setView(pilotMunicipality.center, pilotMunicipality.zoom);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(rutasMiniMap);
+    }
+    if (rutasMiniLine) rutasMiniLine.remove();
+    const path = routeGeometry(route.id);
+    rutasMiniLine = path.length > 1 ? L.polyline(path, { color: getComputedStyle(document.documentElement).getPropertyValue('--color-primary').trim() || '#0f7b4f', weight: 4 }).addTo(rutasMiniMap) : null;
+    rutasMiniMap.invalidateSize();
+    if (rutasMiniLine) rutasMiniMap.fitBounds(rutasMiniLine.getBounds(), { padding: [16, 16] });
+  }).catch(() => { el.classList.add('fallback-active'); });
+}
+function focusRutasRoute(id) { rutasFocusId = id; refreshRoutesList(); }
+function openNewRoute() { $('#rutasView')?.setAttribute('hidden', ''); const v = $('#newRouteView'); if (v) v.hidden = false; if (createRouteMapReady) requestAnimationFrame(() => createRouteMap.invalidateSize()); $('#createRouteName')?.focus(); }
+function closeNewRoute() { const v = $('#newRouteView'); if (v) v.hidden = true; $('#rutasView')?.removeAttribute('hidden'); refreshRoutesList(); }
+function escapeHtmlText(value) { return String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function refreshRoutesList() {
+  const list = $('#routeList'); if (list) list.innerHTML = renderRoutes(routes);
+  const chips = $('#routesChips'); if (chips) chips.innerHTML = renderRoutesChips();
+  const sub = $('#routesHeaderText'); if (sub) sub.textContent = routesHeaderLine();
+  const card = $('#rutasCard'); if (card) card.innerHTML = renderRutasCard();
+  drawRutasMiniMap();
+}
 // SW-058: real citizen reports get their own block (only ever populated when a real backend is
 // connected — hydrateCitizenReports()) instead of being merged into the existing "Incidencias
 // abiertas" block, which stays 100% demo (`incidents` array — an unrelated concept, see
@@ -1819,7 +1901,7 @@ async function assignVehicleToExistingRoute(routeId, vehicleId) {
   await assignTruckToRoute(route, truck);
   showToast(`${truck.unit} asignado a "${route.name}".`);
   selectRoute(routeId); // re-render the detail panel so it reflects the new assignment immediately
-  $('#routeList').innerHTML = renderRoutes(routes);
+  refreshRoutesList();
   refreshFleetSelects();
   // Codex review on PR #49: #resumen's counts (rutas activas, vehículos fuera de servicio) are a
   // snapshot taken at page load — without this they'd stay stale after every mutation that changes
@@ -2003,7 +2085,7 @@ async function startRouteManually(routeId) {
   const driverTruck = trucks.find((item) => item.id === driverVehicleId);
   const driverStartControl = $('#driverRouteLifecycleControl');
   if (driverStartControl && driverTruck?.routeId === routeId) driverStartControl.innerHTML = driverRouteLifecycleControl(driverTruck);
-  $('#routeList').innerHTML = renderRoutes(routes);
+  refreshRoutesList();
   refreshResumen();
 }
 // SW-044 (revisión tras pruebas en staging): ties the driver's own route lifecycle buttons
@@ -2087,7 +2169,7 @@ async function completeRouteManually(routeId) {
   const driverTruck = trucks.find((item) => item.id === driverVehicleId);
   const driverLifecycleControl = $('#driverRouteLifecycleControl');
   if (driverLifecycleControl && driverTruck?.routeId === routeId) driverLifecycleControl.innerHTML = driverRouteLifecycleControl(driverTruck);
-  $('#routeList').innerHTML = renderRoutes(routes);
+  refreshRoutesList();
   // Supervisor's "pendientes de verificación" queue is only re-rendered on demand (same as the
   // existing verify/resolve-incident handlers do) — without this it stays stale showing whatever
   // was true when #supervisor was last rendered, even though route.status just changed above.
@@ -2140,18 +2222,30 @@ function initCreateRouteMap() {
     createRouteMap = L.map('createRouteMap', { zoomControl: false, attributionControl: false }).setView(pilotMunicipality.center, pilotMunicipality.zoom);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(createRouteMap);
     // Free clicks only — no snapping to real streets/routing network, by design (out of scope).
-    createRouteMap.on('click', (event) => { drawnRoutePoints.push([event.latlng.lat, event.latlng.lng]); redrawCreateRouteTrace(); });
+    createRouteMap.on('click', (event) => { drawnRoutePoints = addPoint(drawnRoutePoints, [event.latlng.lat, event.latlng.lng]); redrawCreateRouteTrace(); });
   }).catch(() => { const el = $('#createRouteMap'); if (el) { el.classList.add('fallback-active'); el.innerHTML = '<div class="map-fallback"><strong>Mapa externo no disponible.</strong></div>'; } });
 }
 function redrawCreateRouteTrace() {
   if (!createRouteMapReady) return;
   const L = window.L;
   if (createRoutePolyline) createRoutePolyline.remove();
-  createRoutePolyline = drawnRoutePoints.length > 1 ? L.polyline(drawnRoutePoints, { color: '#155eef', weight: 4 }).addTo(createRouteMap) : null;
+  createRoutePolyline = drawnRoutePoints.length > 1 ? L.polyline(drawnRoutePoints, { color: getComputedStyle(document.documentElement).getPropertyValue('--color-primary').trim() || '#0f7b4f', weight: 4 }).addTo(createRouteMap) : null;
   createRouteMarkers.forEach((marker) => marker.remove());
-  createRouteMarkers = drawnRoutePoints.map((point, index) => L.circleMarker(point, { radius: 5, color: '#155eef', fillColor: '#155eef', fillOpacity: .9 }).bindTooltip(`Punto ${index + 1}`).addTo(createRouteMap));
+  // SW-086: los puntos se arrastran para corregir el trazo; al soltar, route-draft decide el nuevo arreglo.
+  createRouteMarkers = drawnRoutePoints.map((point, index) => {
+    const marker = L.marker(point, { draggable: true, icon: L.divIcon({ className: 'sw-routes__pin', html: '<span></span>', iconSize: [22, 22], iconAnchor: [11, 11] }), keyboard: false }).bindTooltip(`Punto ${index + 1}`).addTo(createRouteMap);
+    marker.on('drag', (event) => { const at = event.target.getLatLng(); const live = movePoint(drawnRoutePoints, index, [at.lat, at.lng]); if (createRoutePolyline) createRoutePolyline.setLatLngs(live); });
+    marker.on('dragend', (event) => { const at = event.target.getLatLng(); drawnRoutePoints = movePoint(drawnRoutePoints, index, [at.lat, at.lng]); redrawCreateRouteTrace(); });
+    return marker;
+  });
+  const previewEl = $('#createRoutePreview');
+  if (previewEl) {
+    const base = previewDraft({ points: drawnRoutePoints });
+    // Tiempo estimado: 2,5 min por parada (promedio del rango 2-3 min que ya usa la app), no un dato medido.
+    previewEl.innerHTML = renderDraftPreview(previewDraft({ points: drawnRoutePoints, durationSeconds: base.stopsCount * 150 }));
+  }
   const status = $('#createRouteStatus');
-  if (status) status.textContent = `${drawnRoutePoints.length} punto(s) trazado(s).`;
+  if (status) status.textContent = '';
   // Codex review on PR #31: a saved route's trip preview stayed visible while a new draft was
   // already being traced (or failed validation) — clear it as soon as the trace changes so it
   // can't be mistaken for the new draft's breakdown.
@@ -2196,7 +2290,7 @@ function showOpsView(view) {
   // container was display:none (i.e. its ops-panel wasn't the active sub-vista yet) reports zero
   // size until told to recalculate.
   if (view === 'mapa' && mapReady) requestAnimationFrame(() => map.invalidateSize());
-  if (view === 'rutas' && createRouteMapReady) requestAnimationFrame(() => createRouteMap.invalidateSize());
+  if (view === 'rutas') requestAnimationFrame(() => { if (createRouteMapReady) createRouteMap.invalidateSize(); drawRutasMiniMap(); });
   if (view === 'estadisticas') refreshEfficiencyDashboard();
 }
 function showSection(id) {
@@ -2236,7 +2330,8 @@ function goToMapTab() {
   if (location.hash.slice(1) === target) showSection('operaciones');
   else location.hash = target;
 }
-function undoLastRoutePoint() { drawnRoutePoints.pop(); redrawCreateRouteTrace(); }
+function undoLastRoutePoint() { drawnRoutePoints = undoPoint(drawnRoutePoints); redrawCreateRouteTrace(); }
+function clearRoutePoints() { drawnRoutePoints = clearPoints(); redrawCreateRouteTrace(); }
 // (a) createRoute() for the metadata, (b) persist the drawn geometry (route_paths), (c)
 // generateRouteStopPoints()/saveRouteStops() — the exact same SW-025/026 functions used for the
 // bundled demo routes, not reimplemented — over the freshly drawn path, so the new route gets
@@ -2262,8 +2357,16 @@ async function finishCreateRoute() {
   const nameInput = $('#createRouteName');
   const name = nameInput?.value.trim();
   if (tripPreview) tripPreview.textContent = '';
-  if (!name) { if (status) status.textContent = 'Ingresa un nombre para la ruta.'; return; }
-  if (drawnRoutePoints.length < 2) { if (status) status.textContent = 'Traza al menos 2 puntos en el mapa.'; return; }
+  const draftCheck = validateDraft({ name, points: drawnRoutePoints, saving: createRouteSaving });
+  if (!draftCheck.ok) { if (status) status.textContent = draftCheck.message; return; }
+  const startTime = normalizeStartTime($('#createRouteStart')?.value);
+  const days = normalizeDays(draftDays).length ? normalizeDays(draftDays) : null;
+  createRouteSaving = true;
+  try {
+    await finishCreateRouteSave({ name, startTime, days, status, tripPreview, nameInput });
+  } finally { createRouteSaving = false; }
+}
+async function finishCreateRouteSave({ name, startTime, days, status, tripPreview, nameInput }) {
 
   const routeId = `route-custom-${Date.now().toString(36)}`;
   // Roadmap item 2 ("optimización de orden de paradas"): opt-in via #createRouteOptimize,
@@ -2298,7 +2401,7 @@ async function finishCreateRoute() {
   let realRoute;
   if (realAdapter) {
     try {
-      const createResult = await realAdapter.createRoute({ name });
+      const createResult = await realAdapter.createRoute({ name, ...(startTime ? { start_time: startTime } : {}), ...(days ? { days_of_week: days } : {}) });
       if (!createResult?.ok) { if (status) status.textContent = `No se pudo crear la ruta en la base real: ${createResult?.error?.message ?? 'error desconocido'}`; return; }
       realRoute = createResult.data;
       const pathResult = await realAdapter.savePathPoints(realRoute.id, path.map(([latitude, longitude], index) => ({ sequence: index + 1, latitude, longitude })));
@@ -2319,7 +2422,8 @@ async function finishCreateRoute() {
     id: routeId, name, status: 'planned', sectors: ['Ruta personalizada'], sector: 'Ruta personalizada',
     truckId: 'Sin asignar', driverId: null, progress: 0, scheduled: '—', started: 'Pendiente', eta: '—',
     distanceKm: Math.round((distanceMeters / 1000) * 10) / 10, estimatedMinutes: '—',
-    stops: stopPoints.length, covered: 0, pending: stopPoints.length, incidents: []
+    stops: stopPoints.length, covered: 0, pending: stopPoints.length, incidents: [],
+    startTime, days
   };
   // Real route ids never match their demo counterparts (see createVehicleFromForm/
   // createDriverFromForm above) — set this before assignTruckToRoute() (below) needs it.
@@ -2335,13 +2439,16 @@ async function finishCreateRoute() {
   // at the Rutas list with no obvious next step — "Asignar vehículo" only lived in the route's own
   // detail drawer, which they'd have to know to open manually. Jump straight there, same navigation
   // (selectRoute()+goToMapTab()) already used when clicking a route row.
-  if (!truck) { selectRoute(routeId); goToMapTab(); }
+  rutasFocusId = routeId;
 
-  drawnRoutePoints = [];
+  drawnRoutePoints = clearPoints();
   redrawCreateRouteTrace();
+  draftDays = [];
+  const daysEl = $('#createRouteDays'); if (daysEl) daysEl.innerHTML = renderDayChips({ chips: DAY_CHIPS, selected: draftDays });
+  const startEl = $('#createRouteStart'); if (startEl) startEl.value = '';
   if (nameInput) nameInput.value = '';
   if (vehicleSelect) vehicleSelect.innerHTML = `<option value="">Sin vehículo asignado (asignar después)</option>${trucks.filter(isTruckAvailable).map((item) => `<option value="${item.id}">${item.unit}</option>`).join('')}`;
-  $('#routeList').innerHTML = renderRoutes(routes);
+  closeNewRoute();
   refreshResumen();
   refreshFleetSelects(); // SW-043: picks up the just-created route in routeFocusSelect()'s dropdown
   if (mapReady) drawMapLayers();
@@ -2410,18 +2517,9 @@ async function refreshRouteDurationHistory(routeId) {
   const el = document.getElementById('routeDurationHistory');
   if (!el) return;
   if (!result.ok) { el.textContent = 'No se pudo cargar el histórico de corridas.'; return; }
-  const runsForRoute = result.data.filter((run) => run.route_id === route.real_id && run.started_at && run.completed_at);
-  if (!runsForRoute.length) { el.textContent = 'Todavía no hay corridas con duración medida para esta ruta.'; return; }
-  const durations = runsForRoute.map((run) => Math.max(0, Math.round((Date.parse(run.completed_at) - Date.parse(run.started_at)) / 60000)));
-  const average = Math.round(durations.reduce((total, minutes) => total + minutes, 0) / durations.length);
-  const durationText = `${runsForRoute.length} corrida(s) medida(s) · promedio ${formatMinutes(average)} · última ${formatMinutes(durations[durations.length - 1])}`;
-  // SW-045: distancia real solo existe para las corridas que sí tuvieron GPS activo — puede ser un
-  // subconjunto de runsForRoute (por eso se filtra aparte, no se asume que todas la tengan).
-  const distances = runsForRoute.filter((run) => run.distance_meters != null).map((run) => Math.round(run.distance_meters / 100) / 10);
-  const distanceText = distances.length
-    ? ` · distancia real: ${distances.length} corrida(s) · promedio ${Math.round((distances.reduce((total, km) => total + km, 0) / distances.length) * 10) / 10} km · última ${distances[distances.length - 1]} km`
-    : '';
-  el.textContent = durationText + distanceText;
+  // SW-086: el historial lo arma route-history (tiempo y km medidos por corrida, con promedio).
+  const driverNames = new Map(drivers.filter((d) => d.real_id).map((d) => [d.real_id, d.name]));
+  el.innerHTML = renderHistory(buildRouteHistory(result.data, route.real_id, { driverNames }));
 }
 function selectIncident(code) { selectedIncidentId = code; selectedTruckId = null; selectedRouteId = null; const incident = incidents.find((item) => item.code === code); openDetail(renderIncidentDetail(incident)); drawMapLayers(); markSelection(); }
 function startSimulation() { if (simulationTimer) return; simulationTimer = setInterval(() => { trucks.filter((truck) => truck.routeId && truck.state !== 'offline' && truck.state !== 'completed').forEach((truck) => { const path = routeGeometry(truck.routeId); simState[truck.id].index = (simState[truck.id].index + 1) % path.length; simState[truck.id].progress = Math.min(99, simState[truck.id].progress + 3); truck.progress = simState[truck.id].progress; truck.updatedAt = 'Ahora (simulación)'; truck.sector = routeById(truck.routeId)?.sector ?? truck.sector; const route = routeById(truck.routeId); if (route) route.progress = truck.progress; }); drawMapLayers(); if (selectedTruckId) selectTruck(selectedTruckId); if (selectedRouteId) selectRoute(selectedRouteId); if (selectedIncidentId) selectIncident(selectedIncidentId); }, 1800 / simulationSpeed); }
@@ -2451,8 +2549,21 @@ document.addEventListener('click', (event) => {
   // itself, so this only needs to wait a frame for that to settle before scrolling).
   const scrollTarget = event.target.closest('[data-scroll-to]');
   if (scrollTarget) requestAnimationFrame(() => $(`#${scrollTarget.dataset.scrollTo}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  const filterChip = event.target.closest('[data-route-filter]');
+  if (filterChip) { routeFilter = filterChip.dataset.routeFilter; refreshRoutesList(); }
+  const dayChip = event.target.closest('[data-day]');
+  if (dayChip && dayChip.closest('#createRouteDays')) {
+    const day = Number(dayChip.dataset.day);
+    draftDays = draftDays.includes(day) ? draftDays.filter((d) => d !== day) : [...draftDays, day];
+    $('#createRouteDays').innerHTML = renderDayChips({ chips: DAY_CHIPS, selected: draftDays });
+  }
   const createRouteAction = event.target.closest('[data-create-route]')?.dataset.createRoute;
   if (createRouteAction === 'undo') undoLastRoutePoint();
+  if (createRouteAction === 'clear') clearRoutePoints();
+  if (createRouteAction === 'cancel') closeNewRoute();
+  if (event.target.closest('[data-route-new]')) openNewRoute();
+  const openBtn = event.target.closest('[data-route-open]'); if (openBtn) { selectRoute(openBtn.dataset.routeOpen); goToMapTab(); }
+  const focusRow = event.target.closest('.sw-routes__row'); if (focusRow) focusRutasRoute(focusRow.dataset.route);
   if (createRouteAction === 'finish') finishCreateRoute();
   const fleetAction = event.target.closest('[data-fleet]')?.dataset.fleet;
   if (fleetAction === 'create-vehicle') createVehicleFromForm();
@@ -2465,7 +2576,7 @@ document.addEventListener('click', (event) => {
   if (onboardAction === 'vehicle') onboardVehicleStep();
   if (onboardAction === 'driver') onboardDriverStep();
   const truckButton = event.target.closest('[data-truck]'); if (truckButton) { selectTruck(truckButton.dataset.truck); goToMapTab(); }
-  const routeButton = event.target.closest('[data-route]'); if (routeButton?.dataset.route) { selectRoute(routeButton.dataset.route); goToMapTab(); }
+  const routeButton = event.target.closest('[data-route]'); if (routeButton?.dataset.route && !routeButton.closest('.sw-routes__row')) { selectRoute(routeButton.dataset.route); goToMapTab(); }
   const incidentButton = event.target.closest('[data-incident]'); if (incidentButton) { selectIncident(incidentButton.dataset.incident); goToMapTab(); }
   const verifyButton = event.target.closest('[data-verify-route]');
   if (verifyButton) verifyRouteManually(verifyButton.dataset.verifyRoute);
@@ -2520,13 +2631,12 @@ document.addEventListener('change', (event) => { if (event.target.id === 'guided
 // invalidateSize() once the <details> actually opens, or it renders with zero size. The native
 // `toggle` event doesn't bubble, so this must listen on the capture phase to reach it via delegation.
 document.addEventListener('toggle', (event) => {
-  if (event.target.id === 'createRouteToggle' && event.target.open && createRouteMapReady) requestAnimationFrame(() => createRouteMap.invalidateSize());
   // SW-030: Master Admin's per-municipality cost-parameter form — same lazy-load-on-first-open
   // idiom as #createRouteToggle above, via the same capture-phase listener ('toggle' doesn't bubble).
   if (event.target.matches?.('[data-cost-parameters-toggle]') && event.target.open) loadMasterCostParameters(event.target.dataset.costParametersToggle);
 }, true);
-$('#search').addEventListener('input', (event) => { const term = event.target.value.toLowerCase(); $('#routeList').innerHTML = renderRoutes(routes.filter((route) => JSON.stringify(route).toLowerCase().includes(term))); });
-$('#sectorFilter').addEventListener('change', (event) => { $('#routeList').innerHTML = renderRoutes(routes.filter((route) => !event.target.value || route.sectors.includes(event.target.value))); });
+$('#search')?.addEventListener('input', (event) => { const term = event.target.value.toLowerCase(); $('#routeList').innerHTML = renderRoutes(routes.filter((route) => JSON.stringify(route).toLowerCase().includes(term))); });
+$('#sectorFilter')?.addEventListener('change', (event) => { $('#routeList').innerHTML = renderRoutes(routes.filter((route) => !event.target.value || route.sectors.includes(event.target.value))); });
 $('#citizenSector').addEventListener('change', (event) => { const service = findSectorService(event.target.value); $('#pickupResult').textContent = service ? `${service.pickupDay} · Estado: ${service.status}` : 'Sector demo no encontrado'; });
 $('#citizenSector').dispatchEvent(new Event('change'));
 // SW-039: real submission when a municipality-specific deployment is configured
@@ -2601,6 +2711,7 @@ initDriverMap();
 initDriverPolling();
 initOpsGpsPolling();
 initCreateRouteMap();
+drawRutasMiniMap();
 // SW-035 fase A: pulls vehicles/drivers that already existed in Supabase before this page loaded
 // and appends them to trucks/drivers — additive, never replaces/clears those arrays, so
 // simState/driverSimulators/trucksWithRoute (all derived once from trucks/routes at module load,
@@ -2709,7 +2820,9 @@ async function hydrateRoutes() {
     // completed route stuck showing "Asignada" forever after a page reload, which would also have
     // hidden the new "Iniciar ruta" button behind the wrong condition. run.status wins whenever a
     // run exists; row.status only matters for the no-run-yet ('planned') case.
+    const lastCompleted = (routeRunsResult.ok ? routeRunsResult.data : []).filter((r) => r.route_id === row.id && ['completed', 'verified'].includes(r.status) && r.completed_at).map((r) => r.completed_at).sort().pop() ?? null;
     const newRoute = {
+      startTime: row.start_time ?? null, days: row.days_of_week ?? null, lastCompletedAt: lastCompleted,
       id: row.id, real_id: row.id, name: row.name, status: run?.status ?? row.status ?? 'planned',
       sectors: ['Sincronizado desde Supabase'], sector: 'Sincronizado desde Supabase',
       truckId: truck ? truck.unit : 'Sin asignar', driverId: driver ? driver.id : null,
@@ -2755,7 +2868,7 @@ async function hydrateRoutes() {
       registerDriverSimulator(truck);
     }
   }
-  $('#routeList').innerHTML = renderRoutes(routes);
+  refreshRoutesList();
   refreshFleetSelects();
   if (mapReady) drawMapLayers();
   return true;

@@ -485,6 +485,8 @@ async function transitionRouteRun(client, fallback, municipality_id, routeId, ne
   const fallbackMethod = { started:'startRoute', delayed:'markDelayed', completed:'completeRoute', verified:'verifyRoute', in_progress:'updateProgress' }[next] ?? 'markDelayed';
   if (adapterMissing) return ok(fallback[fallbackMethod]?.(routeId) ?? fallback.getRoute(routeId), { source:'DEMO_FALLBACK', correlation_id: opts.correlation_id });
   let findQuery = client.from('route_runs').select('*').eq('route_id', routeId).order('created_at', { ascending: false }).limit(1);
+  // SW-086: al completarse una corrida queda lista la siguiente (assigned); verificar actúa sobre la terminada.
+  if (next === 'verified') findQuery = findQuery.eq('status', 'completed');
   if (municipality_id) findQuery = findQuery.eq('municipality_id', municipality_id);
   const current = await findQuery.maybeSingle();
   if (current.error) return fail(current.error.code ?? 'SUPABASE_ERROR', current.error.message, opts);

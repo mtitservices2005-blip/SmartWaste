@@ -44,13 +44,21 @@ export async function loadDriverToday(client, { userId, municipalityId, email })
     if (!runs.length) return { ok: true, driver, unit: null, runs: [] };
     const routeIds = [...new Set(runs.map((r) => r.route_id).filter(Boolean))];
     const vehicleIds = [...new Set(runs.map((r) => r.vehicle_id).filter(Boolean))];
+    // SW-086: hora y días vienen de la ruta; si la migración aún no está aplicada se reintenta sin ellas.
+    const fetchRoutes = async () => {
+      if (!routeIds.length) return { data: [], error: null };
+      const withSchedule = await client.from('routes').select('id,name,start_time,days_of_week').in('id', routeIds);
+      if (withSchedule.error && /start_time|days_of_week/.test(withSchedule.error.message ?? '')) return client.from('routes').select('id,name').in('id', routeIds);
+      return withSchedule;
+    };
     const [routesRes, stopsRes, vehiclesRes] = await Promise.all([
-      routeIds.length ? client.from('routes').select('id,name').in('id', routeIds) : { data: [], error: null },
+      fetchRoutes(),
       routeIds.length ? client.from('route_stops').select('route_id,sequence,label,latitude,longitude').in('route_id', routeIds).order('sequence', { ascending: true }) : { data: [], error: null },
       vehicleIds.length ? client.from('vehicles').select('id,code,plate').in('id', vehicleIds) : { data: [], error: null }
     ]);
     for (const res of [routesRes, stopsRes, vehiclesRes]) if (res.error) return failure(res.error);
     const nameById = new Map((routesRes.data ?? []).map((r) => [r.id, r.name]));
+    const routeById = new Map((routesRes.data ?? []).map((r) => [r.id, r]));
     const unitById = new Map((vehiclesRes.data ?? []).map((v) => [v.id, v.code]));
     const items = runs.map((run) => {
       const stops = (stopsRes.data ?? []).filter((s) => s.route_id === run.route_id).sort((a, b) => a.sequence - b.sequence);
@@ -58,6 +66,7 @@ export async function loadDriverToday(client, { userId, municipalityId, email })
         id: run.id, routeId: run.route_id, vehicleId: run.vehicle_id, status: run.status, createdAt: run.created_at,
         scheduledStartAt: run.scheduled_start_at ?? null, startedAt: run.started_at ?? null,
         routeName: nameById.get(run.route_id) ?? 'Ruta',
+        routeStartTime: routeById.get(run.route_id)?.start_time ?? null, routeDays: routeById.get(run.route_id)?.days_of_week ?? null,
         stopsCount: stops.length, stops, distanceText: pathDistanceText(stops), estimatedMinutes: null
       };
     });

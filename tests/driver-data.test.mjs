@@ -38,7 +38,7 @@ const tables = {
     { id: 'run2', route_id: 'r2', vehicle_id: 'v1', driver_id: 'd1', status: 'assigned', scheduled_start_at: null, created_at: '2026-10-13T11:00:00Z' },
     { id: 'runX', route_id: 'r1', vehicle_id: 'v9', driver_id: 'otro', status: 'assigned', scheduled_start_at: null, created_at: '2026-10-13T11:00:00Z' }
   ],
-  routes: [{ id: 'r1', name: 'Ruta Centro' }, { id: 'r2', name: 'Ruta Playa' }],
+  routes: [{ id: 'r1', name: 'Ruta Centro', start_time: '08:00:00', days_of_week: [1, 3, 5] }, { id: 'r2', name: 'Ruta Playa', start_time: null, days_of_week: null }],
   route_stops: [
     { route_id: 'r1', sequence: 1, label: 'A', latitude: 19.0, longitude: -71.0 },
     { route_id: 'r1', sequence: 2, label: 'B', latitude: 19.001, longitude: -71.0 },
@@ -58,6 +58,24 @@ const r1 = out.runs.find((r) => r.id === 'run1');
 assert.equal(r1.routeId, 'r1');
 assert.equal(r1.routeName, 'Ruta Centro');
 assert.equal(r1.stopsCount, 3);
+// SW-086: hora y días de la ruta llegan al chofer; sin la migración se sigue funcionando sin ellos.
+assert.equal(r1.routeStartTime, '08:00:00');
+assert.deepEqual(r1.routeDays, [1, 3, 5]);
+assert.equal(out.runs.find((r) => r.id === 'run2').routeStartTime, null);
+const noSchedule = fakeClient(tables);
+const baseFrom = noSchedule.from.bind(noSchedule);
+noSchedule.from = (table) => {
+  const api = baseFrom(table);
+  if (table !== 'routes') return api;
+  const select = api.select.bind(api);
+  api.select = (cols) => cols.includes('start_time') ? { in: () => Promise.resolve({ data: null, error: { message: 'column routes.start_time does not exist' } }) } : select(cols);
+  return api;
+};
+const legacy = await loadDriverToday(noSchedule, ctx);
+assert.equal(legacy.ok, true, 'sin columnas nuevas no falla');
+assert.equal(legacy.runs.find((r) => r.id === 'run1').routeName, 'Ruta Centro');
+assert.equal(legacy.runs.find((r) => r.id === 'run1').routeStartTime, null);
+
 assert.match(r1.distanceText, /^2\d\d m$/, '≈222 m entre las paradas de la ruta');
 assert.equal(r1.scheduledStartAt, '2026-10-14T12:00:00Z');
 assert.equal(r1.estimatedMinutes, null, 'no inventa un tiempo estimado');
