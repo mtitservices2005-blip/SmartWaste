@@ -33,11 +33,11 @@ function stripPreviousConfigBlock(html) {
   return html.slice(0, startIndex) + html.slice(afterEnd).replace(/^\n/, '');
 }
 
-function writeSupabaseConfigIntoIndexHtml({ url, anonKey, municipality_id, hideDemo }) {
+function writeSupabaseConfigIntoIndexHtml({ url, anonKey, municipality_id, hideDemo, googleLogin }) {
   const html = readFileSync(INDEX_HTML_PATH, 'utf8');
   const configBlock = `${CONFIG_START}
   <script>
-    window.SMARTWASTE_SUPABASE_CONFIG = ${JSON.stringify({ url, anonKey, municipality_id: municipality_id || null, hideDemo: Boolean(hideDemo) })};
+    window.SMARTWASTE_SUPABASE_CONFIG = ${JSON.stringify({ url, anonKey, municipality_id: municipality_id || null, hideDemo: Boolean(hideDemo), ...(googleLogin ? { googleLogin: true } : {}) })};
   </script>
   ${CONFIG_END}
 `;
@@ -92,6 +92,9 @@ if (!url || !anonKey) {
   // its own. Absent/false changes nothing (rule 5 — every deployment without this set keeps
   // showing the demo exactly as before).
   const hideDemo = process.env.SUPABASE_HIDE_DEMO === 'true';
-  writeSupabaseConfigIntoIndexHtml({ url, anonKey, municipality_id: process.env.SUPABASE_MUNICIPALITY_ID, hideDemo });
-  console.log(`\ndist/index.html generado con SMARTWASTE_SUPABASE_CONFIG apuntando a ${url}${process.env.SUPABASE_MUNICIPALITY_ID ? ` (municipality_id: ${process.env.SUPABASE_MUNICIPALITY_ID})` : ' (sin municipality_id — el portal ciudadano seguirá en modo demo)'}${hideDemo ? ' · datos demo ocultos (SUPABASE_HIDE_DEMO=true)' : ''}.\n`);
+  // SW-088b: opt-in, deployment-level — muestra el botón "Continuar con Google" del acceso del personal.
+  // Solo el valor exacto 'true' lo enciende; el proveedor Google debe estar activo también en Supabase.
+  const googleLogin = process.env.SUPABASE_GOOGLE_LOGIN === 'true';
+  writeSupabaseConfigIntoIndexHtml({ url, anonKey, municipality_id: process.env.SUPABASE_MUNICIPALITY_ID, hideDemo, googleLogin });
+  console.log(`\ndist/index.html generado con SMARTWASTE_SUPABASE_CONFIG apuntando a ${url}${process.env.SUPABASE_MUNICIPALITY_ID ? ` (municipality_id: ${process.env.SUPABASE_MUNICIPALITY_ID})` : ' (sin municipality_id — el portal ciudadano seguirá en modo demo)'}${hideDemo ? ' · datos demo ocultos (SUPABASE_HIDE_DEMO=true)' : ''}${googleLogin ? ' · acceso con Google del personal activo (SUPABASE_GOOGLE_LOGIN=true)' : ''}.\n`);
 }

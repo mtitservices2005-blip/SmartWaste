@@ -112,6 +112,21 @@ try {
     assert.equal(html.includes(CONFIG_MARKER), true, 'producción correcta debe inyectar la config');
   }
 
+  // f. SW-088b: SUPABASE_GOOGLE_LOGIN=true enciende el botón de Google del personal; sin ella queda apagado.
+  {
+    const base = { SUPABASE_URL: 'https://staging.invalid', SUPABASE_ANON_KEY: 'anon-key-ficticia-de-prueba' };
+    const configOf = (html) => JSON.parse(html.match(/window\.SMARTWASTE_SUPABASE_CONFIG = (\{.*?\});/s)[1]);
+    const off = runBuild(base);
+    assert.equal(off.status, 0);
+    assert.equal(configOf(readFileSync(INDEX_HTML_PATH, 'utf8')).googleLogin, undefined, 'sin la variable no hay googleLogin');
+    const falseValue = runBuild({ ...base, SUPABASE_GOOGLE_LOGIN: 'false' });
+    assert.equal(falseValue.status, 0);
+    assert.equal(configOf(readFileSync(INDEX_HTML_PATH, 'utf8')).googleLogin, undefined, 'solo "true" lo enciende');
+    const on = runBuild({ ...base, SUPABASE_GOOGLE_LOGIN: 'true' });
+    assert.equal(on.status, 0);
+    assert.equal(configOf(readFileSync(INDEX_HTML_PATH, 'utf8')).googleLogin, true, 'con true el config lleva googleLogin');
+  }
+
   console.log('build-frontend-config tests passed.');
 } catch (error) {
   console.error(error);
