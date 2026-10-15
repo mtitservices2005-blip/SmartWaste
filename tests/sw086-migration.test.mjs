@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 
 const dir = new URL('../supabase/migrations/', import.meta.url);
-const files = readdirSync(dir).filter((f) => f.includes('sw086'));
+const files = readdirSync(dir).filter((f) => f.includes('_sw086_'));
 assert.equal(files.length, 1, 'una sola migración SW-086');
 assert.equal(files[0], '202610140002_sw086_route_start_time_and_repeat.sql');
 const sql = readFileSync(new URL(files[0], dir), 'utf8');

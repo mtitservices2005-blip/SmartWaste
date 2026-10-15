@@ -77,3 +77,8 @@
 .sw-newroute__tool--on { background: var(--color-rail-active); color: var(--color-primary); }
 .sw-newroute__hint { position: absolute; z-index: 500; left: var(--space-4); bottom: var(--space-4); margin: 0; padding: var(--space-3) var(--space-4); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-2); box-shadow: var(--shadow-1); font-size: var(--font-size-2); }
 @media (max-width: 1000px) { .sw-newroute { grid-template-columns: 1fr; } .sw-newroute__mapwrap { min-height: 420px; } }
+
+/* SW-086b: aviso cuando el trazo no se puede editar (ruta en marcha) */
+.sw-newroute__notice { margin: 0; padding: var(--space-2, 8px) var(--space-3, 12px); border-radius: var(--radius-2, 8px); border: 1px solid var(--color-border); background: var(--color-surface-2, var(--color-surface)); color: var(--color-text); font-size: var(--font-size-2); }
+.sw-newroute__notice[hidden] { display: none; }
+.sw-newroute:has(.sw-newroute__panel--locked) .sw-newroute__tools { opacity: .4; pointer-events: none; }

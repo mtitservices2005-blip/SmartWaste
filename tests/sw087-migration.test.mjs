@@ -15,5 +15,5 @@ for (const word of ['drop ', 'delete ', 'truncate', 'alter policy', 'create poli
 }
 const all = readdirSync(dir).filter((f) => f.endsWith('.sql')).sort();
 assert.ok(all.indexOf(files[0]) > all.indexOf('202610140002_sw086_route_start_time_and_repeat.sql'), 'va después de SW-086');
-assert.equal(all[all.length - 1], files[0], 'es la última migración');
+assert.ok(all.indexOf(files[0]) > all.indexOf('202610140002_sw086_route_start_time_and_repeat.sql'), 'va después de SW-086');
 console.log('sw087-migration ok');

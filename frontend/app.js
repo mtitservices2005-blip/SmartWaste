@@ -31,6 +31,7 @@ import { computeOpsKpis } from '../shared/ops-kpis.js';
 import { FILTERS, buildRouteRows, filterRows, countByFilter, headerText } from '../shared/route-list.js';
 import { addPoint, movePoint, undoPoint, clearPoints, validateDraft, previewDraft } from '../shared/route-draft.js';
 import { buildRouteHistory } from '../shared/route-history.js';
+import { canEditGeometry, initialEditValues, diffEdit, validateEdit, routeUpdatePayload } from '../shared/route-edit.js';
 import { DAY_CHIPS, normalizeDays, normalizeStartTime, formatDays, formatTimeOfDay } from '../shared/route-schedule.js';
 import { buildVehicleRows, buildDriverRows, fleetHeader, validateVehicleForm, validateDriverForm } from '../shared/fleet-list.js';
 import { renderFleetTabs, renderVehiclesTable, renderDriversTable, renderVehicleForm, renderDriverForm } from './components/fleet-screens.js';
@@ -292,6 +293,7 @@ let fleetTab = 'camiones'; // SW-087: pestaña activa de Flotilla
 let rutasFocusId = null;
 let routeFilter = 'todas'; // SW-086: filtro de la tabla de Rutas
 let createRouteSaving = false;
+let editingRouteId = null; let editingBefore = null; let createRouteLocked = false; // SW-086b: modo editar de la pantalla Nueva ruta
 let draftDays = []; // SW-086: días marcados en la ruta nueva (vacío = todos los días)
 let createRouteMap;
 let createRouteMapReady = false;
@@ -1014,7 +1016,8 @@ function renderCreateRoute() {
   const availableTrucks = trucks.filter(isTruckAvailable);
   const preview = previewDraft({ points: drawnRoutePoints });
   return `<section class="sw-newroute__panel" id="createRoute">
-    <div><h2>Nueva ruta</h2><p class="sw-newroute__sub">Dibuja el recorrido sobre el mapa.</p></div>
+    <div><h2 id="createRouteTitle">Nueva ruta</h2><p class="sw-newroute__sub" id="createRouteSub">Dibuja el recorrido sobre el mapa.</p></div>
+    <p id="createRouteNotice" class="sw-newroute__notice" role="status" hidden></p>
     <div class="sw-newroute__field"><label for="createRouteName">Nombre de la ruta</label><input id="createRouteName" autocomplete="off"></div>
     <div class="sw-newroute__field"><label for="createRouteVehicle">Camión <span>(opcional)</span></label><select id="createRouteVehicle"><option value="">Sin camión (asignar después)</option>${availableTrucks.map((t) => `<option value="${t.id}">${t.unit}${t.plate ? ` · ${t.plate}` : ''}</option>`).join('')}</select></div>
     <div class="sw-newroute__field"><label for="createRouteStart">Hora de inicio</label><input type="time" id="createRouteStart"></div>
@@ -1023,7 +1026,7 @@ function renderCreateRoute() {
     <div id="createRoutePreview">${renderDraftPreview(preview)}</div>
     <p id="createRouteStatus" class="sw-newroute__status" role="status"></p>
     <p id="createRouteTripPreview" class="sw-newroute__status"></p>
-    <div class="sw-newroute__actions"><button type="button" class="sw-rutas__btn" data-create-route="cancel">Cancelar</button><button type="button" class="sw-rutas__btn sw-rutas__btn--primary" data-create-route="finish">Guardar ruta</button></div>
+    <div class="sw-newroute__actions"><button type="button" class="sw-rutas__btn" data-create-route="cancel">Cancelar</button><button type="button" class="sw-rutas__btn sw-rutas__btn--primary" data-create-route="finish" id="createRouteFinish">Guardar ruta</button></div>
   </section>
   <section class="sw-newroute__mapwrap">
     <div id="createRouteMap" class="sw-newroute__map" role="application" aria-label="Dibujar trazo de ruta nueva"></div>
@@ -1343,7 +1346,7 @@ function renderRutasCard() {
   const minutes = Number.isFinite(Number(route.estimatedMinutes)) && route.estimatedMinutes !== '' ? Number(route.estimatedMinutes) : Math.round((route.stops ?? 0) * 2.5);
   const km = route.distanceKm ? `${String(route.distanceKm).replace('.', ',')} km` : '—';
   const when = `${formatTimeOfDay(route.startTime) ?? 'Sin hora'} · ${formatDays(route.days)}`;
-  return `<h3>${escapeHtmlText(route.name)}</h3><p class="sw-rutas__muted">${route.stops ?? 0} paradas · ${km} · tiempo estimado ${minutes ? `${minutes} min` : '—'}</p><p class="sw-rutas__muted">Sale: ${escapeHtmlText(when)}</p><div class="sw-rutas__actions"><button type="button" class="sw-rutas__btn" data-route-open="${escapeHtmlText(route.id)}">Editar</button><button type="button" class="sw-rutas__btn" data-route-open="${escapeHtmlText(route.id)}">Asignar</button></div>`;
+  return `<h3>${escapeHtmlText(route.name)}</h3><p class="sw-rutas__muted">${route.stops ?? 0} paradas · ${km} · tiempo estimado ${minutes ? `${minutes} min` : '—'}</p><p class="sw-rutas__muted">Sale: ${escapeHtmlText(when)}</p><div class="sw-rutas__actions"><button type="button" class="sw-rutas__btn" data-route-edit="${escapeHtmlText(route.id)}">Editar</button><button type="button" class="sw-rutas__btn" data-route-open="${escapeHtmlText(route.id)}">Asignar</button></div>`;
 }
 let rutasMiniMap = null; let rutasMiniLine = null;
 function drawRutasMiniMap() {
@@ -1362,8 +1365,44 @@ function drawRutasMiniMap() {
   }).catch(() => { el.classList.add('fallback-active'); });
 }
 function focusRutasRoute(id) { rutasFocusId = id; refreshRoutesList(); }
-function openNewRoute() { $('#rutasView')?.setAttribute('hidden', ''); const v = $('#newRouteView'); if (v) v.hidden = false; if (createRouteMapReady) requestAnimationFrame(() => createRouteMap.invalidateSize()); $('#createRouteName')?.focus(); }
-function closeNewRoute() { const v = $('#newRouteView'); if (v) v.hidden = true; $('#rutasView')?.removeAttribute('hidden'); refreshRoutesList(); }
+function setCreateRouteMode(route) {
+  editingRouteId = route ? route.id : null; editingBefore = null; createRouteLocked = false;
+  const set = (id, text) => { const el = $(id); if (el) el.textContent = text; };
+  set('#createRouteTitle', route ? 'Editar ruta' : 'Nueva ruta');
+  set('#createRouteSub', route ? 'Cambia los datos o corrige el trazo sobre el mapa.' : 'Dibuja el recorrido sobre el mapa.');
+  set('#createRouteFinish', route ? 'Guardar cambios' : 'Guardar ruta');
+  const notice = $('#createRouteNotice'); if (notice) { notice.hidden = true; notice.textContent = ''; }
+  $('#createRoute')?.classList.remove('sw-newroute__panel--locked');
+}
+function openEditRoute(routeId) {
+  const route = routeById(routeId); if (!route) return;
+  openNewRoute();
+  setCreateRouteMode(route);
+  const geo = canEditGeometry(route);
+  createRouteLocked = !geo.ok;
+  const points = routeGeometry(route.id);
+  const currentTruck = trucks.find((t) => t.id === route.truckId || t.unit === route.truckId || (route.truckId && t.routeId === route.id));
+  editingBefore = initialEditValues(route, points, { vehicleId: currentTruck?.id ?? '' });
+  const nameEl = $('#createRouteName'); if (nameEl) nameEl.value = editingBefore.name;
+  const startEl = $('#createRouteStart'); if (startEl) startEl.value = editingBefore.startTime;
+  draftDays = editingBefore.days.slice();
+  const daysEl = $('#createRouteDays'); if (daysEl) daysEl.innerHTML = renderDayChips({ chips: DAY_CHIPS, selected: draftDays });
+  const sel = $('#createRouteVehicle');
+  if (sel) {
+    const list = trucks.filter((t) => isTruckAvailable(t) || t.id === currentTruck?.id);
+    sel.innerHTML = `<option value="">${currentTruck ? 'Sin cambios' : 'Sin camión (asignar después)'}</option>${list.map((t) => `<option value="${t.id}">${t.unit}${t.plate ? ` · ${t.plate}` : ''}</option>`).join('')}`;
+    sel.value = currentTruck?.id ?? '';
+  }
+  drawnRoutePoints = points.map((p) => p.slice());
+  if (createRouteLocked) {
+    const notice = $('#createRouteNotice'); if (notice) { notice.textContent = geo.message; notice.hidden = false; }
+    $('#createRoute')?.classList.add('sw-newroute__panel--locked');
+  }
+  redrawCreateRouteTrace();
+  if (createRouteMapReady && drawnRoutePoints.length > 1) requestAnimationFrame(() => { createRouteMap.invalidateSize(); createRouteMap.fitBounds(drawnRoutePoints, { padding: [40, 40] }); });
+}
+function openNewRoute() { setCreateRouteMode(null); $('#rutasView')?.setAttribute('hidden', ''); const v = $('#newRouteView'); if (v) v.hidden = false; if (createRouteMapReady) requestAnimationFrame(() => createRouteMap.invalidateSize()); $('#createRouteName')?.focus(); }
+function closeNewRoute() { setCreateRouteMode(null); const v = $('#newRouteView'); if (v) v.hidden = true; $('#rutasView')?.removeAttribute('hidden'); refreshRoutesList(); }
 function escapeHtmlText(value) { return String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function refreshRoutesList() {
   const list = $('#routeList'); if (list) list.innerHTML = renderRoutes(routes);
@@ -2222,7 +2261,7 @@ function initCreateRouteMap() {
     createRouteMap = L.map('createRouteMap', { zoomControl: false, attributionControl: false }).setView(pilotMunicipality.center, pilotMunicipality.zoom);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(createRouteMap);
     // Free clicks only — no snapping to real streets/routing network, by design (out of scope).
-    createRouteMap.on('click', (event) => { drawnRoutePoints = addPoint(drawnRoutePoints, [event.latlng.lat, event.latlng.lng]); redrawCreateRouteTrace(); });
+    createRouteMap.on('click', (event) => { if (createRouteLocked) return; drawnRoutePoints = addPoint(drawnRoutePoints, [event.latlng.lat, event.latlng.lng]); redrawCreateRouteTrace(); });
   }).catch(() => { const el = $('#createRouteMap'); if (el) { el.classList.add('fallback-active'); el.innerHTML = '<div class="map-fallback"><strong>Mapa externo no disponible.</strong></div>'; } });
 }
 function redrawCreateRouteTrace() {
@@ -2233,7 +2272,7 @@ function redrawCreateRouteTrace() {
   createRouteMarkers.forEach((marker) => marker.remove());
   // SW-086: los puntos se arrastran para corregir el trazo; al soltar, route-draft decide el nuevo arreglo.
   createRouteMarkers = drawnRoutePoints.map((point, index) => {
-    const marker = L.marker(point, { draggable: true, icon: L.divIcon({ className: 'sw-routes__pin', html: '<span></span>', iconSize: [22, 22], iconAnchor: [11, 11] }), keyboard: false }).bindTooltip(`Punto ${index + 1}`).addTo(createRouteMap);
+    const marker = L.marker(point, { draggable: !createRouteLocked, icon: L.divIcon({ className: 'sw-routes__pin', html: '<span></span>', iconSize: [22, 22], iconAnchor: [11, 11] }), keyboard: false }).bindTooltip(`Punto ${index + 1}`).addTo(createRouteMap);
     marker.on('drag', (event) => { const at = event.target.getLatLng(); const live = movePoint(drawnRoutePoints, index, [at.lat, at.lng]); if (createRoutePolyline) createRoutePolyline.setLatLngs(live); });
     marker.on('dragend', (event) => { const at = event.target.getLatLng(); drawnRoutePoints = movePoint(drawnRoutePoints, index, [at.lat, at.lng]); redrawCreateRouteTrace(); });
     return marker;
@@ -2330,8 +2369,8 @@ function goToMapTab() {
   if (location.hash.slice(1) === target) showSection('operaciones');
   else location.hash = target;
 }
-function undoLastRoutePoint() { drawnRoutePoints = undoPoint(drawnRoutePoints); redrawCreateRouteTrace(); }
-function clearRoutePoints() { drawnRoutePoints = clearPoints(); redrawCreateRouteTrace(); }
+function undoLastRoutePoint() { if (createRouteLocked) return; drawnRoutePoints = undoPoint(drawnRoutePoints); redrawCreateRouteTrace(); }
+function clearRoutePoints() { if (createRouteLocked) return; drawnRoutePoints = clearPoints(); redrawCreateRouteTrace(); }
 // (a) createRoute() for the metadata, (b) persist the drawn geometry (route_paths), (c)
 // generateRouteStopPoints()/saveRouteStops() — the exact same SW-025/026 functions used for the
 // bundled demo routes, not reimplemented — over the freshly drawn path, so the new route gets
@@ -2352,6 +2391,7 @@ function formatTripPreview(trips) {
   return trips.map((trip, index) => `Viaje ${index + 1}: paradas ${trip[0].sequence}-${trip[trip.length - 1].sequence}`).join(' · ');
 }
 async function finishCreateRoute() {
+  if (editingRouteId) return finishEditRoute();
   const status = $('#createRouteStatus');
   const tripPreview = $('#createRouteTripPreview');
   const nameInput = $('#createRouteName');
@@ -2365,6 +2405,69 @@ async function finishCreateRoute() {
   try {
     await finishCreateRouteSave({ name, startTime, days, status, tripPreview, nameInput });
   } finally { createRouteSaving = false; }
+}
+// SW-086b: guardar los cambios de una ruta existente. Con base real, la escritura manda: lo que falla no se aplica en pantalla.
+async function finishEditRoute() {
+  const status = $('#createRouteStatus');
+  const route = routeById(editingRouteId);
+  if (!route || !editingBefore) return;
+  const name = $('#createRouteName')?.value.trim() ?? '';
+  const check = validateEdit({ name, points: drawnRoutePoints, geometryAllowed: !createRouteLocked, saving: createRouteSaving });
+  if (!check.ok) { if (status) status.textContent = check.message; return; }
+  const startTime = normalizeStartTime($('#createRouteStart')?.value);
+  const pickedVehicle = $('#createRouteVehicle')?.value || editingBefore.vehicleId;
+  const after = { name, startTime: startTime ?? '', days: draftDays, vehicleId: pickedVehicle, points: createRouteLocked ? editingBefore.points : drawnRoutePoints };
+  const diff = diffEdit(editingBefore, after);
+  if (!diff.changed) { closeNewRoute(); showToast('No hay cambios que guardar.'); return; }
+  createRouteSaving = true;
+  const finishBtn = $('#createRouteFinish'); if (finishBtn) finishBtn.disabled = true;
+  const problems = [];
+  try {
+    const realId = route.real_id ?? route.id;
+    if (diff.geometry) {
+      const optimize = $('#createRouteOptimize')?.checked ?? false;
+      const ordered = optimize ? optimizeWaypointOrder(drawnRoutePoints.slice()) : drawnRoutePoints.slice();
+      if (status) status.textContent = 'Calculando trazo sobre calles reales…';
+      const road = await fetchRoadRoute(ordered);
+      const path = road.ok ? road.path : ordered;
+      const stopPoints = generateRouteStopPoints(path);
+      const pathRows = path.map(([latitude, longitude], index) => ({ sequence: index + 1, latitude, longitude }));
+      let saved = true;
+      if (realAdapter) {
+        try {
+          const r = await realAdapter.replaceRouteGeometry(realId, pathRows, stopPoints);
+          if (!r?.ok) { saved = false; problems.push(`el trazo: ${r?.error?.message ?? 'error desconocido'}`); }
+        } catch (error) { saved = false; problems.push(`el trazo: ${error.message}`); }
+      }
+      if (saved) {
+        operationsAdapter.replaceRouteGeometry(route.id, pathRows, stopPoints);
+        route.stops = stopPoints.length; route.pending = stopPoints.length; route.covered = 0;
+        route.distanceKm = Math.round((path.slice(1).reduce((t, p, i) => t + haversineMeters(path[i], p), 0) / 1000) * 10) / 10;
+      }
+    }
+    if (diff.meta) {
+      const payload = routeUpdatePayload({ name, startTime, days: draftDays });
+      let saved = true;
+      if (realAdapter) {
+        try {
+          const r = await realAdapter.updateRoute(realId, payload);
+          if (!r?.ok) { saved = false; problems.push(`los datos: ${r?.error?.message ?? 'error desconocido'}`); }
+        } catch (error) { saved = false; problems.push(`los datos: ${error.message}`); }
+      }
+      if (saved) { route.name = payload.name; route.startTime = payload.start_time; route.days = payload.days_of_week; }
+    }
+    if (diff.vehicle) {
+      const truck = trucks.find((t) => t.id === pickedVehicle);
+      if (truck) await assignTruckToRoute(route, truck);
+    }
+  } finally { createRouteSaving = false; if (finishBtn) finishBtn.disabled = false; }
+  if (problems.length) { if (status) status.textContent = `No se pudo guardar ${problems.join(' · ')}. Revisa e intenta de nuevo.`; showToast('Algunos cambios no se guardaron.', { type: 'error' }); refreshRoutesList(); return; }
+  rutasFocusId = route.id;
+  closeNewRoute();
+  refreshResumen();
+  refreshFleetSelects();
+  if (mapReady) drawMapLayers();
+  showToast(`Ruta "${route.name}" actualizada.`);
 }
 async function finishCreateRouteSave({ name, startTime, days, status, tripPreview, nameInput }) {
 
@@ -2564,6 +2667,7 @@ document.addEventListener('click', (event) => {
   if (createRouteAction === 'clear') clearRoutePoints();
   if (createRouteAction === 'cancel') closeNewRoute();
   if (event.target.closest('[data-route-new]')) openNewRoute();
+  const editBtn = event.target.closest('[data-route-edit]'); if (editBtn) openEditRoute(editBtn.dataset.routeEdit);
   const openBtn = event.target.closest('[data-route-open]'); if (openBtn) { selectRoute(openBtn.dataset.routeOpen); goToMapTab(); }
   const focusRow = event.target.closest('.sw-routes__row'); if (focusRow) focusRutasRoute(focusRow.dataset.route);
   if (createRouteAction === 'finish') finishCreateRoute();

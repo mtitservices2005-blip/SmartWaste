@@ -81,6 +81,14 @@ export function createDemoOperationsAdapter(seed = { trucks, routes, drivers, in
       return clone(saved);
     },
     listPathPoints: (routeId) => clone(state.routePaths.filter((point) => point.route_id === routeId).sort((a, b) => a.sequence - b.sequence)),
+    // SW-086b: reemplaza trazo y paradas de una ruta (en demo es el caché local; en real lo hace la función SQL).
+    replaceRouteGeometry: (routeId, points, stops) => {
+      state.routePaths = state.routePaths.filter((p) => p.route_id !== routeId);
+      state.routeStops = state.routeStops.filter((p) => p.route_id !== routeId);
+      points.forEach((point, index) => state.routePaths.push({ id: `demo-path-${routeId}-${Date.now().toString(36)}-${index}`, route_id: routeId, ...point }));
+      (stops ?? []).forEach((point, index) => state.routeStops.push({ id: `demo-stop-${routeId}-${Date.now().toString(36)}-${index}`, route_id: routeId, ...point }));
+      return { ok: true };
+    },
     assignVehicle: (routeId, vehicleId) => updateRoute(state, routeId, { truckId: vehicleId, status:'assigned' }),
     assignDriver: (routeId, driverId) => updateRoute(state, routeId, { driverId, status:'assigned' }),
     startRoute: (routeId) => transitionRoute(state, routeId, 'started'),
@@ -294,6 +302,12 @@ export function createSupabaseOperationsAdapter(client, { fallback = createDemoO
     // SW-027: persists a route's drawn geometry (route_paths) — same pattern as
     // saveRouteStops/listRouteStops above, just for the raw drawn line instead of derived
     // collection points.
+    // SW-086b: una sola llamada atómica (función SQL replace_route_geometry): o se cambia todo o no se cambia nada.
+    replaceRouteGeometry: (routeId, points, stops, opts = {}) => run(
+      () => client.rpc('replace_route_geometry', { p_route_id: routeId, p_points: points, p_stops: stops ?? [] }),
+      () => fallback.replaceRouteGeometry(routeId, points, stops),
+      opts.correlation_id
+    ),
     savePathPoints: (routeId, points, opts = {}) => run(
       () => table(client, 'route_paths').insert(points.map((point) => ({
         route_id: routeId,
