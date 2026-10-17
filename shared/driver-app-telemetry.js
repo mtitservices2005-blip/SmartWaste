@@ -1,9 +1,11 @@
 import { validateTelemetryPosition } from './telemetry-simulator.js';
 import { readBatteryPct } from './driver-app-battery.js';
+import { isAccuracyUsable } from './gps-quality.js';
 import { HEARTBEAT_INTERVAL_MS, createHeartbeat, heartbeatPosition, nextRetryDelayMs } from './driver-app-heartbeat.js';
 
-export const DRIVER_APP_MAX_INTERVAL_MS = 10_000;
-export const DRIVER_APP_MIN_DISTANCE_METERS = 25;
+// SW-096: antes 10 s / 25 m; más fino para que el trazo siga las esquinas (algo más de batería).
+export const DRIVER_APP_MAX_INTERVAL_MS = 5_000;
+export const DRIVER_APP_MIN_DISTANCE_METERS = 10;
 
 export function distanceMeters(a, b) {
   const radians = (degrees) => Number(degrees) * Math.PI / 180;
@@ -17,7 +19,7 @@ export function distanceMeters(a, b) {
 }
 
 // Background-geolocation callbacks may arrive more frequently than we want to persist. Keep a
-// sample when ten seconds have elapsed OR the phone moved at least 25 metres, whichever happens
+// sample when five seconds have elapsed OR the phone moved at least 10 metres, whichever happens
 // first. The first valid sample is always kept.
 export function shouldCaptureDriverPosition(lastPosition, nextPosition, {
   maxIntervalMs = DRIVER_APP_MAX_INTERVAL_MS,
@@ -227,6 +229,8 @@ export async function createDriverTelemetrySession({
       });
       const validation = validateTelemetryPosition(position);
       if (!validation.valid) return { ok: false, error: { code: 'INVALID_TELEMETRY', message: validation.errors.join('; ') } };
+      // SW-096: posición con precisión peor que 50 m (el teléfono reportó 404,9 m): no se guarda ni se envía.
+      if (!isAccuracyUsable(position.accuracy)) return { ok: true, queued: false, reason: 'LOW_ACCURACY' };
       if (!shouldCaptureDriverPosition(lastCaptured, position)) return { ok: true, queued: false, reason: 'THROTTLED' };
       const queued = await queue.enqueue(position);
       if (queued) { lastCaptured = position; lastSampleAt = now(); }

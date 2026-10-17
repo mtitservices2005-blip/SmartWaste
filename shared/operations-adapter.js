@@ -1,6 +1,7 @@
 import { trucks, routes, drivers, incidents, routePaths } from './demo-data.js';
 import { canTransitionRoute } from './contracts.js';
 import { deriveStopStatus, haversineMeters } from './route-engine.js';
+import { cleanTrack, trackStats } from './gps-quality.js';
 
 // This adapter (createSupabaseOperationsAdapter, below) is the single entry point for operating
 // on routes/route_runs/vehicle_assignments — see docs/CORE_READINESS_REVIEW.md. When MT Workflow
@@ -200,11 +201,13 @@ export function createSupabaseOperationsAdapter(client, { fallback = createDemoO
     },
     listFuelLogs: (opts = {}) => run(() => scoped(table(client, 'fuel_logs').select('*').order('logged_at', { ascending: false })), () => fallback.listFuelLogs(), opts.correlation_id),
     // SW-090: recorrido medido de una corrida = posiciones del camión entre su inicio y su fin.
-    listRunTrack: (routeRun, opts = {}) => {
-      if (!routeRun?.vehicle_id || !routeRun?.started_at) return Promise.resolve(ok([], { correlation_id: opts.correlation_id ?? null }));
+    listRunTrack: async (routeRun, opts = {}) => {
+      if (!routeRun?.vehicle_id || !routeRun?.started_at) return ok([], { correlation_id: opts.correlation_id ?? null });
       const from = routeRun.gps_started_at ?? routeRun.started_at;
       const to = routeRun.gps_ended_at ?? routeRun.completed_at ?? new Date().toISOString();
-      return run(() => scoped(table(client, 'vehicle_positions').select('latitude,longitude,captured_at').eq('vehicle_id', routeRun.vehicle_id).gte('captured_at', from).lte('captured_at', to).neq('source', 'simulator').order('captured_at', { ascending: true }).limit(3000)), () => fallback.listRunTrack(routeRun), opts.correlation_id);
+      // SW-096: el trazo no dibuja puntos de mala precisión ni saltos imposibles (shared/gps-quality.js).
+      const result = await run(() => scoped(table(client, 'vehicle_positions').select('latitude,longitude,captured_at,accuracy').eq('vehicle_id', routeRun.vehicle_id).gte('captured_at', from).lte('captured_at', to).neq('source', 'simulator').order('captured_at', { ascending: true }).limit(3000)), () => fallback.listRunTrack(routeRun), opts.correlation_id);
+      return result.ok ? { ...result, data: cleanTrack(result.data) } : result;
     },
     markRouteRunTest: (runId, isTest, opts = {}) => run(() => client.rpc('set_route_run_test_flag', { p_run_id: runId, p_is_test: Boolean(isTest) }), () => fallback.markRouteRunTest(runId, isTest), opts.correlation_id),
     listFleetAlerts: (opts = {}) => run(() => {
@@ -533,22 +536,24 @@ async function transitionRouteRun(client, fallback, municipality_id, routeId, ne
   // falls back to the route's drawn/estimated distance, same as it always has. Never blocks the
   // completion itself; this runs after started_at/completed_at are already decided above.
   if (next === 'completed' && current.data.vehicle_id && current.data.started_at) {
-    const positionsResult = await client.from('vehicle_positions').select('latitude,longitude,captured_at')
+    // SW-096: accuracy se pide para que la distancia ignore puntos de mala precisión y saltos imposibles
+    // (shared/gps-quality.js). gps_points_count sigue siendo el total guardado; el rango y los km salen de los puntos buenos.
+    const positionsResult = await client.from('vehicle_positions').select('latitude,longitude,captured_at,accuracy')
       .eq('route_run_id', current.data.id).neq('source', 'simulator').order('captured_at', { ascending: true });
     if (!positionsResult.error) {
       const samples = positionsResult.data ?? [];
+      const stats = trackStats(samples);
       timingPatch.gps_points_count = samples.length;
-      if (samples.length) {
-        timingPatch.gps_started_at = samples[0].captured_at;
-        timingPatch.gps_ended_at = samples[samples.length - 1].captured_at;
+      if (stats.usedCount) {
+        timingPatch.gps_started_at = stats.startedAt;
+        timingPatch.gps_ended_at = stats.endedAt;
       }
-      if (!current.data.distance_meters && samples.length >= 2) {
-        const points = samples.map((row) => [row.latitude, row.longitude]);
-        const distanceMeters = points.slice(1).reduce((total, point, index) => total + haversineMeters(points[index], point), 0);
-        timingPatch.distance_meters = Math.round(distanceMeters);
+      if (!current.data.distance_meters && stats.usedCount >= 2) {
+        timingPatch.distance_meters = Math.round(stats.distanceMeters);
       }
     }
   }
+
   let q = client.from('route_runs').update({ status: next, ...timingPatch, ...patch }).eq('id', current.data.id);
   if (opts.version !== undefined) q = q.eq('version', opts.version);
   const updated = await q.select('*').single();
