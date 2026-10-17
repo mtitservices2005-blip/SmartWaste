@@ -56,3 +56,20 @@
 .sw-compare__flag { display: inline-flex; flex-direction: column; gap: 2px; margin: 2px 8px 2px 0; padding: 4px 10px; border-radius: var(--radius-1); background: var(--color-warning-bg); color: var(--color-warning); font-size: var(--font-size-1); }
 .sw-compare__flag small { color: inherit; opacity: .85; font-weight: 500; }
 .sw-compare__best { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; background: var(--color-primary); color: var(--color-primary-contrast); font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; vertical-align: middle; }
+
+/* SW-092: pestaña Resumen */
+.sw-summary { display: flex; flex-direction: column; gap: var(--space-4); }
+.sw-summary .sw-rutas__card h3 { font-size: 1.05rem; margin: 0 0 var(--space-3); }
+.sw-summary__head { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; justify-content: space-between; margin-bottom: var(--space-2); }
+.sw-summary__head h3 { margin: 0; }
+.sw-summary__head small { color: var(--color-muted); font-weight: 500; }
+.sw-summary__lines { margin: 0 0 var(--space-3); padding-left: 1.2em; display: flex; flex-direction: column; gap: 6px; }
+.sw-summary__recs { list-style: none; margin: 0 0 var(--space-3); padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.sw-summary__rec { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--space-3); align-items: start; padding: var(--space-3) var(--space-4); border: 1px solid var(--color-border); border-radius: var(--radius-2); background: var(--color-background-alt); }
+.sw-summary__body p { margin: 4px 0 0; color: var(--color-muted); }
+.sw-summary__sev { display: inline-flex; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: var(--font-size-1); font-weight: 700; white-space: nowrap; }
+.sw-summary__rec--atencion .sw-summary__sev { background: var(--color-warning-bg); color: var(--color-warning); }
+.sw-summary__rec--info .sw-summary__sev { background: var(--status-disponible-bg); color: var(--status-disponible); }
+.sw-summary__rec--ok .sw-summary__sev { background: var(--status-en-ruta-bg); color: var(--status-en-ruta); }
+@media (max-width: 700px) { .sw-summary__rec { grid-template-columns: 1fr; } }
+.sw-summary a.sw-rutas__btn { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }

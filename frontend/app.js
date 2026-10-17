@@ -35,6 +35,7 @@ import { canEditGeometry, initialEditValues, diffEdit, validateEdit, routeUpdate
 import { DAY_CHIPS, normalizeDays, normalizeStartTime, formatDays, formatTimeOfDay } from '../shared/route-schedule.js';
 import { buildVehicleRows, buildDriverRows, fleetHeader, validateVehicleForm, validateDriverForm, validateFuelConfig } from '../shared/fleet-list.js';
 import { buildMetricsView, formatNumber, formatKm, formatDuration } from '../shared/metrics-view.js';
+import { buildWeeklySummary } from '../shared/weekly-summary.js';
 import { renderMetricsPage } from './components/metrics-screens.js';
 import { renderFleetTabs, renderVehiclesTable, renderDriversTable, renderVehicleForm, renderDriverForm } from './components/fleet-screens.js';
 import { renderRoutesTable, renderFilterChips, renderDayChips, renderHistory, renderDraftPreview } from './components/routes-screens.js';
@@ -670,7 +671,7 @@ function renderIncidenciasPanel() {
 }
 // SW-090: Métricas (reemplaza Estadísticas). Usa corridas completadas, litros del conductor y el rendimiento
 // que digita el ayuntamiento. Sin rendimiento ni litros: "Sin datos" (nunca una cifra genérica).
-const metrics = { period: 14, tab: 'camiones', filters: {}, selectedRunId: null, data: null, trace: null, traceFor: null };
+const metrics = { weeklyText: '', period: 14, tab: 'camiones', filters: {}, selectedRunId: null, data: null, trace: null, traceFor: null };
 const metricsFmt = { number: formatNumber, km: formatKm, duration: formatDuration };
 function renderEstadisticasPanel() {
   return `<div id="metricsRoot"><p class="demo">Cargando métricas…</p></div>`;
@@ -687,7 +688,9 @@ function renderMetrics() {
   const d = metrics.data;
   const view = buildMetricsView({ ...d, period: metrics.period, filters: metrics.filters });
   const options = { routes: d.routes, vehicles: d.vehicles.map((v) => ({ id: v.id, label: v.code ?? v.unit ?? '—' })), drivers: d.drivers.map((x) => ({ id: x.id, name: x.display_name ?? x.name ?? '—' })) };
-  root.innerHTML = renderMetricsPage({ view, period: metrics.period, tab: metrics.tab, filters: metrics.filters, options, selectedRunId: metrics.selectedRunId, trace: metrics.traceFor === (metrics.selectedRunId ?? view.runRows[0]?.id) ? metrics.trace : null, fmt: metricsFmt, demo: Boolean(demoNotice), municipalityName: 'Laguna Salada' });
+  const weekly = buildWeeklySummary(d);
+  metrics.weeklyText = weekly.text;
+  root.innerHTML = renderMetricsPage({ weekly, view, period: metrics.period, tab: metrics.tab, filters: metrics.filters, options, selectedRunId: metrics.selectedRunId, trace: metrics.traceFor === (metrics.selectedRunId ?? view.runRows[0]?.id) ? metrics.trace : null, fmt: metricsFmt, demo: Boolean(demoNotice), municipalityName: 'Laguna Salada' });
   if (metrics.tab === 'corridas') loadRunTrace(metrics.selectedRunId ?? view.runRows[0]?.id);
 }
 async function loadRunTrace(runId) {
@@ -719,11 +722,22 @@ async function setRunTestFlag(runId, value) {
   if (run) run.is_test = value;
   renderMetrics();
 }
+// Copia el resumen como texto (para pegarlo en WhatsApp o un correo). Si el navegador no deja, lo dice.
+async function copyWeeklySummary() {
+  const status = document.getElementById('metricsCopyStatus');
+  try {
+    await navigator.clipboard.writeText(metrics.weeklyText);
+    if (status) status.textContent = 'Resumen copiado.';
+  } catch {
+    if (status) status.textContent = 'Tu navegador no permitió copiar. Selecciona el texto del resumen y cópialo a mano.';
+  }
+}
 function handleMetricsClick(event) {
   const period = event.target.closest('[data-metrics-period]');
   if (period) { metrics.period = Number(period.dataset.metricsPeriod); renderMetrics(); return; }
   const tab = event.target.closest('[data-metrics-tab]');
   if (tab) { metrics.tab = tab.dataset.metricsTab; renderMetrics(); return; }
+  if (event.target.closest('[data-metrics-copy]')) { copyWeeklySummary(); return; }
   const gotoRun = event.target.closest('[data-metrics-goto-run]');
   if (gotoRun) { metrics.tab = 'corridas'; metrics.selectedRunId = gotoRun.dataset.metricsGotoRun; renderMetrics(); return; }
   const runRow = event.target.closest('[data-metrics-run]');
