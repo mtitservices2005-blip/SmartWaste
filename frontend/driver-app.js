@@ -5,13 +5,14 @@ import { renderDriverToday, renderDriverRun, renderDriverFinish, renderDriverLoa
 import { selectTodayRoutes, formatTodayText } from '../shared/driver-today.js';
 import { loadDriverToday } from '../shared/driver-data.js';
 import { nextStopInfo, formatElapsed, formatDistance, markVisitedStops, haversineMeters } from '../shared/driver-nav.js';
+import { createLiveMarker } from '../shared/driver-live-marker.js';
 import { parseFuelLiters, buildFuelEntry } from '../shared/fuel-entry.js';
 
 const firstName = (full) => String(full ?? '').trim().split(/\s+/)[0] ?? '';
 
 export function createDriverController({ load, adapter, gps, municipalityId, userId, toast = () => {}, draw, now = () => new Date(), logout = async () => {} }) {
   const state = { screen: 'today', data: null, error: '', runId: null, startedAt: {}, visited: {}, position: null, finishError: '', fuelValue: '', fuelSaved: {}, busy: false };
-  const c = { state, onField: null };
+  const c = { state, onField: null, onPosition: null };
 
   const runs = () => state.data?.runs ?? [];
   const currentRun = () => runs().find((r) => r.id === state.runId) ?? null;
@@ -66,6 +67,7 @@ export function createDriverController({ load, adapter, gps, municipalityId, use
 
   c.setPosition = (position) => {
     state.position = position;
+    c.onPosition?.(position); // SW-098: dibuja el punto aunque no haya ruta abierta
     const run = currentRun();
     if (!run || state.screen !== 'run') return;
     state.visited[run.id] = markVisitedStops(run.stops, position, visitedOf(run.id));
@@ -139,13 +141,13 @@ export function createDriverController({ load, adapter, gps, municipalityId, use
 export async function mountDriverApp({ root, client, ctx, adapter, gps, toast, logout, win = globalThis.window, nav = globalThis.navigator }) {
   const userResult = await client.auth.getUser();
   const email = userResult?.data?.user?.email ?? '';
-  let map = null; let marker = null;
+  let map = null; let live = null;
 
   const controller = createDriverController({
     load: () => loadDriverToday(client, { userId: ctx.user_id, municipalityId: ctx.municipality_id, email }),
     adapter, gps, toast, logout, municipalityId: ctx.municipality_id, userId: ctx.user_id,
     draw: (screen, html) => {
-      if (map) { map.remove(); map = null; marker = null; }
+      if (map) { map.remove(); map = null; live = null; }
       root.innerHTML = html;
       if (screen === 'run' && win?.L) {
         map = win.L.map('driverRunMap', { zoomControl: false, attributionControl: false });
@@ -154,21 +156,22 @@ export async function mountDriverApp({ root, client, ctx, adapter, gps, toast, l
         const color = css.getPropertyValue('--color-primary').trim() || '#3d7a00';
         const coords = controller.routeCoordinates();
         if (coords.length) { win.L.polyline(coords, { color, weight: 5 }).addTo(map); map.fitBounds(coords, { padding: [40, 40] }); } else { map.setView([19.0, -71.0], 15); }
-        if (controller.state.position) { marker = win.L.circleMarker([controller.state.position.latitude, controller.state.position.longitude], { radius: 8, color: '#fff', fillColor: color, fillOpacity: 1 }).addTo(map); }
+        const recenterBtn = root.querySelector('[data-driver-recenter]');
+        live = createLiveMarker({ L: win.L, map, color, onFollowChange: (following) => { if (recenterBtn) recenterBtn.hidden = following; } });
+        if (controller.state.position) live.update(controller.state.position);
       }
     }
   });
 
   controller.onField = (field, value) => {
     root.querySelectorAll(`[data-driver-field="${field}"]`).forEach((el) => { el.textContent = value; });
-    if (field === 'progress' && controller.state.position && map && win?.L) {
-      const p = [controller.state.position.latitude, controller.state.position.longitude];
-      if (marker) marker.setLatLng(p); else marker = win.L.circleMarker(p, { radius: 8, color: '#fff', fillOpacity: 1 }).addTo(map);
-    }
   };
 
+  // SW-098: la posición también llega del GPS nativo (app.js la reenvía con setPosition); aquí solo se dibuja.
+  controller.onPosition = (position) => { live?.update(position); };
+
   root.addEventListener('click', (event) => {
-    const t = event.target.closest?.('[data-driver-start-route],[data-driver-open-run],[data-driver-finish-open],[data-driver-finish-back],[data-driver-finish-save],[data-driver-retry],[data-driver-logout]');
+    const t = event.target.closest?.('[data-driver-start-route],[data-driver-open-run],[data-driver-finish-open],[data-driver-finish-back],[data-driver-finish-save],[data-driver-retry],[data-driver-logout],[data-driver-recenter]');
     if (!t) return;
     const d = t.dataset;
     if ('driverStartRoute' in d) controller.action('start', d.driverStartRoute);
@@ -178,9 +181,10 @@ export async function mountDriverApp({ root, client, ctx, adapter, gps, toast, l
     else if ('driverFinishSave' in d) controller.action('finish-save', root.querySelector('#driverFuelLiters')?.value ?? '');
     else if ('driverRetry' in d) controller.action('retry');
     else if ('driverLogout' in d) controller.action('logout');
+    else if ('driverRecenter' in d) live?.recenter();
   });
 
-  nav?.geolocation?.watchPosition?.((p) => controller.setPosition({ latitude: p.coords.latitude, longitude: p.coords.longitude }), () => {}, { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 });
+  nav?.geolocation?.watchPosition?.((p) => controller.setPosition({ latitude: p.coords.latitude, longitude: p.coords.longitude, accuracy: p.coords.accuracy }), () => {}, { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 });
   const setConn = () => {
     const on = nav?.onLine !== false;
     root.querySelectorAll('[data-driver-field="connected"]').forEach((el) => { el.textContent = on ? 'Conectado' : 'Sin conexión'; el.classList.toggle('sw-driver__chip--on', on); el.classList.toggle('sw-driver__chip--off', !on); });
