@@ -36,6 +36,7 @@ import { DAY_CHIPS, normalizeDays, normalizeStartTime, formatDays, formatTimeOfD
 import { buildVehicleRows, buildDriverRows, fleetHeader, validateVehicleForm, validateDriverForm, validateFuelConfig } from '../shared/fleet-list.js';
 import { buildMetricsView, formatNumber, formatKm, formatDuration } from '../shared/metrics-view.js';
 import { buildWeeklySummary } from '../shared/weekly-summary.js';
+import { renderHomeWeekly } from './components/summary-screens.js';
 import { renderMetricsPage } from './components/metrics-screens.js';
 import { renderFleetTabs, renderVehiclesTable, renderDriversTable, renderVehicleForm, renderDriverForm } from './components/fleet-screens.js';
 import { renderRoutesTable, renderFilterChips, renderDayChips, renderHistory, renderDraftPreview } from './components/routes-screens.js';
@@ -396,6 +397,22 @@ function truckIcon(truck, isRealGps = false) {
 // los mismos filtros que ya usan renderMap()/renderSupervisor() (no se inventa ningún estado
 // nuevo), y cada tarjeta es un link real a la sección correspondiente en vez de solo mostrar el
 // número — mismo patrón del link "Municipal · Flota y personal" de la Fase 1.
+// SW-093: resumen semanal compacto en Inicio, junto a los datos de rutas. Usa los mismos datos que
+// Operaciones · Métricas (metrics.data); mientras llegan, dice que está cargando.
+function homeWeeklyHtml() {
+  if (!metrics.data) return '<section class="sw-summary sw-summary--home"><h3>Esta semana</h3><p class="demo">Cargando el resumen de la semana…</p></section>';
+  const weekly = buildWeeklySummary(metrics.data);
+  return renderHomeWeekly({ weekly: weekly.isEmpty ? null : weekly });
+}
+let resumenSemanaAt = 0;
+async function refreshResumenSemana() {
+  if (metrics.data && Date.now() - resumenSemanaAt < 30000) return; // refreshResumen() corre seguido; no pedir los datos cada vez
+  resumenSemanaAt = Date.now();
+  const data = await loadMetricsData();
+  if (data) metrics.data = data;
+  const box = document.getElementById('resumenSemana');
+  if (box) box.innerHTML = homeWeeklyHtml();
+}
 function renderSummary() {
   const activeRoutes = routes.filter((route) => route.status === 'in_progress' || route.status === 'delayed');
   const delayedRoutes = routes.filter((route) => route.status === 'delayed');
@@ -421,6 +438,7 @@ function renderSummary() {
     ${attentionItems.length
       ? `<div><h3>Necesita tu atención</h3><div class="list">${attentionItems.join('')}</div></div>`
       : '<p class="demo">Sin rutas retrasadas ni incidencias abiertas — todo en orden.</p>'}
+    <div id="resumenSemana">${homeWeeklyHtml()}</div>
   </section>`;
 }
 
@@ -737,6 +755,7 @@ function handleMetricsClick(event) {
   if (period) { metrics.period = Number(period.dataset.metricsPeriod); renderMetrics(); return; }
   const tab = event.target.closest('[data-metrics-tab]');
   if (tab) { metrics.tab = tab.dataset.metricsTab; renderMetrics(); return; }
+  if (event.target.closest('[data-metrics-open-summary]')) { metrics.tab = 'resumen'; return; } // el link cambia el hash; la pestaña queda en Resumen
   if (event.target.closest('[data-metrics-copy]')) { copyWeeklySummary(); return; }
   const gotoRun = event.target.closest('[data-metrics-goto-run]');
   if (gotoRun) { metrics.tab = 'corridas'; metrics.selectedRunId = gotoRun.dataset.metricsGotoRun; renderMetrics(); return; }
@@ -2428,6 +2447,7 @@ function showSection(id) {
   // refreshCitizenReportsBlock() only patches its own div, never calls showSection() itself, so this
   // can't loop back into showSection('supervisor').
   if (id === 'supervisor') refreshCitizenReportsBlock();
+  if (id === 'resumen' && realAdapter) refreshResumenSemana(); // SW-093: datos frescos al volver a Inicio
   // SW-030: same "refetch on tab entry" precedent as the Supervisor line above — a corrida real
   // recién medida, o una parada recién guardada, no debería requerir un reload completo para
   // aparecer en las comparaciones con datos reales.

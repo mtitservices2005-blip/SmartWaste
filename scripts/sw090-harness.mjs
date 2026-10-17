@@ -7,6 +7,7 @@ import { renderFleetTabs, renderVehiclesTable, renderVehicleForm } from '../fron
 import { buildMetricsView, formatNumber, formatKm, formatDuration } from '../shared/metrics-view.js';
 import { buildVehicleRows } from '../shared/fleet-list.js';
 import { buildWeeklySummary } from '../shared/weekly-summary.js';
+import { renderHomeWeekly } from '../frontend/components/summary-screens.js';
 
 const out = process.argv[2] ?? 'docs/evidence/SW-090';
 mkdirSync(out, { recursive: true });
@@ -59,4 +60,8 @@ writeFileSync(`${out}/harness-b.html`, page('#operaciones/estadisticas', pageB))
 writeFileSync(`${out}/harness-e.html`, page('#operaciones/estadisticas', pageE));
 writeFileSync(`${out}/harness-d.html`, page('#operaciones/estadisticas', pageD));
 writeFileSync(`${out}/harness-c.html`, page('#operaciones/flota', pageC));
+// SW-093: Inicio con los KPI de rutas y el resumen semanal compacto.
+const kpis = [['Rutas activas', 2, ''], ['Rutas retrasadas', 1, 'alert'], ['Incidencias abiertas', 0, ''], ['Rutas por verificar', 1, 'attention'], ['Vehículos fuera de servicio', 0, '']];
+const pageF = `<section id="resumen" class="section card"><p class="eyebrow">SmartWaste · Laguna Salada</p><h1>Resumen del día</h1><p class="demo">Datos demo · no producción · Municipio piloto: Laguna Salada, República Dominicana</p><div class="kpis summary-grid">${kpis.map(([l, v, t]) => `<a class="kpi${t ? ` ${t}` : ''}" href="#operaciones/mapa"><strong>${v}</strong><br>${l}</a>`).join('')}</div><div><h3>Necesita tu atención</h3><div class="list"><button class="row selectable"><span>🚨 Ruta retrasada: Ruta Norte<br>Sector Norte</span><span class="pill">Retrasada</span></button></div></div><div id="resumenSemana">${renderHomeWeekly({ weekly })}</div></section>`;
+writeFileSync(`${out}/harness-f.html`, `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SW-093 evidencia</title><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"><style>${css}</style><script>var t=new URLSearchParams(location.search).get('t');document.documentElement.dataset.theme=t==='claro'?'claro':'oscuro';</script></head><body>${renderRail({ hash: '#resumen' })}<main id="app">${pageF}</main></body></html>`);
 console.log('ok', runs.length, 'corridas');
