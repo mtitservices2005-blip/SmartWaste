@@ -41,11 +41,13 @@ export function buildComparison({ runs = [], vehicles = [], routes = [], drivers
   // Desvíos: cada corrida del periodo contra la mediana de las corridas previas de su ruta.
   const deviations = [];
   let withoutBase = 0;
-  const flaggedRoutesWithoutBase = new Set();
+  const routesWithRuns = new Set(); const routesCompared = new Set();
   for (const run of current) {
     const t = new Date(run.started_at).getTime();
     const priors = valid.filter((p) => p.route_id === run.route_id && p.id !== run.id && new Date(p.started_at).getTime() < t && t - new Date(p.started_at).getTime() <= T.baselineDays * 86400000);
-    if (priors.length < T.minBaseRuns) { flaggedRoutesWithoutBase.add(run.route_id); continue; }
+    routesWithRuns.add(run.route_id);
+    if (priors.length < T.minBaseRuns) continue;
+    routesCompared.add(run.route_id);
     const m = metricOf(run); const base = priors.map(metricOf);
     const flags = [];
     const check = (metric, value, key, limit, both) => {
@@ -58,7 +60,7 @@ export function buildComparison({ runs = [], vehicles = [], routes = [], drivers
     check('co2', m.co2Kg, 'co2Kg', T.co2Pct, false);
     if (flags.length) deviations.push({ runId: run.id, startedAt: run.started_at, routeName: rById.get(run.route_id)?.name ?? '—', vehicleLabel: vehicleLabel(vById.get(run.vehicle_id)), flags });
   }
-  withoutBase = flaggedRoutesWithoutBase.size;
+  withoutBase = [...routesWithRuns].filter((id) => !routesCompared.has(id)).length;
   deviations.sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)));
 
   // Camiones en la misma ruta (al menos 2 camiones con 2 corridas cada uno).

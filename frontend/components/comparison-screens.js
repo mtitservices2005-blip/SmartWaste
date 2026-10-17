@@ -12,11 +12,11 @@ const dateTime = (iso) => {
   return new Intl.DateTimeFormat('es-DO', { timeZone: 'America/Santo_Domingo', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }).format(d).replace('.', '');
 };
 
-// Para tiempo, consumo y CO₂ bajar es mejor; para corridas y distancia el cambio es neutro.
+// Para tiempo, consumo y CO₂ bajar es mejor; para corridas y distancia el cambio es neutro. Cambios menores de 5 % se leen como estables.
 function delta(value, betterWhenLower) {
   const text = pct(value);
   if (text === null) return muted('sin periodo anterior');
-  const tone = !betterWhenLower || value === 0 ? 'neutral' : value < 0 ? 'good' : 'bad';
+  const tone = !betterWhenLower || Math.abs(value) < 5 ? 'neutral' : value < 0 ? 'good' : 'bad';
   const arrow = value > 0 ? '▲' : value < 0 ? '▼' : '■';
   return `<span class="sw-compare__delta sw-compare__delta--${tone}"><span aria-hidden="true">${arrow}</span> ${text}</span>`;
 }

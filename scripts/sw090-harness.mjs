@@ -22,9 +22,9 @@ const routes = [{ id: 'r1', name: 'Ruta Centro' }, { id: 'r2', name: 'Ruta Norte
 const drivers = [{ id: 'd1', display_name: 'Carlos Peña' }, { id: 'd2', display_name: 'Ana Reyes' }, { id: 'd3', display_name: 'Luis Mejía' }];
 const runs = []; const fuelLogs = [];
 let n = 0;
-for (let i = 13; i >= 0; i -= 1) {
+for (let i = 27; i >= 0; i -= 1) {
   const day = new Date(now.getTime() - i * 86400000).toISOString().slice(0, 10);
-  [['v1', 'r1', 'd1', '10:00', 6.4], ['v2', 'r2', 'd2', '11:15', 5.1], ['v3', 'r3', 'd3', '11:20', 4.2]].forEach(([v, r, d, t, km], k) => {
+  [['v1', 'r1', 'd1', '10:00', 6.4], ['v2', 'r2', 'd2', '11:15', 5.1], [i % 2 ? 'v1' : 'v3', 'r3', i % 2 ? 'd1' : 'd3', '11:20', 4.2]].forEach(([v, r, d, t, km], k) => {
     if ((i + k) % 5 === 4) return;
     n += 1;
     const jitter = 1 + (((i * 7 + k * 3) % 5) - 2) / 20;
