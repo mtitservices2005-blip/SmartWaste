@@ -3,9 +3,10 @@
 import { escapeHtml } from './button.js';
 import { emptyState } from './empty-state.js';
 import { renderComparison } from './comparison-screens.js';
+import { renderWeeklySummary } from './summary-screens.js';
 
 const PERIODS = [{ days: 1, label: 'Hoy' }, { days: 7, label: '7 días' }, { days: 14, label: '14 días' }, { days: 30, label: '30 días' }, { days: 90, label: 'Trimestre' }];
-const TABS = [{ key: 'camiones', label: 'Por camión' }, { key: 'rutas', label: 'Por ruta' }, { key: 'conductores', label: 'Por conductor' }, { key: 'corridas', label: 'Corridas' }, { key: 'comparar', label: 'Comparar' }];
+const TABS = [{ key: 'camiones', label: 'Por camión' }, { key: 'rutas', label: 'Por ruta' }, { key: 'conductores', label: 'Por conductor' }, { key: 'corridas', label: 'Corridas' }, { key: 'comparar', label: 'Comparar' }, { key: 'resumen', label: 'Resumen' }];
 const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
 const SOURCES = { real: ['●', 'Real', 'real'], estimado: ['≈', 'Estimado', 'est'], sin_datos: ['–', 'Sin datos', 'none'] };
 const muted = (t = '—') => `<span class="sw-metrics__muted">${t}</span>`;
@@ -152,14 +153,15 @@ function renderRuns({ view, selectedRunId, trace, fmt }) {
   return `<div class="sw-rutas__body">${tbl('Corridas completadas', ['Inicio', 'Ruta', 'Camión', 'Distancia', 'Duración', 'CO₂ (kg)', 'Fuente'], body)}<aside class="sw-rutas__side">${detail}</aside></div>`;
 }
 
-export function renderMetricsPage({ view, period = 14, tab = 'camiones', filters = {}, options = { routes: [], vehicles: [], drivers: [] }, selectedRunId = null, trace = null, fmt, demo = false, municipalityName = '' } = {}) {
+export function renderMetricsPage({ view, period = 14, tab = 'camiones', filters = {}, options = { routes: [], vehicles: [], drivers: [] }, selectedRunId = null, trace = null, fmt, demo = false, municipalityName = '', weekly = null } = {}) {
   const sub = municipalityName ? `Corridas completadas en ${escapeHtml(municipalityName)}${demo ? ' · datos de ejemplo' : ''}` : 'Corridas completadas';
   const head = `<div class="sw-rutas__head"><div><h2>Métricas</h2><p class="sw-rutas__sub">${sub}</p>${demo ? '<p class="sw-rutas__demo">Datos demo · no producción</p>' : ''}</div></div>`;
   const top = `${head}${renderFilters({ period, filters, options, view })}`;
   if (view.isEmpty) {
     return `${top}${emptyState({ title: 'Todavía no hay corridas completadas', message: 'Cuando un conductor termine una ruta con el teléfono, sus kilómetros, tiempo y huella de carbono aparecen aquí.' })}`;
   }
-  const detail = tab === 'comparar' ? renderComparison({ comparison: view.comparison, fmt })
+  const detail = tab === 'resumen' && weekly ? renderWeeklySummary({ weekly })
+    : tab === 'comparar' ? renderComparison({ comparison: view.comparison, fmt })
     : tab === 'corridas' ? renderRuns({ view, selectedRunId, trace, fmt })
     : renderGroupTable(tab === 'rutas' ? view.byRoute : tab === 'conductores' ? view.byDriver : view.byVehicle, tab === 'rutas' ? 'Ruta' : tab === 'conductores' ? 'Conductor' : 'Unidad', fmt);
   return `${top}${renderKpis(view, fmt, period)}${renderNotice(view)}${renderCharts(view, fmt)}${renderTabs(tab)}${detail}`;
