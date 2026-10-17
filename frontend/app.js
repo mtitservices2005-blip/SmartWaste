@@ -1398,6 +1398,7 @@ function setDriverGpsMode(mode) {
 // es su propia <section id="conductor">, con el mismo contenido (renderDriverMobile() sin cambios)
 // solo movido a un lugar de primer nivel, gateado a los mismos roles que ya veían Municipal
 // (municipal_admin/dispatcher/driver — frontend/auth-gate.js's SECTION_ROLES).
+// SW-094: ya no se usa en la web (los choferes usan la app del celular). Queda como deuda técnica: renderDriverMobile() y el simulador.
 function renderDriverSection() { return `<section id="conductor" class="section card"><h2>Vista móvil conductor</h2><p class="demo">${demoPrefix}Posición y trazo del vehículo asignado.</p>${renderDriverMobile()}</section>`; }
 // SW-054: every route row shared the exact same flat background (only the currently-selected one
 // stood out) — the Project Owner reported the list was hard to scan. `route-status-${status}` adds
@@ -1752,7 +1753,7 @@ function renderConfiguracion() {
     <p class="demo">Con esta opción activa, el detalle de una ruta sin vehículo o sin chofer muestra un solo formulario y un solo botón para asignar todo lo que falte e iniciarla de una vez, en vez de los pasos separados (asignar vehículo, luego asignar chofer, luego iniciar).</p></section>`;
 }
 
-app.innerHTML = `${renderSummary()}${renderOperations()}${renderSupervisor()}${renderDriverSection()}${renderCitizen()}${renderImpactCenter()}${renderConfiguracion()}${renderMaster()}`;
+app.innerHTML = `${renderSummary()}${renderOperations()}${renderSupervisor()}${renderCitizen()}${renderImpactCenter()}${renderConfiguracion()}${renderMaster()}`;
 // SW-084: riel lateral Mando, selector de tema oscuro/claro y menú "Más" (frontend/shell.js).
 mountShell({ document, window, storage: (() => { try { return window.localStorage; } catch { return undefined; } })(), hideDemo: Boolean(readSupabaseConfig()?.hideDemo), onThemeChange: () => { drawMapLayers(); } });
 // SW-084: colores del tema para las capas del mapa (el CSS no llega a las polilíneas de Leaflet).
@@ -1847,6 +1848,7 @@ document.addEventListener('fullscreenchange', () => {
 });
 
 function initDriverMap() {
+  if (!document.getElementById('driverMap')) return; // SW-094: la web ya no tiene la vista del conductor (los choferes usan la app)
   loadLeaflet().then((L) => {
     driverMapReady = true;
     driverMap = L.map('driverMap', { zoomControl: false, attributionControl: false }).setView(pilotMunicipality.center, pilotMunicipality.zoom);
@@ -2399,7 +2401,7 @@ function redrawCreateRouteTrace() {
 // SW-029: tab navigation — only one top-level section visible at a time, switched by the existing
 // #hash nav links (frontend/index.html), so a reload/shared link on a specific tab still lands on
 // it. Each renderXxx() call at the top of this file already produces one <section> as a direct
-// child of #app, in a fixed order (resumen, operaciones, supervisor, conductor, ciudadania, impacto,
+// child of #app, in a fixed order (resumen, operaciones, supervisor, ciudadania, impacto,
 // master) — no change needed there, this only toggles which one has the existing `.hidden` class.
 // Fase 3 UX extends this one level deeper for #operaciones: its hash can carry a sub-vista
 // (#operaciones/mapa, #operaciones/rutas, ...), so section matching only looks at the part before
@@ -2440,7 +2442,6 @@ function showSection(id) {
   Array.from(app.children).forEach((section) => section.classList.toggle('hidden', section.id !== id));
   document.querySelectorAll('.topbar nav a').forEach((link) => link.classList.toggle('active', link.getAttribute('href') === `#${id}`));
   if (id === 'operaciones') showOpsView(currentOpsView());
-  if (id === 'conductor' && driverMapReady) requestAnimationFrame(() => driverMap.invalidateSize());
   // Codex review (PR #75, P2): re-fetches real citizen reports every time Supervisor is entered
   // (same "refetch on view entry" precedent as showOpsView()'s 'estadisticas' branch above) —
   // otherwise a report submitted after login bootstrap never appeared without a full page reload.
@@ -2906,7 +2907,7 @@ $('#evidence').addEventListener('change', (event) => {
   const uploadNote = (getAuthClient() && readSupabaseConfig()?.municipality_id) ? 'se sube al enviar el formulario' : 'sin upload real (modo demo)';
   $('#evidencePreview').textContent = result.ok ? `${file?.name ?? 'Sin archivo'} · ${result.reason === 'no_file' ? 'sin archivo' : uploadNote}` : `Evidencia rechazada: ${result.reason}`;
 });
-$('#driverVehicleSelect').addEventListener('change', (event) => {
+$('#driverVehicleSelect')?.addEventListener('change', (event) => {
   // SW-029 fase 1: a phone GPS watch is tied to whichever vehicle was selected when it started —
   // switching vehicles while it's active would keep recording pings for the old one while the
   // driver looks at a different vehicle's trail. Reset to "Simulado" on every vehicle switch;

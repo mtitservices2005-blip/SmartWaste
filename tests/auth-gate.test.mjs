@@ -13,12 +13,12 @@ assert.deepEqual(pickVisibleSections(null).sort(), ['ciudadania']);
 // mobile view is now its own top-level section, not embedded inside 'municipal'). 'mapa' and
 // 'municipal' merged into a single 'operaciones' section with sub-vistas (Fase 3 UX,
 // OPS_SUBVIEW_ROLES below covers the finer-grained access that used to live at this level).
-assert.deepEqual(pickVisibleSections('driver').sort(), ['ciudadania', 'conductor', 'operaciones', 'resumen']);
+assert.deepEqual(pickVisibleSections('driver').sort(), ['ciudadania', 'operaciones', 'resumen']);
 
 // Dispatcher: same as driver plus 'configuracion' (SW-049 — dispatcher is who actually assigns
 // vehicles/choferes to routes, so the guided-flow toggle is theirs to set) — dispatcher also lacks
 // reports.read (shared/auth-context.js PERMISSIONS.dispatcher).
-assert.deepEqual(pickVisibleSections('dispatcher').sort(), ['ciudadania', 'conductor', 'configuracion', 'operaciones', 'resumen']);
+assert.deepEqual(pickVisibleSections('dispatcher').sort(), ['ciudadania', 'configuracion', 'operaciones', 'resumen']);
 
 // Supervisor gets its own dedicated view (route verification + incident management, matching
 // PERMISSIONS.supervisor's routes.verify/incidents.manage) instead of the generic municipal panel —
@@ -27,7 +27,7 @@ assert.deepEqual(pickVisibleSections('supervisor').sort(), ['ciudadania', 'impac
 
 // municipal_admin: generic municipal panel + impact center + the driver view + 'configuracion'
 // (SW-049, also an assigner role), not the master admin panel.
-assert.deepEqual(pickVisibleSections('municipal_admin').sort(), ['ciudadania', 'conductor', 'configuracion', 'impacto', 'operaciones', 'resumen']);
+assert.deepEqual(pickVisibleSections('municipal_admin').sort(), ['ciudadania', 'configuracion', 'impacto', 'operaciones', 'resumen']);
 
 // Platform superadmin: only the master admin panel (platform-scoped, not a single municipality's
 // operations) plus the always-public citizen portal.

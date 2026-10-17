@@ -24,7 +24,6 @@ export const OPS_ITEMS = [
 export const MORE_ITEMS = [
   { href: '#resumen', label: 'Resumen' },
   { href: '#supervisor', label: 'Supervisor' },
-  { href: '#conductor', label: 'Conductor' },
   { href: '#ciudadania', label: 'Ciudadanía' },
   { href: '#impacto', label: 'Impacto y Ahorros' },
   { href: '#configuracion', label: 'Configuración' },
