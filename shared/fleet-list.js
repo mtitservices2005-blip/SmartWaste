@@ -1,8 +1,14 @@
 // SW-087: Flotilla (camiones y conductores). Lógica pura (sin DOM ni red): filas de las tablas del diseño Mando,
 // encabezados con conteo y validación de los dos formularios de alta.
+import { FUEL_TYPES, FUEL_TYPE_LABELS } from './emission-factors.js';
+
 export const DEFAULT_MAX_STOPS = 20;
 
 const text = (value) => String(value ?? '').trim();
+const efficiencyLabel = (value) => {
+  const n = Number(value);
+  return value !== null && value !== undefined && value !== '' && Number.isFinite(n) && n > 0 ? `${String(n).replace('.', ',')} km/L` : null;
+};
 const orDash = (value) => text(value) || '—';
 
 export function buildVehicleRows(trucks) {
@@ -11,7 +17,12 @@ export function buildVehicleRows(trucks) {
     unit: orDash(t.unit),
     plate: orDash(t.plate),
     maxStops: Number.isFinite(Number(t.max_stops)) && t.max_stops !== null && t.max_stops !== '' ? String(t.max_stops) : '—',
-    state: t.state
+    state: t.state,
+    // SW-090: rendimiento (km/L) y combustible que digita el ayuntamiento; sin dato no se calcula consumo.
+    efficiency: efficiencyLabel(t.fuel_efficiency_km_per_l),
+    fuelType: FUEL_TYPE_LABELS[t.fuel_type] ?? null,
+    efficiencyValue: efficiencyLabel(t.fuel_efficiency_km_per_l) ? String(Number(t.fuel_efficiency_km_per_l)) : '',
+    fuelTypeKey: FUEL_TYPES.includes(t.fuel_type) ? t.fuel_type : 'diesel'
   }));
 }
 
@@ -39,7 +50,20 @@ export function fleetHeader({ tab, count, demo }) {
   return demo ? `${base} · datos de ejemplo` : base;
 }
 
-export function validateVehicleForm({ unit, plate, maxStops } = {}) {
+// SW-090: rendimiento en km por litro (opcional) y tipo de combustible (diésel por defecto).
+export function validateFuelConfig({ efficiency, fuelType } = {}) {
+  const raw = text(efficiency).replace(',', '.');
+  let value = null;
+  if (raw !== '') {
+    value = Number(raw);
+    if (!Number.isFinite(value) || value < 0.1 || value > 100) return { ok: false, message: 'El rendimiento debe ser un número entre 0,1 y 100 km por litro.' };
+  }
+  const type = text(fuelType) || 'diesel';
+  if (!FUEL_TYPES.includes(type)) return { ok: false, message: 'Elige diésel o gasolina.' };
+  return { ok: true, values: { efficiency: value, fuelType: type } };
+}
+
+export function validateVehicleForm({ unit, plate, maxStops, efficiency, fuelType } = {}) {
   const cleanUnit = text(unit);
   if (!cleanUnit) return { ok: false, message: 'Ingresa la unidad del camión.' };
   const raw = text(maxStops);
@@ -49,7 +73,9 @@ export function validateVehicleForm({ unit, plate, maxStops } = {}) {
     if (!Number.isInteger(n) || n < 1) return { ok: false, message: 'Las paradas máximas deben ser un número entero mayor que 0.' };
     max = n;
   }
-  return { ok: true, values: { unit: cleanUnit, plate: text(plate), maxStops: max } };
+  const fuel = validateFuelConfig({ efficiency, fuelType });
+  if (!fuel.ok) return fuel;
+  return { ok: true, values: { unit: cleanUnit, plate: text(plate), maxStops: max, ...fuel.values } };
 }
 
 export function validateDriverForm({ name, phone, email } = {}) {

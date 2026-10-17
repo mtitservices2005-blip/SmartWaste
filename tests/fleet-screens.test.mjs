@@ -41,3 +41,22 @@ assert.match(df, /Con correo se crea su acceso a la app del conductor\./);
 assert.match(df, /data-fleet="create-driver">Guardar conductor</);
 assert.match(df, /id="fleetDriverStatus"/);
 console.log('fleet-screens ok');
+
+// SW-090: rendimiento y combustible en la tabla y en los formularios
+const vt2 = renderVehiclesTable({ rows: [
+  { id: 't1', unit: 'C-01', plate: 'L 1', maxStops: '20', state: 'active', efficiency: '2,2 km/L', fuelType: 'Diésel' },
+  { id: 't2', unit: 'C-02', plate: '—', maxStops: '—', state: 'offline', efficiency: null, fuelType: null }
+], selectedId: 't1' });
+for (const h of ['Rendimiento', 'Combustible']) assert.match(vt2, new RegExp(`<th scope="col">${h}</th>`));
+assert.match(vt2, /2,2 km\/L/); assert.match(vt2, /Sin configurar/);
+assert.match(vt2, /data-vehicle="t1"[^>]*aria-selected="true"|aria-selected="true"[^>]*data-vehicle="t1"/);
+const vf2 = renderVehicleForm();
+assert.match(vf2, /id="fleetVehicleEfficiency"/); assert.match(vf2, /id="fleetVehicleFuelType"/);
+assert.match(vf2, /<option value="diesel" selected>Diésel/); assert.match(vf2, /<option value="gasolina">Gasolina/);
+assert.match(vf2, /el consumo y el CO₂ de este camión no se calculan/);
+const ef = renderVehicleForm({ vehicle: { id: 't1', unit: 'C-01', plate: 'L 1', maxStops: '20', efficiencyValue: '2.2', fuelTypeKey: 'gasolina' } });
+assert.match(ef, /Editar camión/); assert.match(ef, /data-fleet="update-vehicle"/); assert.match(ef, /data-vehicle-id="t1"/);
+assert.match(ef, /id="fleetVehicleEfficiency"[^>]*value="2.2"/); assert.match(ef, /<option value="gasolina" selected>/);
+assert.match(ef, /id="fleetVehicleUnit"[^>]*readonly/);
+assert.match(ef, /data-fleet="new-vehicle"/);
+console.log('fleet-screens sw090: ok');
