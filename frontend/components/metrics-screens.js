@@ -22,11 +22,18 @@ const dateTime = (iso) => {
   return parts.replace('.', '');
 };
 
-function niceMax(max) {
-  if (!(max > 0)) return 4;
-  const exp = 10 ** Math.floor(Math.log10(max));
-  for (const m of [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (max <= m * exp) return m * exp;
-  return 10 * exp;
+// Escala con marcas redondas (0, 5, 10, 15…): elige el paso y el número de tramos con el tope más ajustado.
+function niceScale(max) {
+  if (!(max > 0)) return { step: 1, intervals: 4, ymax: 4 };
+  let best = null;
+  const base = 10 ** Math.floor(Math.log10(max / 4));
+  for (const intervals of [4, 3, 5]) {
+    for (const mult of [1, 2, 2.5, 5, 10, 20]) {
+      const step = mult * base; const ymax = step * intervals;
+      if (ymax >= max && (!best || ymax < best.ymax - 1e-9)) best = { step, intervals, ymax };
+    }
+  }
+  return best;
 }
 function roundedBar(x, y, w, h, r = 4) {
   if (h <= 0.5) return '';
@@ -38,12 +45,12 @@ function roundedBar(x, y, w, h, r = 4) {
 export function renderBarChart({ values, labels, tips, unit, name, color, fmtNumber = (n) => String(n).replace('.', ',') }) {
   const W = 560; const H = 230; const L = 40; const R = 10; const T = 20; const B = 30;
   const pw = W - L - R; const ph = H - T - B; const n = values.length; const band = pw / Math.max(n, 1); const bw = band * 0.58;
-  const ymax = niceMax(Math.max(0, ...values));
+  const { step: tickStep, intervals, ymax } = niceScale(Math.max(0, ...values));
   const max = Math.max(...values);
-  const step = Math.ceil(n / 14);
+  const labelEvery = Math.ceil(n / 14);
   const out = [`<svg class="sw-metrics__chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${escapeHtml(name)}, últimos ${n} ${n === 1 ? 'día' : 'días'}">`];
-  for (let i = 0; i <= 3; i += 1) {
-    const t = (ymax * i) / 3; const y = T + ph - (ph * t) / ymax;
+  for (let i = 0; i <= intervals; i += 1) {
+    const t = tickStep * i; const y = T + ph - (ph * t) / ymax;
     out.push(`<line x1="${L}" x2="${W - R}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" class="sw-metrics__grid${i === 0 ? ' sw-metrics__grid--base' : ''}"/>`);
     out.push(`<text x="${L - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" class="sw-metrics__tick">${fmtNumber(Number(t.toFixed(1)))}</text>`);
   }
@@ -52,7 +59,7 @@ export function renderBarChart({ values, labels, tips, unit, name, color, fmtNum
     const cx = L + band * i + band / 2; const x = cx - bw / 2; const h = (ph * v) / ymax; const y = T + ph - h;
     const path = roundedBar(x, y, bw, h);
     if (path) out.push(`<path d="${path}" fill="${color}"/>`);
-    if (i % step === 0 || i === n - 1) out.push(`<text x="${cx.toFixed(1)}" y="${H - 10}" text-anchor="middle" class="sw-metrics__tick">${escapeHtml(labels[i])}</text>`);
+    if (i % labelEvery === 0 || i === n - 1) out.push(`<text x="${cx.toFixed(1)}" y="${H - 10}" text-anchor="middle" class="sw-metrics__tick">${escapeHtml(labels[i])}</text>`);
     if (v > 0 && ((v === max && !labeled) || i === n - 1)) { if (v === max) labeled = true; out.push(`<text x="${cx.toFixed(1)}" y="${(y - 6).toFixed(1)}" text-anchor="middle" class="sw-metrics__val">${fmtNumber(v)}</text>`); }
     out.push(`<rect x="${(L + band * i).toFixed(1)}" y="${T}" width="${band.toFixed(1)}" height="${(ph + B - 6).toFixed(1)}" fill="transparent" class="sw-metrics__hit" data-tip="${escapeHtml(tips[i])}"/>`);
   });
