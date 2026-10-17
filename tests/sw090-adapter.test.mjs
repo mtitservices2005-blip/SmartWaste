@@ -12,3 +12,4 @@ assert.equal(v.fuel_efficiency_km_per_l, 4);
 assert.equal(v.fuel_type, 'diesel');
 assert.equal(a.markRouteRunTest('nope', true).is_test, true);
 console.log('sw090-adapter: ok');
+assert.deepEqual(a.listRunTrack({}), []);
