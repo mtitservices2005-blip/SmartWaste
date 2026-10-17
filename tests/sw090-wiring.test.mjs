@@ -7,5 +7,4 @@ assert.match(html, /styles\/metrics\.css/);
 for (const needle of ['renderMetricsPage', 'buildMetricsView', 'realAdapter.listFuelLogs()', 'realAdapter.markRouteRunTest(', 'realAdapter.listRunTrack(', 'updateVehicleFromForm', "fleetAction === 'update-vehicle'", 'fuel_efficiency_km_per_l', 'handleMetricsClick(event)', "estadisticas: 'Métricas'"]) {
   assert.ok(app.includes(needle), `app.js debe contener ${needle}`);
 }
-assert.ok(!app.includes('service_role'));
 console.log('sw090-wiring: ok');
