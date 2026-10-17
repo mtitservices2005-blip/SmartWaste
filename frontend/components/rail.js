@@ -19,7 +19,7 @@ export const OPS_ITEMS = [
   { href: '#operaciones/rutas', label: 'Rutas', icon: 'rutas' },
   { href: '#operaciones/flota', label: 'Flotilla', icon: 'flota' },
   { href: '#operaciones/incidencias', label: 'Incidencias', icon: 'incidencias' },
-  { href: '#operaciones/estadisticas', label: 'Estadísticas', icon: 'estadisticas' }
+  { href: '#operaciones/estadisticas', label: 'Métricas', icon: 'estadisticas' }
 ];
 export const MORE_ITEMS = [
   { href: '#resumen', label: 'Resumen' },

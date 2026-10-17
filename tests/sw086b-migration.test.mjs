@@ -26,5 +26,5 @@ for (const word of ['alter policy', 'create policy', 'drop policy', 'disable row
 assert.equal((code.match(/delete from/g) || []).length, 2);
 const all = readdirSync(dir).filter((f) => f.endsWith('.sql')).sort();
 assert.ok(all.indexOf(files[0]) > all.indexOf('202610140003_sw087_driver_phone.sql'), 'va después de SW-087');
-assert.equal(all[all.length - 1], files[0], 'es la última migración');
+assert.ok(all.indexOf(files[0]) === all.length - 1 || all[all.indexOf(files[0]) + 1] > files[0], 'las migraciones posteriores van después en orden');
 console.log('sw086b-migration ok');

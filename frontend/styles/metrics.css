@@ -1,0 +1,44 @@
+/* SW-090: pantalla Métricas (diseño Mando). Usa solo tokens del tema; sirve en claro y oscuro. */
+.sw-metrics__muted { color: var(--color-muted); }
+.sw-metrics__filters { display: flex; flex-wrap: wrap; gap: var(--space-3) var(--space-5); align-items: center; justify-content: space-between; }
+.sw-metrics__selects { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: end; }
+.sw-metrics__sel { display: flex; flex-direction: column; gap: 4px; font-size: var(--font-size-1); color: var(--color-muted); font-weight: 700; }
+.sw-metrics__sel select { min-height: 40px; min-width: 130px; padding: 0 var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-1); background: var(--color-background-alt); color: var(--color-text); font: inherit; font-size: var(--font-size-2); font-weight: 500; }
+.sw-metrics__check { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; color: var(--color-text); font-size: var(--font-size-2); }
+.sw-metrics__check small { color: var(--color-muted); }
+.sw-metrics__kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--space-3); }
+.sw-metrics__kpis .sw-kpi { box-shadow: none; background: var(--color-background-alt); }
+.sw-metrics__kpis .sw-kpi__value { font-size: 1.35rem; margin: 2px 0; }
+.sw-metrics__notice { margin: 0; padding: var(--space-3) var(--space-4); border-radius: var(--radius-2); background: var(--color-warning-bg); color: var(--color-warning); font-weight: 600; font-size: var(--font-size-1); }
+.sw-metrics__link { color: inherit; text-decoration: underline; font-weight: 700; }
+.sw-metrics__charts { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
+.sw-metrics__charts .sw-rutas__card h3 { font-size: 1.05rem; margin: 0 0 var(--space-3); }
+.sw-metrics__chart { width: 100%; height: auto; display: block; overflow: visible; }
+.sw-metrics__grid { stroke: var(--color-border); stroke-width: 1; }
+.sw-metrics__grid--base { stroke: var(--color-muted); }
+.sw-metrics__tick { fill: var(--color-muted); font-size: 12px; font-family: var(--font-mono, 'IBM Plex Mono', monospace); }
+.sw-metrics__axis { fill: var(--color-muted); font-size: 12px; font-weight: 700; }
+.sw-metrics__val { fill: var(--color-text); font-size: 13px; font-weight: 600; font-family: var(--font-mono, 'IBM Plex Mono', monospace); }
+.sw-metrics__hit:hover { fill: var(--color-text); fill-opacity: .07; }
+.sw-metrics__table th, .sw-metrics__table td { padding: 12px 10px; white-space: nowrap; font-size: var(--font-size-2); }
+.sw-metrics__src { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: var(--font-size-1); font-weight: 700; white-space: nowrap; }
+.sw-metrics__src--real { background: var(--status-en-ruta-bg); color: var(--status-en-ruta); }
+.sw-metrics__src--est { background: var(--status-detenido-bg); color: var(--status-detenido); }
+.sw-metrics__src--none { background: var(--status-fuera-servicio-bg); color: var(--status-fuera-servicio); }
+.sw-metrics__test { display: inline-block; padding: 3px 10px; border-radius: 999px; background: var(--status-disponible-bg); color: var(--status-disponible); font-size: var(--font-size-1); font-weight: 700; }
+.sw-metrics__metagrid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); margin: var(--space-3) 0; }
+.sw-metrics__meta { display: flex; flex-direction: column; gap: 2px; padding: var(--space-2) var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-1); background: var(--color-background-alt); font-size: var(--font-size-1); color: var(--color-muted); }
+.sw-metrics__meta b { color: var(--color-text); font-family: var(--font-mono, 'IBM Plex Mono', monospace); font-weight: 500; font-size: 1rem; }
+.sw-metrics__map { width: 100%; height: 100%; display: block; }
+.sw-metrics__map-bg { fill: var(--map-bg, var(--color-background-alt)); }
+.sw-metrics__trace { stroke: var(--color-primary); stroke-width: 4; fill: none; stroke-linejoin: round; stroke-linecap: round; }
+.sw-metrics__pt { fill: var(--color-surface); stroke: var(--color-primary); stroke-width: 4; }
+.sw-metrics__pt--end { fill: var(--color-primary); }
+.sw-metrics__nomap { display: grid; place-items: center; height: 100%; padding: var(--space-4); text-align: center; color: var(--color-muted); background: var(--color-background-alt); border-radius: var(--radius-2); font-size: var(--font-size-1); }
+.sw-metrics__tip { position: fixed; z-index: 50; pointer-events: none; padding: 6px 10px; border-radius: 8px; background: #0b1210; color: #e8f1ee; border: 1px solid #2a3b36; font-size: 12px; font-family: var(--font-mono, 'IBM Plex Mono', monospace); white-space: nowrap; opacity: 0; transition: opacity .08s; }
+.sw-metrics__tip.on { opacity: 1; }
+[data-ops-view="estadisticas"] .sw-rutas__mini { height: 220px; }
+@media (max-width: 900px) {
+  .sw-metrics__kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sw-metrics__charts { grid-template-columns: 1fr; }
+}
