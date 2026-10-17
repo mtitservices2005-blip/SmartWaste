@@ -132,6 +132,10 @@ export function createDemoOperationsAdapter(seed = { trucks, routes, drivers, in
       state.fuelLogs.push(saved);
       return clone(saved);
     },
+    // SW-090: lecturas para métricas y marca de corrida de prueba.
+    listFuelLogs: () => clone(state.fuelLogs ?? []),
+    listRunTrack: () => [],
+    markRouteRunTest: (runId, isTest) => { const r = (state.routeRuns ?? []).find((x) => x.id === runId); if (r) r.is_test = Boolean(isTest); return { id: runId, is_test: Boolean(isTest) }; },
     listFleetAlerts: () => [],
     acknowledgeFleetAlert: () => null,
     listVehicleAssignments: () => state.trucks.filter((truck) => truck.driverId).map((truck) => ({ vehicle_id: truck.id, driver_id: truck.driverId, status:'assigned' })),
@@ -194,6 +198,15 @@ export function createSupabaseOperationsAdapter(client, { fallback = createDemoO
       const row = { vehicle_id: entry.vehicle_id, route_run_id: entry.route_run_id ?? null, liters: Number(entry.liters), odometer_km: entry.odometer_km ?? null, municipality_id: entry.municipality_id ?? municipality_id };
       return run(() => table(client, 'fuel_logs').insert(row).select('*').single(), () => fallback.logFuel(entry), opts.correlation_id);
     },
+    listFuelLogs: (opts = {}) => run(() => scoped(table(client, 'fuel_logs').select('*').order('logged_at', { ascending: false })), () => fallback.listFuelLogs(), opts.correlation_id),
+    // SW-090: recorrido medido de una corrida = posiciones del camión entre su inicio y su fin.
+    listRunTrack: (routeRun, opts = {}) => {
+      if (!routeRun?.vehicle_id || !routeRun?.started_at) return Promise.resolve(ok([], { correlation_id: opts.correlation_id ?? null }));
+      const from = routeRun.gps_started_at ?? routeRun.started_at;
+      const to = routeRun.gps_ended_at ?? routeRun.completed_at ?? new Date().toISOString();
+      return run(() => scoped(table(client, 'vehicle_positions').select('latitude,longitude,captured_at').eq('vehicle_id', routeRun.vehicle_id).gte('captured_at', from).lte('captured_at', to).neq('source', 'simulator').order('captured_at', { ascending: true }).limit(3000)), () => fallback.listRunTrack(routeRun), opts.correlation_id);
+    },
+    markRouteRunTest: (runId, isTest, opts = {}) => run(() => client.rpc('set_route_run_test_flag', { p_run_id: runId, p_is_test: Boolean(isTest) }), () => fallback.markRouteRunTest(runId, isTest), opts.correlation_id),
     listFleetAlerts: (opts = {}) => run(() => {
       let q = scoped(table(client, 'fleet_alerts').select('*'));
       if (opts.status !== 'all') q = q.eq('status', opts.status ?? 'abierta');

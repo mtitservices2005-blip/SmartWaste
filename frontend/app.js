@@ -33,7 +33,9 @@ import { addPoint, movePoint, undoPoint, clearPoints, validateDraft, previewDraf
 import { buildRouteHistory } from '../shared/route-history.js';
 import { canEditGeometry, initialEditValues, diffEdit, validateEdit, routeUpdatePayload } from '../shared/route-edit.js';
 import { DAY_CHIPS, normalizeDays, normalizeStartTime, formatDays, formatTimeOfDay } from '../shared/route-schedule.js';
-import { buildVehicleRows, buildDriverRows, fleetHeader, validateVehicleForm, validateDriverForm } from '../shared/fleet-list.js';
+import { buildVehicleRows, buildDriverRows, fleetHeader, validateVehicleForm, validateDriverForm, validateFuelConfig } from '../shared/fleet-list.js';
+import { buildMetricsView, formatNumber, formatKm, formatDuration } from '../shared/metrics-view.js';
+import { renderMetricsPage } from './components/metrics-screens.js';
 import { renderFleetTabs, renderVehiclesTable, renderDriversTable, renderVehicleForm, renderDriverForm } from './components/fleet-screens.js';
 import { renderRoutesTable, renderFilterChips, renderDayChips, renderHistory, renderDraftPreview } from './components/routes-screens.js';
 // SW-082: en despliegues con hideDemo no se muestran avisos de demo/simulación.
@@ -290,6 +292,7 @@ const REAL_GPS_FRESHNESS_MS = 30000;
 // finished.
 let drawnRoutePoints = [];
 let fleetTab = 'camiones'; // SW-087: pestaña activa de Flotilla
+let fleetSelectedVehicleId = null; // SW-090: camión abierto en el panel "Editar camión"
 let rutasFocusId = null;
 let routeFilter = 'todas'; // SW-086: filtro de la tabla de Rutas
 let createRouteSaving = false;
@@ -651,7 +654,7 @@ function fleetHeaderLine() {
   return fleetHeader({ tab: fleetTab, count, demo: !realAdapter });
 }
 function renderFleetTable() {
-  return fleetTab === 'conductores' ? renderDriversTable({ rows: buildDriverRows(drivers, trucks) }) : renderVehiclesTable({ rows: buildVehicleRows(trucks) });
+  return fleetTab === 'conductores' ? renderDriversTable({ rows: buildDriverRows(drivers, trucks) }) : renderVehiclesTable({ rows: buildVehicleRows(trucks), selectedId: fleetSelectedVehicleId });
 }
 function renderFlotaPanel() {
   return `<div class="sw-rutas__head"><div><h2>Flotilla</h2><p class="sw-rutas__sub" id="fleetHeaderText">${escapeHtmlText(fleetHeaderLine())}</p><p class="demo sw-rutas__demo">${demoNotice}</p></div></div>
@@ -665,59 +668,90 @@ function renderIncidenciasPanel() {
   return `<h2>Incidencias</h2><p class="demo">${demoNotice}</p>
     <div class="list">${incidents.map((incident) => `<button class="row selectable${incident.code === selectedIncidentId ? ' selected' : ''}" data-incident="${incident.code}"><span>${incident.type}<br>${incident.sector}</span>${pill('open')}</button>`).join('')}</div>`;
 }
-// SW-047: eficiencia por ruta/chofer, agregada sobre corridas medidas reales (route_runs con GPS
-// real, SW-044/045) — solo tiene sentido con backend real conectado (la demo no tiene route_runs
-// persistidos), mismo criterio que refreshRouteDurationHistory(). El panel se rellena de forma
-// asíncrona (refreshEfficiencyDashboard()) al abrir la pestaña, no al construir este HTML estático.
+// SW-090: Métricas (reemplaza Estadísticas). Usa corridas completadas, litros del conductor y el rendimiento
+// que digita el ayuntamiento. Sin rendimiento ni litros: "Sin datos" (nunca una cifra genérica).
+const metrics = { period: 14, tab: 'camiones', filters: {}, selectedRunId: null, data: null, trace: null, traceFor: null };
+const metricsFmt = { number: formatNumber, km: formatKm, duration: formatDuration };
 function renderEstadisticasPanel() {
-  return `<h2>Estadísticas</h2><p class="demo">${demoPrefix}Eficiencia por ruta y chofer, calculada sobre corridas con duración/distancia medida real.</p>
-    <h3>Por ruta</h3><div id="statsByRoute" class="list"><p class="demo">Cargando…</p></div>
-    <h3>Por chofer</h3><div id="statsByDriver" class="list"><p class="demo">Cargando…</p></div>
-    <h3>Por camión</h3><div id="statsByVehicle" class="list"><p class="demo">Cargando…</p></div>`;
+  return `<div id="metricsRoot"><p class="demo">Cargando métricas…</p></div>`;
+}
+async function loadMetricsData() {
+  if (!realAdapter) return { runs: [], vehicles: trucks.map((t) => ({ id: t.id, code: t.unit, fuel_efficiency_km_per_l: t.fuel_efficiency_km_per_l ?? null, fuel_type: t.fuel_type ?? null })), routes: [], drivers: [], fuelLogs: [] };
+  const [runs, vehicles, routesRes, driversRes, fuel] = await Promise.all([realAdapter.listRouteRuns(), realAdapter.listVehicles(), realAdapter.listRoutes(), realAdapter.listDrivers(), realAdapter.listFuelLogs()]);
+  if (!runs.ok) return null;
+  return { runs: runs.data, vehicles: vehicles.ok ? vehicles.data : [], routes: routesRes.ok ? routesRes.data : [], drivers: driversRes.ok ? driversRes.data : [], fuelLogs: fuel.ok ? fuel.data : [] };
+}
+function renderMetrics() {
+  const root = document.getElementById('metricsRoot');
+  if (!root || !metrics.data) return;
+  const d = metrics.data;
+  const view = buildMetricsView({ ...d, period: metrics.period, filters: metrics.filters });
+  const options = { routes: d.routes, vehicles: d.vehicles.map((v) => ({ id: v.id, label: v.code ?? v.unit ?? '—' })), drivers: d.drivers.map((x) => ({ id: x.id, name: x.display_name ?? x.name ?? '—' })) };
+  root.innerHTML = renderMetricsPage({ view, period: metrics.period, tab: metrics.tab, filters: metrics.filters, options, selectedRunId: metrics.selectedRunId, trace: metrics.traceFor === (metrics.selectedRunId ?? view.runRows[0]?.id) ? metrics.trace : null, fmt: metricsFmt, demo: Boolean(demoNotice), municipalityName: 'Laguna Salada' });
+  if (metrics.tab === 'corridas') loadRunTrace(metrics.selectedRunId ?? view.runRows[0]?.id);
+}
+async function loadRunTrace(runId) {
+  if (!realAdapter || !runId || metrics.traceFor === runId) return;
+  const run = metrics.data?.runs.find((r) => r.id === runId);
+  if (!run) return;
+  const result = await realAdapter.listRunTrack(run);
+  if (!result?.ok) return;
+  metrics.trace = result.data; metrics.traceFor = runId;
+  if (currentOpsView() === 'estadisticas' && metrics.tab === 'corridas') renderMetrics();
 }
 async function refreshEfficiencyDashboard() {
-  const byRouteEl = document.getElementById('statsByRoute');
-  const byDriverEl = document.getElementById('statsByDriver');
-  const byVehicleEl = document.getElementById('statsByVehicle');
-  if (!byRouteEl || !byDriverEl || !byVehicleEl) return;
-  if (!realAdapter) {
-    const message = '<p class="demo">Requiere un backend real conectado — la demo no acumula corridas persistidas.</p>';
-    byRouteEl.innerHTML = message;
-    byDriverEl.innerHTML = message;
-    byVehicleEl.innerHTML = message;
-    return;
-  }
-  const result = await realAdapter.listRouteRuns();
+  const root = document.getElementById('metricsRoot');
+  if (!root) return;
+  if (metrics.data) renderMetrics(); // muestra lo último que se tenía mientras llegan los datos nuevos
+  const data = await loadMetricsData();
   if (currentOpsView() !== 'estadisticas') return; // el usuario navegó a otra pestaña mientras esto estaba en vuelo
-  if (!result.ok) {
-    byRouteEl.innerHTML = '<p class="demo">No se pudo cargar el histórico de corridas.</p>';
-    byDriverEl.innerHTML = '<p class="demo">No se pudo cargar el histórico de corridas.</p>';
-    byVehicleEl.innerHTML = '<p class="demo">No se pudo cargar el histórico de corridas.</p>';
-    return;
-  }
-  const byRoute = summarizeRouteRunsByRoute(result.data);
-  const byDriver = summarizeRouteRunsByDriver(result.data);
-  const byVehicle = summarizeRouteRunsByVehicle(result.data);
-  byRouteEl.innerHTML = byRoute.length
-    ? byRoute.map((stat) => {
-        const route = routes.find((r) => r.real_id === stat.routeId);
-        return `<div class="row"><span>${route?.name ?? 'Ruta eliminada'}<br><small>${stat.runsCount} corrida(s)</small></span><span>${formatMinutes(stat.avgDurationMinutes)} prom. · última ${formatMinutes(stat.lastDurationMinutes)}${stat.avgDistanceKm != null ? ` · ${stat.avgDistanceKm} km prom.` : ''}</span></div>`;
-      }).join('')
-    : '<p class="demo">Todavía no hay corridas con duración medida.</p>';
-  byDriverEl.innerHTML = byDriver.length
-    ? byDriver.map((stat) => {
-        const driver = drivers.find((d) => d.real_id === stat.driverId);
-        return `<div class="row"><span>${driver?.name ?? 'Chofer eliminado'}<br><small>${stat.runsCount} corrida(s)</small></span><span>${formatMinutes(stat.avgDurationMinutes)} prom. · última ${formatMinutes(stat.lastDurationMinutes)}${stat.avgDistanceKm != null ? ` · ${stat.avgDistanceKm} km prom.` : ''}</span></div>`;
-      }).join('')
-    : '<p class="demo">Todavía no hay corridas con duración medida.</p>';
-  // SW-075: per-vehicle totals, same measured-run rules as the per-driver list above.
-  byVehicleEl.innerHTML = byVehicle.length
-    ? byVehicle.map((stat) => {
-        const truck = trucks.find((t) => t.real_id === stat.vehicleId);
-        return `<div class="row"><span>${truck?.unit ?? 'Vehículo eliminado'}<br><small>${stat.runsCount} corrida(s)</small></span><span>${formatMinutes(stat.avgDurationMinutes)} prom. · ${stat.distanceMeasuredRunsCount > 0 ? `${stat.totalDistanceKm} km en total` : 'sin distancia GPS registrada'}</span></div>`;
-      }).join('')
-    : '<p class="demo">Todavía no hay corridas con duración medida.</p>';
+  if (!data) { if (!metrics.data) root.innerHTML = '<p class="demo">No se pudo cargar el histórico de corridas.</p>'; return; }
+  metrics.data = data;
+  renderMetrics();
 }
+async function setRunTestFlag(runId, value) {
+  const status = document.getElementById('metricsRunStatus');
+  if (realAdapter) {
+    const result = await requireRealAdapter(realAdapter.markRouteRunTest(runId, value), status, (message) => `No se pudo marcar la corrida: ${message}`);
+    if (!result.ok) return;
+  }
+  const run = metrics.data?.runs.find((r) => r.id === runId);
+  if (run) run.is_test = value;
+  renderMetrics();
+}
+function handleMetricsClick(event) {
+  const period = event.target.closest('[data-metrics-period]');
+  if (period) { metrics.period = Number(period.dataset.metricsPeriod); renderMetrics(); return; }
+  const tab = event.target.closest('[data-metrics-tab]');
+  if (tab) { metrics.tab = tab.dataset.metricsTab; renderMetrics(); return; }
+  const runRow = event.target.closest('[data-metrics-run]');
+  if (runRow) { metrics.selectedRunId = runRow.dataset.metricsRun; renderMetrics(); return; }
+  const testBtn = event.target.closest('[data-metrics-test]');
+  if (testBtn) { setRunTestFlag(testBtn.dataset.metricsTest, testBtn.dataset.metricsTestValue === 'true'); return; }
+  const cfg = event.target.closest('[data-metrics-config]');
+  if (cfg) { event.preventDefault(); location.hash = '#operaciones/flota'; }
+}
+document.addEventListener('change', (event) => {
+  const id = event.target?.id;
+  if (id === 'metricsRoute') metrics.filters.routeId = event.target.value || undefined;
+  else if (id === 'metricsVehicle') metrics.filters.vehicleId = event.target.value || undefined;
+  else if (id === 'metricsDriver') metrics.filters.driverId = event.target.value || undefined;
+  else if (id === 'metricsIncludeTests') metrics.filters.includeTests = event.target.checked;
+  else return;
+  renderMetrics();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter') return;
+  const row = event.target.closest?.('[data-metrics-run], [data-vehicle]');
+  if (row) row.click();
+});
+// Tooltip de las gráficas (una sola instancia, sigue al cursor).
+let metricsTip = null;
+document.addEventListener('mousemove', (event) => {
+  const target = event.target.closest?.('[data-tip]');
+  if (!metricsTip) { metricsTip = document.createElement('div'); metricsTip.className = 'sw-metrics__tip'; metricsTip.setAttribute('role', 'tooltip'); document.body.appendChild(metricsTip); }
+  if (target) { metricsTip.textContent = target.getAttribute('data-tip'); metricsTip.style.left = `${event.clientX + 12}px`; metricsTip.style.top = `${event.clientY - 34}px`; metricsTip.classList.add('on'); } else metricsTip.classList.remove('on');
+});
 // Fase 3 UX (auditoría SW-020): "Municipal" hacía 5 cosas a la vez en un solo scroll (buscar rutas/
 // vehículos/incidencias, gestionar flota, crear rutas), y el mapa vivía en su propia pestaña de
 // nivel superior aparte. Agrupa Mapa/Rutas/Flota/Incidencias bajo un único espacio "Operaciones"
@@ -725,7 +759,7 @@ async function refreshEfficiencyDashboard() {
 // mismas funciones/estado que antes (renderRoutes(), renderVehicleList(), renderFleetManagement(),
 // renderCreateRoute() sin cambios), solo reorganizado en paneles separados.
 const OPS_VIEWS = ['mapa', 'rutas', 'flota', 'incidencias', 'estadisticas'];
-const OPS_VIEW_LABELS = { mapa: 'Mapa', rutas: 'Rutas', flota: 'Flotilla', incidencias: 'Incidencias', estadisticas: 'Estadísticas' };
+const OPS_VIEW_LABELS = { mapa: 'Mapa', rutas: 'Rutas', flota: 'Flotilla', incidencias: 'Incidencias', estadisticas: 'Métricas' };
 function renderOperations() {
   return `<section id="operaciones" class="section">
     <div class="ops-nav" role="tablist" aria-label="Vistas de Operaciones">${OPS_VIEWS.map((view) => `<button type="button" class="ops-tab" data-ops-nav="${view}" role="tab">${OPS_VIEW_LABELS[view]}</button>`).join('')}</div>
@@ -781,7 +815,8 @@ function renderFleetManagement() {
   if (driverAuthContext?.role === 'driver') {
     return `<div class="sw-fleet-form" id="fleetManagement"><h3>Solo lectura</h3><p class="sw-rutas__muted">Solo el despachador o el administrador municipal pueden dar de alta camiones o conductores.</p></div>`;
   }
-  return `<div id="fleetManagement">${fleetTab === 'conductores' ? renderDriverForm() : renderVehicleForm()}</div>`;
+  const selected = fleetTab === 'camiones' && fleetSelectedVehicleId ? buildVehicleRows(trucks).find((row) => row.id === fleetSelectedVehicleId) : null;
+  return `<div id="fleetManagement">${fleetTab === 'conductores' ? renderDriverForm() : renderVehicleForm({ vehicle: selected ?? null })}</div>`;
 }
 function refreshFleetView() {
   const table = $('#fleetTable'); if (table) table.innerHTML = renderFleetTable();
@@ -831,23 +866,23 @@ async function requireRealAdapter(promise, status, failureMessage) {
 // real_id linking inline) para que el wizard de configuración inicial (renderOnboardingOverlay()
 // más abajo) pueda crear el primer vehículo/chofer sin reimplementar esa lógica ni depender de los
 // ids del formulario de Flota, que viven en otro panel del DOM.
-async function createVehicle({ unit, plate = '', maxStops = DEFAULT_MAX_STOPS }, status) {
+async function createVehicle({ unit, plate = '', maxStops = DEFAULT_MAX_STOPS, efficiency = null, fuelType = 'diesel' }, status) {
   // SW-063: con backend real configurado, la base real manda — si falla, no se crea nada en
   // pantalla (antes: el objeto demo se creaba igual y el fallo del espejo era un texto chiquito).
   if (realAdapter) {
     const result = await requireRealAdapter(
-      realAdapter.createVehicle({ code: unit, plate, max_stops: maxStops }),
+      realAdapter.createVehicle({ code: unit, plate, max_stops: maxStops, fuel_efficiency_km_per_l: efficiency, fuel_type: fuelType }),
       status,
       (message) => `No se pudo crear el vehículo en la base real: ${message}`
     );
     if (!result.ok) return null;
-    const created = operationsAdapter.createVehicle({ unit, name: unit, plate, max_stops: maxStops });
+    const created = operationsAdapter.createVehicle({ unit, name: unit, plate, max_stops: maxStops, fuel_efficiency_km_per_l: efficiency, fuel_type: fuelType });
     created.real_id = result.data.id;
     trucks.push(created);
     refreshFleetSelects();
     return created;
   }
-  const created = operationsAdapter.createVehicle({ unit, name: unit, plate, max_stops: maxStops });
+  const created = operationsAdapter.createVehicle({ unit, name: unit, plate, max_stops: maxStops, fuel_efficiency_km_per_l: efficiency, fuel_type: fuelType });
   trucks.push(created);
   refreshFleetSelects();
   return created;
@@ -882,13 +917,32 @@ async function createDriver({ name, phone = '', email } = {}, status) {
 }
 async function createVehicleFromForm() {
   const status = $('#fleetVehicleStatus');
-  const check = validateVehicleForm({ unit: $('#fleetVehicleUnit')?.value, plate: $('#fleetVehiclePlate')?.value, maxStops: $('#fleetVehicleMaxStops')?.value });
+  const check = validateVehicleForm({ unit: $('#fleetVehicleUnit')?.value, plate: $('#fleetVehiclePlate')?.value, maxStops: $('#fleetVehicleMaxStops')?.value, efficiency: $('#fleetVehicleEfficiency')?.value, fuelType: $('#fleetVehicleFuelType')?.value });
   if (!check.ok) { if (status) status.textContent = check.message; return; }
   const created = await createVehicle(check.values, status);
   if (!created) return; // requireRealAdapter() ya puso el mensaje de error en `status`
   const unitInput = $('#fleetVehicleUnit'); const plateInput = $('#fleetVehiclePlate'); const maxStopsInput = $('#fleetVehicleMaxStops');
   if (unitInput) unitInput.value = ''; if (plateInput) plateInput.value = ''; if (maxStopsInput) maxStopsInput.value = '20';
+  const effInput = $('#fleetVehicleEfficiency'); if (effInput) effInput.value = '';
   const done = $('#fleetVehicleStatus'); if (done) done.textContent = `Camión "${created.unit}" guardado.`;
+}
+// SW-090: el ayuntamiento digita rendimiento (km/L) y combustible; sin rendimiento no se calcula consumo.
+async function updateVehicleFromForm(vehicleId) {
+  const status = $('#fleetVehicleStatus');
+  const truck = trucks.find((t) => t.id === vehicleId);
+  if (!truck) { if (status) status.textContent = 'No se encontró el camión.'; return; }
+  const check = validateVehicleForm({ unit: truck.unit, plate: $('#fleetVehiclePlate')?.value, maxStops: $('#fleetVehicleMaxStops')?.value, efficiency: $('#fleetVehicleEfficiency')?.value, fuelType: $('#fleetVehicleFuelType')?.value });
+  if (!check.ok) { if (status) status.textContent = check.message; return; }
+  const { plate, maxStops, efficiency, fuelType } = check.values;
+  const patch = { plate, max_stops: maxStops, fuel_efficiency_km_per_l: efficiency, fuel_type: fuelType };
+  if (realAdapter && truck.real_id) {
+    const result = await requireRealAdapter(realAdapter.updateVehicle(truck.real_id, patch), status, (message) => `No se pudo guardar el camión en la base real: ${message}`);
+    if (!result.ok) return;
+  }
+  Object.assign(truck, patch);
+  refreshFleetView();
+  const side = $('#fleetManagement'); if (side) side.outerHTML = renderFleetManagement();
+  const done = $('#fleetVehicleStatus'); if (done) done.textContent = `Camión "${truck.unit}" actualizado.`;
 }
 async function createDriverFromForm() {
   const status = $('#fleetDriverStatus');
@@ -2688,6 +2742,11 @@ document.addEventListener('click', (event) => {
   if (createRouteAction === 'finish') finishCreateRoute();
   const fleetAction = event.target.closest('[data-fleet]')?.dataset.fleet;
   if (fleetAction === 'create-vehicle') createVehicleFromForm();
+  if (fleetAction === 'update-vehicle') updateVehicleFromForm(event.target.closest('[data-fleet]').dataset.vehicleId);
+  if (fleetAction === 'new-vehicle') { fleetSelectedVehicleId = null; refreshFleetView(); const side = $('#fleetManagement'); if (side) side.outerHTML = renderFleetManagement(); }
+  const vehicleRow = event.target.closest('[data-vehicle]');
+  if (vehicleRow) { fleetSelectedVehicleId = vehicleRow.dataset.vehicle; refreshFleetView(); const side = $('#fleetManagement'); if (side) side.outerHTML = renderFleetManagement(); }
+  handleMetricsClick(event);
   if (fleetAction === 'create-driver') createDriverFromForm();
   const driverAccountButton = event.target.closest('[data-fleet-driver-account]');
   if (driverAccountButton) createDriverAccount(driverAccountButton.dataset.fleetDriverAccount);
@@ -2859,7 +2918,8 @@ async function hydrateVehiclesAndDrivers() {
         id: row.id, real_id: row.id, unit: row.code, name: row.code, plate: row.plate ?? '',
         state: row.state ?? 'offline', driverId: null, routeId: null, progress: 0, speedKmh: 0,
         updatedAt: 'Sincronizado desde Supabase', sector: 'Sin asignar', nextStop: 'Sin asignar',
-        loadLevel: 0, positionIndex: 0, max_stops: row.max_stops
+        loadLevel: 0, positionIndex: 0, max_stops: row.max_stops,
+        fuel_efficiency_km_per_l: row.fuel_efficiency_km_per_l ?? null, fuel_type: row.fuel_type ?? null
       });
     });
   }
