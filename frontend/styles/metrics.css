@@ -42,3 +42,17 @@
   .sw-metrics__kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sw-metrics__charts { grid-template-columns: 1fr; }
 }
+
+/* SW-091: pestaña Comparar */
+.sw-compare { display: flex; flex-direction: column; gap: var(--space-4); }
+.sw-compare .sw-rutas__card h3 { font-size: 1.05rem; margin: 0 0 var(--space-3); }
+.sw-compare__route h4 { margin: var(--space-3) 0 var(--space-2); font-size: var(--font-size-2); }
+.sw-compare__route h4 small { color: var(--color-muted); font-weight: 500; }
+.sw-compare__delta { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: var(--font-size-1); font-weight: 700; white-space: nowrap; font-family: var(--font-mono, 'IBM Plex Mono', monospace); }
+.sw-compare__delta--good { background: var(--status-en-ruta-bg); color: var(--status-en-ruta); }
+.sw-compare__delta--bad { background: var(--status-sin-senal-bg); color: var(--status-sin-senal); }
+.sw-compare__delta--neutral { background: var(--status-disponible-bg); color: var(--status-disponible); }
+.sw-compare__flags { white-space: normal !important; min-width: 280px; }
+.sw-compare__flag { display: inline-flex; flex-direction: column; gap: 2px; margin: 2px 8px 2px 0; padding: 4px 10px; border-radius: var(--radius-1); background: var(--color-warning-bg); color: var(--color-warning); font-size: var(--font-size-1); }
+.sw-compare__flag small { color: inherit; opacity: .85; font-weight: 500; }
+.sw-compare__best { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; background: var(--color-primary); color: var(--color-primary-contrast); font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; vertical-align: middle; }

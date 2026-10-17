@@ -2,9 +2,10 @@
 // HTML puro (sin DOM ni red). No importa de ../shared: app.js le pasa `fmt` (formato es-DO) y el modelo de vista.
 import { escapeHtml } from './button.js';
 import { emptyState } from './empty-state.js';
+import { renderComparison } from './comparison-screens.js';
 
 const PERIODS = [{ days: 1, label: 'Hoy' }, { days: 7, label: '7 días' }, { days: 14, label: '14 días' }, { days: 30, label: '30 días' }, { days: 90, label: 'Trimestre' }];
-const TABS = [{ key: 'camiones', label: 'Por camión' }, { key: 'rutas', label: 'Por ruta' }, { key: 'conductores', label: 'Por conductor' }, { key: 'corridas', label: 'Corridas' }];
+const TABS = [{ key: 'camiones', label: 'Por camión' }, { key: 'rutas', label: 'Por ruta' }, { key: 'conductores', label: 'Por conductor' }, { key: 'corridas', label: 'Corridas' }, { key: 'comparar', label: 'Comparar' }];
 const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
 const SOURCES = { real: ['●', 'Real', 'real'], estimado: ['≈', 'Estimado', 'est'], sin_datos: ['–', 'Sin datos', 'none'] };
 const muted = (t = '—') => `<span class="sw-metrics__muted">${t}</span>`;
@@ -158,7 +159,8 @@ export function renderMetricsPage({ view, period = 14, tab = 'camiones', filters
   if (view.isEmpty) {
     return `${top}${emptyState({ title: 'Todavía no hay corridas completadas', message: 'Cuando un conductor termine una ruta con el teléfono, sus kilómetros, tiempo y huella de carbono aparecen aquí.' })}`;
   }
-  const detail = tab === 'corridas' ? renderRuns({ view, selectedRunId, trace, fmt })
+  const detail = tab === 'comparar' ? renderComparison({ comparison: view.comparison, fmt })
+    : tab === 'corridas' ? renderRuns({ view, selectedRunId, trace, fmt })
     : renderGroupTable(tab === 'rutas' ? view.byRoute : tab === 'conductores' ? view.byDriver : view.byVehicle, tab === 'rutas' ? 'Ruta' : tab === 'conductores' ? 'Conductor' : 'Unidad', fmt);
   return `${top}${renderKpis(view, fmt, period)}${renderNotice(view)}${renderCharts(view, fmt)}${renderTabs(tab)}${detail}`;
 }

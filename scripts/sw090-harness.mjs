@@ -33,6 +33,10 @@ for (let i = 13; i >= 0; i -= 1) {
     if (v === 'v1' && i < 9) fuelLogs.push({ route_run_id: id, liters: Math.round((km * jitter / 2.2) * 10) / 10 });
   });
 }
+// SW-091: dos corridas que se salen de lo habitual para mostrar los desvíos.
+const centro = runs.filter((r) => r.route_id === 'r1');
+const slowRun = centro[centro.length - 1]; slowRun.completed_at = new Date(new Date(slowRun.started_at).getTime() + 95 * 60000).toISOString();
+const shortRun = centro[centro.length - 3]; shortRun.distance_meters = Math.round(shortRun.distance_meters * 0.45);
 runs.push({ ...runs[runs.length - 1], id: 'test1', is_test: true, distance_meters: 300 });
 const fmt = { number: formatNumber, km: formatKm, duration: formatDuration };
 const view = (filters = {}) => buildMetricsView({ runs, vehicles, routes, drivers, fuelLogs, period: 14, filters, now });
@@ -44,9 +48,11 @@ const page = (hash, inner) => `<!doctype html><html lang="es" data-theme="oscuro
 <body>${renderRail({ hash })}<main id="app"><section id="operaciones" class="section"><div class="ops-panel card" data-ops-view="x">${inner}</div></section></main></body></html>`;
 const pageA = renderMetricsPage({ view: view(), period: 14, tab: 'camiones', filters: {}, options, fmt, demo: true, municipalityName: 'Laguna Salada' });
 const pageB = renderMetricsPage({ view: view({ includeTests: true }), period: 14, tab: 'corridas', filters: { includeTests: true }, options, selectedRunId: runs.find((r) => r.id !== 'test1' && r.vehicle_id === 'v1' && fuelLogs.some((f) => f.route_run_id === r.id))?.id, trace, fmt, demo: true, municipalityName: 'Laguna Salada' });
+const pageD = renderMetricsPage({ view: view(), period: 14, tab: 'comparar', filters: {}, options, fmt, demo: true, municipalityName: 'Laguna Salada' });
 const rows = buildVehicleRows(vehicles.map((v) => ({ id: v.id, unit: v.code, plate: v.plate, max_stops: v.max_stops, state: v.state, fuel_efficiency_km_per_l: v.fuel_efficiency_km_per_l, fuel_type: v.fuel_type })));
 const pageC = `<div class="sw-rutas__head"><div><h2>Flotilla</h2><p class="sw-rutas__sub">3 camiones registrados · datos de ejemplo</p><p class="demo sw-rutas__demo">Datos demo · no producción</p></div></div>${renderFleetTabs({ tab: 'camiones' })}<div class="sw-rutas__body"><div class="sw-rutas__main">${renderVehiclesTable({ rows, selectedId: 'v3' })}</div><aside class="sw-rutas__side"><div id="fleetManagement">${renderVehicleForm({ vehicle: rows[2] })}</div></aside></div>`;
 writeFileSync(`${out}/harness-a.html`, page('#operaciones/estadisticas', pageA));
 writeFileSync(`${out}/harness-b.html`, page('#operaciones/estadisticas', pageB));
+writeFileSync(`${out}/harness-d.html`, page('#operaciones/estadisticas', pageD));
 writeFileSync(`${out}/harness-c.html`, page('#operaciones/flota', pageC));
 console.log('ok', runs.length, 'corridas');

@@ -1,6 +1,7 @@
 // SW-090: modelo de vista de la pantalla Métricas. Puro (sin DOM ni red): filtra, agrupa y prepara
 // lo que dibuja frontend/components/metrics-screens.js.
 import { summarizeMetrics, filterRunsByPeriod, dailySeries } from './run-metrics.js';
+import { buildComparison } from './run-comparison.js';
 
 export function formatNumber(value, digits = 1) {
   if (value === null || value === undefined || !Number.isFinite(Number(value))) return '—';
@@ -71,6 +72,8 @@ export function buildMetricsView({ runs = [], vehicles = [], routes = [], driver
   return {
     summary, excludedTests, byVehicle, byRoute, byDriver, runRows, missingConfig,
     series: dailySeries(asReal, vehicles, fuelLogs, period, now),
+    // SW-091: la comparación usa todas las corridas (la línea base de una ruta no depende de los filtros de la pantalla).
+    comparison: buildComparison({ runs, vehicles, routes, drivers, fuelLogs, period, now }),
     isEmpty: summary.runCount === 0
   };
 }

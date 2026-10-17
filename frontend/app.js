@@ -724,6 +724,8 @@ function handleMetricsClick(event) {
   if (period) { metrics.period = Number(period.dataset.metricsPeriod); renderMetrics(); return; }
   const tab = event.target.closest('[data-metrics-tab]');
   if (tab) { metrics.tab = tab.dataset.metricsTab; renderMetrics(); return; }
+  const gotoRun = event.target.closest('[data-metrics-goto-run]');
+  if (gotoRun) { metrics.tab = 'corridas'; metrics.selectedRunId = gotoRun.dataset.metricsGotoRun; renderMetrics(); return; }
   const runRow = event.target.closest('[data-metrics-run]');
   if (runRow) { metrics.selectedRunId = runRow.dataset.metricsRun; renderMetrics(); return; }
   const testBtn = event.target.closest('[data-metrics-test]');
