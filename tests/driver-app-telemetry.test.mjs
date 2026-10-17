@@ -23,12 +23,15 @@ assert.equal(validateTelemetryPosition(first, { now: Date.parse(first.captured_a
 assert.equal(validateTelemetryPosition({ ...first, device_id: '' }, { now: Date.parse(first.captured_at) }).valid, false);
 assert.equal(validateTelemetryPosition({ ...first, route_run_id: null }, { now: Date.parse(first.captured_at) }).valid, false);
 
-const beforeCadence = { ...first, captured_at: '2026-10-03T12:00:09.999Z' };
-const atCadence = { ...first, captured_at: '2026-10-03T12:00:10.000Z' };
+// SW-096: se guarda un punto cada 5 s o cada 10 m (lo que pase primero) para que el trazo siga las esquinas.
+const beforeCadence = { ...first, captured_at: '2026-10-03T12:00:04.999Z' };
+const atCadence = { ...first, captured_at: '2026-10-03T12:00:05.000Z' };
 assert.equal(shouldCaptureDriverPosition(first, beforeCadence), false);
-assert.equal(shouldCaptureDriverPosition(first, atCadence), true, '10 seconds must trigger a sample');
-const moved25m = { ...beforeCadence, latitude: first.latitude + (25.1 / 111_111) };
-assert.equal(shouldCaptureDriverPosition(first, moved25m), true, '25 metres must trigger before 10 seconds');
+assert.equal(shouldCaptureDriverPosition(first, atCadence), true, '5 seconds must trigger a sample');
+const moved10m = { ...beforeCadence, latitude: first.latitude + (10.1 / 111_111) };
+assert.equal(shouldCaptureDriverPosition(first, moved10m), true, '10 metres must trigger before 5 seconds');
+const moved8m = { ...beforeCadence, latitude: first.latitude + (8 / 111_111) };
+assert.equal(shouldCaptureDriverPosition(first, moved8m), false, '8 metres in under 5 seconds must not trigger');
 
 // Offline persistence: recreate the queue over the same storage, then flush oldest-first. A
 // duplicate callback is ignored and captured_at remains exactly as captured.
@@ -123,5 +126,14 @@ assert.equal(sessionDelivered.length, 1);
 assert.equal(sessionDelivered[0].source, 'driver_app');
 assert.equal(sessionDelivered[0].device_id, 'android-session');
 assert.equal(sessionDelivered[0].route_run_id, 'run-1');
+
+// SW-096: un punto con precisión peor que 50 m no se guarda ni se envía (caso real: 404,9 m).
+const noisy = await session.capture({ latitude: 19.6531, longitude: -71.0956, accuracy: 404.9, timestamp: Date.now() + 20_000 });
+assert.deepEqual({ ok: noisy.ok, queued: noisy.queued, reason: noisy.reason }, { ok: true, queued: false, reason: 'LOW_ACCURACY' });
+assert.equal((await sessionQueue.list()).length, 0, 'el punto de mala precisión no debe quedar en la cola');
+const limit = await session.capture({ latitude: 19.6492, longitude: -71.0956, accuracy: 50, timestamp: Date.now() + 40_000 });
+assert.equal(limit.queued, true, '50 m justos sí sirve');
+const unknownAccuracy = await session.capture({ latitude: 19.6495, longitude: -71.0956, timestamp: Date.now() + 60_000 });
+assert.equal(unknownAccuracy.queued, true, 'sin dato de precisión sí sirve');
 
 console.log('driver-app-telemetry ok');
