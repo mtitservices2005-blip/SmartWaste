@@ -6,7 +6,7 @@ import { OPS_ITEMS, MORE_ITEMS, renderRail, activeHref } from '../frontend/compo
 
 assert.deepEqual(OPS_ITEMS.map((i) => i.href), ['#operaciones/mapa', '#operaciones/rutas', '#operaciones/flota', '#operaciones/incidencias', '#operaciones/estadisticas']);
 assert.deepEqual(OPS_ITEMS.map((i) => i.label), ['Mapa en vivo', 'Rutas', 'Flotilla', 'Incidencias', 'Métricas']);
-assert.deepEqual(MORE_ITEMS.map((i) => i.href), ['#resumen', '#supervisor', '#conductor', '#ciudadania', '#impacto', '#configuracion', '#master']);
+assert.deepEqual(MORE_ITEMS.map((i) => i.href), ['#resumen', '#supervisor', '#ciudadania', '#impacto', '#configuracion', '#master']);
 
 // Qué elemento está activo según el hash.
 assert.equal(activeHref('#operaciones/rutas'), '#operaciones/rutas');

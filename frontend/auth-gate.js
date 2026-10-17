@@ -28,7 +28,6 @@ export const SECTION_ROLES = {
   resumen: ['municipal_admin', 'supervisor', 'dispatcher', 'driver'],
   operaciones: ['municipal_admin', 'supervisor', 'dispatcher', 'driver'],
   supervisor: ['supervisor'],
-  conductor: ['municipal_admin', 'dispatcher', 'driver'],
   impacto: ['municipal_admin', 'supervisor'],
   master: ['mt_superadmin'],
   // SW-049: operator-level preference (flujo guiado "Poner en marcha"), same audience as who can
