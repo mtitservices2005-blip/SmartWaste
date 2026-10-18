@@ -82,6 +82,12 @@ assert.ok(upd.some(([f, v]) => f === 'progress' && v === '1 de 2 paradas'));
 assert.ok(upd.some(([f, v]) => f === 'next-label' && v === 'Calle Duarte 24'));
 assert.ok(upd.some(([f, v]) => f === 'next-distance' && /^\d+ m$/.test(v)));
 
+// SW-098: cada posición (también la del GPS nativo) llega a onPosition para dibujar el punto.
+const seen = [];
+s.c.onPosition = (pos) => seen.push(pos);
+s.c.setPosition({ latitude: 19.01, longitude: -71.01, accuracy: 8 });
+assert.deepEqual(seen, [{ latitude: 19.01, longitude: -71.01, accuracy: 8 }]);
+
 // Terminar: primero la pantalla de resumen; "Volver" regresa sin tocar nada.
 const before = s.log.length;
 await s.c.action('finish-open');
