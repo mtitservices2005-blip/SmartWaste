@@ -21,6 +21,7 @@ const SHARED_DIR = fileURLToPath(new URL('../shared', import.meta.url));
 const DIST_DIR = fileURLToPath(new URL('../dist', import.meta.url));
 const DIST_SHARED_DIR = fileURLToPath(new URL('../dist/shared', import.meta.url));
 const INDEX_HTML_PATH = fileURLToPath(new URL('../dist/index.html', import.meta.url));
+const EN_VIVO_HTML_PATH = fileURLToPath(new URL('../dist/en-vivo.html', import.meta.url));
 const CONFIG_START = '<!-- SMARTWASTE_SUPABASE_CONFIG:START (generado por scripts/build-frontend-config.mjs) -->';
 const CONFIG_END = '<!-- SMARTWASTE_SUPABASE_CONFIG:END -->';
 
@@ -33,8 +34,8 @@ function stripPreviousConfigBlock(html) {
   return html.slice(0, startIndex) + html.slice(afterEnd).replace(/^\n/, '');
 }
 
-function writeSupabaseConfigIntoIndexHtml({ url, anonKey, municipality_id, hideDemo, googleLogin }) {
-  const html = readFileSync(INDEX_HTML_PATH, 'utf8');
+function writeSupabaseConfigIntoIndexHtml({ url, anonKey, municipality_id, hideDemo, googleLogin }, htmlPath = INDEX_HTML_PATH, scriptSrc = './app.js') {
+  const html = readFileSync(htmlPath, 'utf8');
   const configBlock = `${CONFIG_START}
   <script>
     window.SMARTWASTE_SUPABASE_CONFIG = ${JSON.stringify({ url, anonKey, municipality_id: municipality_id || null, hideDemo: Boolean(hideDemo), ...(googleLogin ? { googleLogin: true } : {}) })};
@@ -42,10 +43,11 @@ function writeSupabaseConfigIntoIndexHtml({ url, anonKey, municipality_id, hideD
   ${CONFIG_END}
 `;
   const withoutOldBlock = stripPreviousConfigBlock(html);
-  const updated = withoutOldBlock.includes('<script type="module" src="./app.js">')
-    ? withoutOldBlock.replace('<script type="module" src="./app.js">', `${configBlock}  <script type="module" src="./app.js">`)
+  const tag = `<script type="module" src="${scriptSrc}">`;
+  const updated = withoutOldBlock.includes(tag)
+    ? withoutOldBlock.replace(tag, `${configBlock}  ${tag}`)
     : withoutOldBlock;
-  writeFileSync(INDEX_HTML_PATH, updated);
+  writeFileSync(htmlPath, updated);
 }
 
 mkdirSync(DIST_DIR, { recursive: true });
@@ -95,6 +97,9 @@ if (!url || !anonKey) {
   // SW-088b: opt-in, deployment-level — muestra el botón "Continuar con Google" del acceso del personal.
   // Solo el valor exacto 'true' lo enciende; el proveedor Google debe estar activo también en Supabase.
   const googleLogin = process.env.SUPABASE_GOOGLE_LOGIN === 'true';
-  writeSupabaseConfigIntoIndexHtml({ url, anonKey, municipality_id: process.env.SUPABASE_MUNICIPALITY_ID, hideDemo, googleLogin });
+  const injected = { url, anonKey, municipality_id: process.env.SUPABASE_MUNICIPALITY_ID, hideDemo, googleLogin };
+  writeSupabaseConfigIntoIndexHtml(injected);
+  // SW-097: la página pública /en-vivo necesita la misma config (solo usa url y anonKey).
+  writeSupabaseConfigIntoIndexHtml(injected, EN_VIVO_HTML_PATH, './en-vivo.js');
   console.log(`\ndist/index.html generado con SMARTWASTE_SUPABASE_CONFIG apuntando a ${url}${process.env.SUPABASE_MUNICIPALITY_ID ? ` (municipality_id: ${process.env.SUPABASE_MUNICIPALITY_ID})` : ' (sin municipality_id — el portal ciudadano seguirá en modo demo)'}${hideDemo ? ' · datos demo ocultos (SUPABASE_HIDE_DEMO=true)' : ''}${googleLogin ? ' · acceso con Google del personal activo (SUPABASE_GOOGLE_LOGIN=true)' : ''}.\n`);
 }

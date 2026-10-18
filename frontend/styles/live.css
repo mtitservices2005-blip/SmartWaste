@@ -35,3 +35,5 @@
   .live-map { flex: 1; height: auto; }
   .live-panel { width: 340px; overflow-y: auto; border-left: 1px solid var(--color-border); }
 }
+.live-map__canvas { position: absolute; inset: 0; }
+.live-marker-wrap { background: none; border: 0; }
