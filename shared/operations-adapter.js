@@ -2,6 +2,7 @@ import { trucks, routes, drivers, incidents, routePaths } from './demo-data.js';
 import { canTransitionRoute } from './contracts.js';
 import { deriveStopStatus, haversineMeters } from './route-engine.js';
 import { cleanTrack, trackStats } from './gps-quality.js';
+import { fetchAllPages } from './paginate.js';
 
 // This adapter (createSupabaseOperationsAdapter, below) is the single entry point for operating
 // on routes/route_runs/vehicle_assignments — see docs/CORE_READINESS_REVIEW.md. When MT Workflow
@@ -206,7 +207,7 @@ export function createSupabaseOperationsAdapter(client, { fallback = createDemoO
       const from = routeRun.gps_started_at ?? routeRun.started_at;
       const to = routeRun.gps_ended_at ?? routeRun.completed_at ?? new Date().toISOString();
       // SW-096: el trazo no dibuja puntos de mala precisión ni saltos imposibles (shared/gps-quality.js).
-      const result = await run(() => scoped(table(client, 'vehicle_positions').select('latitude,longitude,captured_at,accuracy').eq('vehicle_id', routeRun.vehicle_id).gte('captured_at', from).lte('captured_at', to).neq('source', 'simulator').order('captured_at', { ascending: true }).limit(3000)), () => fallback.listRunTrack(routeRun), opts.correlation_id);
+      const result = await run(() => fetchAllPages((a, z) => scoped(table(client, 'vehicle_positions').select('latitude,longitude,captured_at,accuracy').eq('vehicle_id', routeRun.vehicle_id).gte('captured_at', from).lte('captured_at', to).neq('source', 'simulator').order('captured_at', { ascending: true }).order('id', { ascending: true }).range(a, z))), () => fallback.listRunTrack(routeRun), opts.correlation_id);
       return result.ok ? { ...result, data: cleanTrack(result.data) } : result;
     },
     markRouteRunTest: (runId, isTest, opts = {}) => run(() => client.rpc('set_route_run_test_flag', { p_run_id: runId, p_is_test: Boolean(isTest) }), () => fallback.markRouteRunTest(runId, isTest), opts.correlation_id),
@@ -538,8 +539,9 @@ async function transitionRouteRun(client, fallback, municipality_id, routeId, ne
   if (next === 'completed' && current.data.vehicle_id && current.data.started_at) {
     // SW-096: accuracy se pide para que la distancia ignore puntos de mala precisión y saltos imposibles
     // (shared/gps-quality.js). gps_points_count sigue siendo el total guardado; el rango y los km salen de los puntos buenos.
-    const positionsResult = await client.from('vehicle_positions').select('latitude,longitude,captured_at,accuracy')
-      .eq('route_run_id', current.data.id).neq('source', 'simulator').order('captured_at', { ascending: true });
+    // SW-099: por páginas (Supabase corta a 1000 filas; una corrida larga quedaba medida solo en su primer tramo).
+    const positionsResult = await fetchAllPages((a, z) => client.from('vehicle_positions').select('latitude,longitude,captured_at,accuracy')
+      .eq('route_run_id', current.data.id).neq('source', 'simulator').order('captured_at', { ascending: true }).order('id', { ascending: true }).range(a, z));
     if (!positionsResult.error) {
       const samples = positionsResult.data ?? [];
       const stats = trackStats(samples);

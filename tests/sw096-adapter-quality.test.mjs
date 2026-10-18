@@ -10,7 +10,7 @@ const positions = [pos(0, 0), pos(10, 0.0001), pos(15, 0.0040, 404.9), pos(20, 0
 function fakeClient(runs, vehiclePositions) {
   const updates = [];
   const from = (table) => {
-    const filters = []; let patch = null; let id = null; let columns = '*';
+    const filters = []; let patch = null; let id = null; let columns = '*'; let range = null;
     const rows = () => (table === 'route_runs' ? runs : vehiclePositions).filter((r) => filters.every((f) => f(r)));
     const b = {
       select: (c) => { if (c) columns = c; return b; },
@@ -19,10 +19,11 @@ function fakeClient(runs, vehiclePositions) {
       gte: (k, v) => { filters.push((r) => r[k] >= v); return b; },
       lte: (k, v) => { filters.push((r) => r[k] <= v); return b; },
       not: () => b, order: () => b, limit: () => b,
+      range: (a, z) => { range = [a, z]; return b; }, // SW-099
       update: (p) => { patch = p; return b; },
       maybeSingle: async () => ({ data: rows()[0] ?? null, error: null }),
       single: async () => { if (patch) { const row = runs.find((r) => r.id === id); Object.assign(row, patch); updates.push(patch); return { data: row, error: null }; } return { data: rows()[0], error: null }; },
-      then: (resolve) => resolve({ data: rows().map((r) => ({ ...r })), error: null })
+      then: (resolve) => { const all = rows().map((r) => ({ ...r })); resolve({ data: range ? all.slice(range[0], range[1] + 1) : all, error: null }); }
     };
     b.columns = () => columns;
     return b;
