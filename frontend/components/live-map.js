@@ -27,3 +27,26 @@ export function renderLiveError({ hasData } = {}) {
 export function renderLiveNoMunicipality() {
   return '<div class="live-notice live-notice--empty"><p>Falta indicar el municipio</p><p class="live-notice__hint">Abre el enlace que te dio tu ayuntamiento para ver los camiones de tu municipio.</p></div>';
 }
+
+// Íconos de camión que el ciudadano puede elegir (solo en su pantalla). Cada uno se dibuja en 24×24.
+export const LIVE_ICONS = [
+  { id: 'punto', label: 'Punto', body: '<circle cx="12" cy="12" r="5" fill="currentColor"/>' },
+  { id: 'compactador', label: 'Compactador', body: '<path fill="currentColor" d="M2 8h11v7H2zM14 10h4l3 3v2h-7z"/><circle cx="7" cy="17" r="2" fill="currentColor"/><circle cx="17" cy="17" r="2" fill="currentColor"/>' },
+  { id: 'volquete', label: 'Volquete', body: '<path fill="currentColor" d="M2 7l11 1-1 7H2zM14 10h4l3 3v2h-7z"/><circle cx="7" cy="17" r="2" fill="currentColor"/><circle cx="17" cy="17" r="2" fill="currentColor"/>' },
+  { id: 'camioneta', label: 'Camioneta', body: '<path fill="currentColor" d="M2 11h8l2-3h5l3 4v3H2z"/><circle cx="7" cy="16" r="2" fill="currentColor"/><circle cx="17" cy="16" r="2" fill="currentColor"/>' }
+];
+const iconOf = (id) => LIVE_ICONS.find((i) => i.id === id) ?? LIVE_ICONS[1];
+
+export function renderLiveIconSvg(iconId) {
+  return `<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">${iconOf(iconId).body}</svg>`;
+}
+
+export function renderLiveMarker({ icon, status } = {}) {
+  return `<span class="live-marker live-marker--${esc(status ?? 'en_ruta')}">${renderLiveIconSvg(icon)}</span>`;
+}
+
+export function renderLiveIconPicker({ selected } = {}) {
+  const current = iconOf(selected).id;
+  const opts = LIVE_ICONS.map((i) => `<button type="button" class="live-icon-option" data-live-icon="${i.id}" aria-pressed="${i.id === current}" title="${esc(i.label)}">${renderLiveIconSvg(i.id)}<span>${esc(i.label)}</span></button>`).join('');
+  return `<div class="live-icons" role="group" aria-label="Ícono de los camiones"><span class="live-icons__label">Ícono del camión</span><div class="live-icons__row">${opts}</div></div>`;
+}

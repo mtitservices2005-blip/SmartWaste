@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { renderLiveHeader, renderLiveVehicleList, renderLiveEmpty, renderLiveError, renderLiveNoMunicipality } from '../frontend/components/live-map.js';
+import { renderLiveHeader, renderLiveVehicleList, renderLiveEmpty, renderLiveError, renderLiveNoMunicipality, renderLiveIconPicker, renderLiveMarker, LIVE_ICONS } from '../frontend/components/live-map.js';
 
 const v = (o = {}) => ({ code: 'C-01', routeName: 'Ruta Norte', status: 'en_ruta', statusText: 'En ruta', ...o });
 
@@ -24,4 +24,11 @@ assert.ok(!evil.includes('<img'));
 for (const html of [list, renderLiveEmpty(), renderLiveHeader({ municipalityName: 'X', updatedAgoText: 'y' })]) {
   assert.ok(!/plate|battery|driver/i.test(html));
 }
+assert.deepEqual(LIVE_ICONS.map((i) => i.id), ['punto', 'compactador', 'volquete', 'camioneta']);
+const picker = renderLiveIconPicker({ selected: 'volquete' });
+for (const i of LIVE_ICONS) assert.match(picker, new RegExp(`data-live-icon="${i.id}"`));
+assert.match(picker, /data-live-icon="volquete"[^>]*aria-pressed="true"/);
+assert.equal((picker.match(/aria-pressed="true"/g) || []).length, 1);
+assert.match(renderLiveIconPicker({ selected: 'xx' }), /data-live-icon="compactador"[^>]*aria-pressed="true"/);
+assert.match(renderLiveMarker({ icon: 'camioneta', status: 'detenido' }), /live-marker--detenido[\s\S]*<svg/);
 console.log('live-map ok');

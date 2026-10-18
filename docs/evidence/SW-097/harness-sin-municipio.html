@@ -195,9 +195,14 @@
 .live-notice__hint { margin-top: var(--space-2) !important; font-size: var(--font-size-1); color: var(--color-muted); }
 .live-notice--error { background: var(--color-warning-bg); color: var(--color-warning); border-color: var(--color-warning); }
 .live-notice--error .live-notice__hint { color: inherit; }
-.live-marker { width: 22px; height: 22px; border-radius: 50%; background: var(--status-en-ruta); border: 3px solid var(--color-surface); box-shadow: 0 1px 4px rgba(0,0,0,.45); }
+.live-marker { box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 50%; background: var(--status-en-ruta); color: var(--color-primary-contrast); border: 3px solid var(--color-surface); box-shadow: 0 1px 4px rgba(0,0,0,.45); }
 .live-marker--detenido { background: var(--status-detenido); }
-.live-marker--sin_senal { background: var(--status-sin-senal); opacity: .7; }
+.live-marker--sin_senal { background: var(--status-sin-senal); opacity: .75; }
+.live-icons { display: flex; flex-direction: column; gap: var(--space-2); }
+.live-icons__label { font-size: var(--font-size-1); color: var(--color-muted); }
+.live-icons__row { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.live-icon-option { display: inline-flex; align-items: center; gap: var(--space-1); padding: var(--space-2) var(--space-3); border: 1px solid var(--color-border-input); border-radius: var(--radius-1); background: var(--color-surface); color: var(--color-text); font: inherit; font-size: var(--font-size-1); cursor: pointer; }
+.live-icon-option[aria-pressed="true"] { border-color: var(--color-focus); outline: 2px solid var(--color-focus); }
 @media (min-width: 900px) {
   .live-shell { height: 100vh; }
   .live-body { flex-direction: row; }
