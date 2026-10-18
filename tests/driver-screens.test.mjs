@@ -87,4 +87,7 @@ assert.ok(!/<div[^>]*role="alert"[^>]*>\s*[^<\s]/.test(acc), 'sin error no hay m
 const accErr = renderDriverAccess({ errorMessage: 'Tu correo no está registrado. Pídele a la central que lo registre.' });
 assert.match(accErr, /role="alert"[^>]*>Tu correo no está registrado/);
 assert.match(acc, /aria-label|<label/, 'campos con etiqueta');
+// SW-098: botón "Centrar en mí" en la pantalla En ruta, oculto hasta que el conductor mueva el mapa.
+const runHtml = renderDriverRun({ unit: 'C-01', routeName: 'Centro' });
+assert.match(runHtml, /<button[^>]*data-driver-recenter[^>]*hidden[^>]*>Centrar en mí<\/button>/);
 console.log('driver-screens ok');

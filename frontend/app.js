@@ -185,6 +185,7 @@ let masterRealMunicipalities = [];
 // handle while GPS sharing is active, null otherwise.
 let driverAuthContext = null;
 let driverGpsWatchId = null;
+let driverController = null; // SW-098: controlador de la app del conductor (recibe la posición del GPS nativo)
 let driverBackgroundBridge = null;
 let driverTelemetrySession = null;
 let driverOnlineHandler = null;
@@ -1213,6 +1214,9 @@ async function startDriverGps() {
     driverBackgroundBridge = createDriverBackgroundBridge({
       plugin: nativePlugin,
       onLocation: async (location) => {
+        // SW-098: el punto del mapa sale del GPS nativo (el WebView a veces no entrega posiciones).
+        const shown = location?.coords ?? location;
+        driverController?.setPosition?.({ latitude: shown?.latitude, longitude: shown?.longitude, accuracy: shown?.accuracy });
         const result = await session.capture(location, { correlation_id: crypto.randomUUID() });
         if (result.ok && result.queued) await session.reconnect();
         refreshDriverConnectionStatus();
@@ -3264,7 +3268,7 @@ async function startDriverExperience(ctx) {
   if (!root) { root = document.createElement('div'); root.id = 'driverApp'; root.className = 'sw-driver-root'; document.body.appendChild(root); }
   const client = getAuthClient();
   const logout = async () => { try { await client.auth.signOut(); } finally { window.location.reload(); } };
-  await mountDriverApp({
+  driverController = await mountDriverApp({
     root, client, ctx, adapter: realAdapter,
     gps: { start: () => startDriverGps(), stop: (opts) => stopDriverGps(opts) },
     toast: showToast, logout

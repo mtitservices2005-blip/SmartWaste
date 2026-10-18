@@ -36,6 +36,7 @@ export function renderDriverRun({ unit = null, connected = false, routeName = ''
   return `<section class="sw-driver sw-driver--run" aria-label="Ruta en curso">
     <div id="driverRunMap" class="sw-driver__map" role="application" aria-label="Mapa de la ruta en curso"></div>
     <div class="sw-driver__map-top"><span class="sw-driver__chip">Camión ${e(unit ?? '—')}</span><span data-driver-field="connected" class="sw-driver__chip${connected ? ' sw-driver__chip--on' : ' sw-driver__chip--off'}" role="status">${connected ? 'Conectado' : 'Sin conexión'}</span></div>
+    <button type="button" class="sw-driver__recenter" data-driver-recenter hidden aria-label="Centrar el mapa en mi posición">Centrar en mí</button>
     <div class="sw-driver__sheet">
       <div class="sw-driver__grab" aria-hidden="true"></div>
       <div class="sw-driver__sheet-top"><h2>${e(routeName)}</h2><span data-driver-field="progress">${e(progressText)}</span></div>
