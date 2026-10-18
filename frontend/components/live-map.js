@@ -47,6 +47,6 @@ export function renderLiveMarker({ icon, status } = {}) {
 
 export function renderLiveIconPicker({ selected } = {}) {
   const current = iconOf(selected).id;
-  const opts = LIVE_ICONS.map((i) => `<button type="button" class="live-icon-option" data-live-icon="${i.id}" aria-pressed="${i.id === current}" title="${esc(i.label)}">${renderLiveIconSvg(i.id)}<span>${esc(i.label)}</span></button>`).join('');
-  return `<div class="live-icons" role="group" aria-label="Ícono de los camiones"><span class="live-icons__label">Ícono del camión</span><div class="live-icons__row">${opts}</div></div>`;
+  const opts = LIVE_ICONS.map((i) => `<button type="button" class="live-icon-option" data-live-icon="${i.id}" aria-pressed="${i.id === current}" title="${esc(i.label)}" aria-label="${esc(i.label)}">${renderLiveIconSvg(i.id)}</button>`).join('');
+  return `<div class="live-icons" role="group" aria-label="Ícono de los camiones"><div class="live-icons__row">${opts}</div></div>`;
 }

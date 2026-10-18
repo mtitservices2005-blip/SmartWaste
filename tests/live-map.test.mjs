@@ -28,6 +28,8 @@ assert.deepEqual(LIVE_ICONS.map((i) => i.id), ['punto', 'compactador', 'volquete
 const picker = renderLiveIconPicker({ selected: 'volquete' });
 for (const i of LIVE_ICONS) assert.match(picker, new RegExp(`data-live-icon="${i.id}"`));
 assert.match(picker, /data-live-icon="volquete"[^>]*aria-pressed="true"/);
+assert.ok(!/<span/.test(picker), 'el selector no lleva texto visible');
+assert.match(picker, /aria-label="Volquete"/);
 assert.equal((picker.match(/aria-pressed="true"/g) || []).length, 1);
 assert.match(renderLiveIconPicker({ selected: 'xx' }), /data-live-icon="compactador"[^>]*aria-pressed="true"/);
 assert.match(renderLiveMarker({ icon: 'camioneta', status: 'detenido' }), /live-marker--detenido[\s\S]*<svg/);
