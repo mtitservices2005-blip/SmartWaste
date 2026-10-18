@@ -18,6 +18,7 @@
 - `POLL_INTERVAL_MS = 15000`; `STALE_AFTER_SECONDS = 180`; backoff 15 s → 30 s → 60 s.
 - Español neutro con "tú"; componentes `frontend/components/*.js` importan solo desde `./`; claro/oscuro con los tokens existentes (`frontend/styles/tokens.css`).
 - Pruebas que dependen de Supabase local: "pendiente de CI". Sin push/merge/deploy sin autorización de Miguel.
+- **Decisiones de Miguel (2026-10-18):** el mapa se encuadra sobre la posición del camión aunque no siga la ruta; las corridas de prueba (`is_test`) no se muestran; ejecución nativa en la sesión (método menos costoso), sin subagentes.
 - Un commit por tarea con `$HOME/gc97.sh "<mensaje>"` (rama `feature/sw097-mapa-en-vivo`, worktree `wt-sw097`).
 
 ## Review Focus
@@ -137,7 +138,7 @@
 
 - [ ] **Step 1: Escribe `tests/en-vivo-wiring.test.mjs`**: (a) lee `frontend/en-vivo.html`: contiene `<script type="module" src="./en-vivo.js">`, enlaza los CSS de tokens y `live.css`, sin `auth-gate`; (b) `vercel.json` tiene el rewrite; (c) `mountLiveMap` con `fetchFleet` falso: sin `slug` pinta `renderLiveNoMunicipality`; con datos pinta la lista y llama a `loadLeaflet`; si el segundo sondeo falla, **conserva** la lista anterior y añade el aviso de error; `stop()` detiene el sondeo; (d) ejecutar el build en carpeta temporal (patrón de `build-frontend-config.test.mjs`) con `SUPABASE_URL`/`SUPABASE_ANON_KEY` falsos produce `dist/en-vivo.html` con el bloque de config y `./shared/` reescrito en `dist/en-vivo.js`.
 - [ ] **Step 2:** → FALLA.
-- [ ] **Step 3: Implementa** `en-vivo.html` (estructura del `index.html`: tema temprano, fuentes, CSS, `<div id="liveRoot">`), `mountLiveMap` (lee `?m=`; `fetchFleet` = `supabase.rpc('public_live_fleet', { p_municipality_slug })` con el cliente de `frontend/vendor/supabase-js.mjs` creado con la anon key de `window.SMARTWASTE_SUPABASE_CONFIG`; Leaflet 1.9.4 desde unpkg igual que `app.js`; dibuja ruta como polilínea, camión como marcador con rumbo; encuadra la ruta solo la primera vez; seleccionar tarjeta enfoca el camión; "Actualizado hace N s" se refresca cada segundo sin consultar), el cambio al build script y el rewrite.
+- [ ] **Step 3: Implementa** `en-vivo.html` (estructura del `index.html`: tema temprano, fuentes, CSS, `<div id="liveRoot">`), `mountLiveMap` (lee `?m=`; `fetchFleet` = `supabase.rpc('public_live_fleet', { p_municipality_slug })` con el cliente de `frontend/vendor/supabase-js.mjs` creado con la anon key de `window.SMARTWASTE_SUPABASE_CONFIG`; Leaflet 1.9.4 desde unpkg igual que `app.js`; dibuja ruta como polilínea, camión como marcador con rumbo; el mapa se encuadra sobre la posición de los camiones (nunca sobre la ruta): con uno, centrado en él con zoom 16; con varios, `fitBounds` de sus posiciones; la ruta es opcional (si no hay trazo o el camión va lejos de ella, igual se ve); tras el primer encuadre solo sigue al camión seleccionado y no recentra si el usuario movió el mapa; seleccionar tarjeta enfoca el camión; "Actualizado hace N s" se refresca cada segundo sin consultar), el cambio al build script y el rewrite.
 - [ ] **Step 4:** `node tests/en-vivo-wiring.test.mjs`, `build-frontend-config.test.mjs`, `dist-imports.test.mjs` → PASAN.
 - [ ] **Step 5: Commit** `$HOME/gc97.sh "feat(SW-097): página pública /en-vivo con sondeo y despliegue"`.
 
