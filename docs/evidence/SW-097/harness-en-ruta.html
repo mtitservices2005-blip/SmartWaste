@@ -1,0 +1,207 @@
+<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SW-097 en-ruta</title><style>/* SW-082: tokens de diseño de SmartWaste. Verde institucional existente como color primario;
+   ámbar y rojo para alertas; grises neutros. Cada par texto/fondo está verificado por
+   tests/design-contrast.test.mjs (WCAG 2.1 AA: 4.5:1 texto normal, 3:1 texto grande e iconos).
+   Los estados de camión se muestran SIEMPRE con color + icono + texto, nunca solo color. */
+:root {
+  /* Color */
+  --color-primary: #0f7b4f;
+  --color-primary-strong: #0b5c3b;
+  --color-primary-contrast: #ffffff;
+  --color-success: #0b6b43;
+  --color-success-bg: #dff8eb;
+  --color-warning: #7a4300;
+  --color-warning-bg: #fff3d1;
+  --color-danger: #b42318;
+  --color-danger-bg: #fee4e2;
+  --color-info: #124bc4;
+  --color-info-bg: #e5edff;
+  --color-surface: #ffffff;
+  --color-background: #eef4f2;
+  --color-background-alt: #f8fafc;
+  --color-text: #17212b;
+  --color-muted: #475569;
+  --color-border: #d8e4df;
+  --color-border-input: #64748b;
+  --color-focus: #124bc4;
+  --color-ink: #062f2b;
+  --color-on-ink: #ffffff;
+  --color-on-ink-muted: #b6f5dd;
+
+  /* Estados de camión (color del texto/icono y fondo de la insignia) */
+  --status-en-ruta: #0b6b43;
+  --status-en-ruta-bg: #dff8eb;
+  --status-detenido: #7a4300;
+  --status-detenido-bg: #fff3d1;
+  --status-sin-senal: #b42318;
+  --status-sin-senal-bg: #fee4e2;
+  --status-disponible: #124bc4;
+  --status-disponible-bg: #e5edff;
+  --status-fuera-servicio: #3f4a5a;
+  --status-fuera-servicio-bg: #e5e7eb;
+
+  /* Tipografía */
+  --font-family: Inter, Arial, sans-serif;
+  --font-size-1: 0.8rem;
+  --font-size-2: 0.95rem;
+  --font-size-3: 1.1rem;
+  --font-size-4: 1.4rem;
+  --font-size-5: 1.9rem;
+  --line-height: 1.45;
+
+  /* Espaciado */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4rem;
+
+  /* Radios y sombras */
+  --radius-1: 8px;
+  --radius-2: 12px;
+  --radius-3: 18px;
+  --shadow-1: 0 2px 8px #0f172a14;
+  --shadow-2: 0 10px 30px #0f172a14;
+
+  /* Objetivo táctil mínimo (app del chofer) */
+  --touch-target: 48px;
+}
+
+/* Alto contraste para uso a la intemperie (app del chofer): activar con data-contrast="high". */
+:root[data-contrast="high"] {
+  --color-primary: #064d30;
+  --color-primary-strong: #04361f;
+  --color-success: #064d30;
+  --color-warning: #4a2800;
+  --color-danger: #8f1a10;
+  --color-info: #0b3a99;
+  --color-text: #000000;
+  --color-muted: #1f2937;
+  --color-border-input: #374151;
+  --color-focus: #0b3a99;
+  --status-en-ruta: #064d30;
+  --status-detenido: #4a2800;
+  --status-sin-senal: #8f1a10;
+  --status-disponible: #0b3a99;
+  --status-fuera-servicio: #1f2937;
+}
+
+/* SW-084: temas Mando (oscuro y claro) como capa sobre los tokens de SW-082. Mismos nombres de token;
+   se activan con <html data-theme="oscuro|claro">. Sin atributo, la plataforma se ve como antes.
+   Cada par texto/fondo está verificado por tests/theme-mando.test.mjs (WCAG 2.1 AA). */
+:root[data-theme="oscuro"] {
+  color-scheme: dark;
+  --color-primary: #c6f432;
+  --color-primary-strong: #dcff6b;
+  --color-primary-contrast: #0b1210;
+  --color-success: #8ee6b4;
+  --color-success-bg: #12301f;
+  --color-warning: #ffd8a3;
+  --color-warning-bg: #2a1d0e;
+  --color-danger: #ff8a7f;
+  --color-danger-bg: #3a1612;
+  --color-info: #8fb8ff;
+  --color-info-bg: #14223f;
+  --color-surface: #0e1714;
+  --color-background: #0b1210;
+  --color-background-alt: #101b18;
+  --color-text: #e8f1ee;
+  --color-muted: #9bb0a9;
+  --color-border: #1f2d29;
+  --color-border-input: #6f8a82;
+  --color-focus: #6fd3ff;
+  --color-ink: #0e1714;
+  --color-on-ink: #e8f1ee;
+  --color-on-ink-muted: #9bb0a9;
+  --color-rail-active: #152320;
+  --status-en-ruta: #c6f432;
+  --status-en-ruta-bg: #1a2608;
+  --status-detenido: #ffd8a3;
+  --status-detenido-bg: #2a1d0e;
+  --status-sin-senal: #ff8a7f;
+  --status-sin-senal-bg: #3a1612;
+  --status-disponible: #8fb8ff;
+  --status-disponible-bg: #14223f;
+  --status-fuera-servicio: #b4c0bc;
+  --status-fuera-servicio-bg: #26302d;
+  --shadow-1: 0 2px 8px #00000066;
+  --shadow-2: 0 10px 30px #00000080;
+  --map-bg: #101b18;
+  --map-tile-filter: invert(1) hue-rotate(180deg) brightness(.82) contrast(.9) saturate(.55);
+}
+
+:root[data-theme="claro"] {
+  color-scheme: light;
+  --color-primary: #3d7a00;
+  --color-primary-strong: #2f6000;
+  --color-primary-contrast: #ffffff;
+  --color-success: #0b6b43;
+  --color-success-bg: #dff8eb;
+  --color-warning: #7a4300;
+  --color-warning-bg: #fff3d1;
+  --color-danger: #b42318;
+  --color-danger-bg: #fee4e2;
+  --color-info: #124bc4;
+  --color-info-bg: #e5edff;
+  --color-surface: #ffffff;
+  --color-background: #f1f5f2;
+  --color-background-alt: #f8fafc;
+  --color-text: #12201b;
+  --color-muted: #586c65;
+  --color-border: #dbe4df;
+  --color-border-input: #64748b;
+  --color-focus: #124bc4;
+  --color-ink: #ffffff;
+  --color-on-ink: #12201b;
+  --color-on-ink-muted: #586c65;
+  --color-rail-active: #eaf5d2;
+  --status-en-ruta: #0b6b43;
+  --status-en-ruta-bg: #dff8eb;
+  --status-detenido: #7a4300;
+  --status-detenido-bg: #fff3d1;
+  --status-sin-senal: #b42318;
+  --status-sin-senal-bg: #fee4e2;
+  --status-disponible: #124bc4;
+  --status-disponible-bg: #e5edff;
+  --status-fuera-servicio: #3f4a5a;
+  --status-fuera-servicio-bg: #e5e7eb;
+  --map-bg: #e4ece8;
+  --map-tile-filter: none;
+}
+
+/* SW-097: mapa público en vivo. Móvil primero; solo tokens. */
+.live-page { margin: 0; min-height: 100vh; background: var(--color-background); color: var(--color-text); font-family: var(--font-family); line-height: var(--line-height); }
+.live-shell { display: flex; flex-direction: column; min-height: 100vh; }
+.live-header { padding: var(--space-3) var(--space-4); background: var(--color-ink); color: var(--color-on-ink); }
+.live-header__title { margin: 0; font-size: var(--font-size-3); font-weight: 700; }
+.live-header__updated { margin: 0; font-size: var(--font-size-1); color: var(--color-on-ink-muted); }
+.live-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.live-map { position: relative; height: 55vh; min-height: 280px; background: var(--color-background-alt); }
+.live-map svg { width: 100%; height: 100%; display: block; }
+.live-panel { padding: var(--space-3) var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); }
+.live-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.live-card { width: 100%; display: grid; grid-template-columns: auto 1fr; gap: 0 var(--space-3); text-align: left; padding: var(--space-3); border: 1px solid var(--color-border); border-left: 6px solid var(--status-en-ruta); border-radius: var(--radius-2); background: var(--color-surface); color: var(--color-text); font: inherit; cursor: pointer; }
+.live-card--detenido { border-left-color: var(--status-detenido); }
+.live-card--sin_senal { border-left-color: var(--status-sin-senal); }
+.live-card[aria-current="true"] { outline: 2px solid var(--color-focus); outline-offset: 1px; }
+.live-card.is-stale { opacity: .75; }
+.live-card__code { font-weight: 700; grid-row: 1 / 3; align-self: center; font-size: var(--font-size-3); }
+.live-card__route { font-size: var(--font-size-2); }
+.live-card__status { font-size: var(--font-size-1); color: var(--color-muted); }
+.live-notice { padding: var(--space-4); border-radius: var(--radius-2); background: var(--color-surface); border: 1px solid var(--color-border); text-align: center; }
+.live-notice p { margin: 0; }
+.live-notice__hint { margin-top: var(--space-2) !important; font-size: var(--font-size-1); color: var(--color-muted); }
+.live-notice--error { background: var(--color-warning-bg); color: var(--color-warning); border-color: var(--color-warning); }
+.live-notice--error .live-notice__hint { color: inherit; }
+.live-marker { width: 22px; height: 22px; border-radius: 50%; background: var(--status-en-ruta); border: 3px solid var(--color-surface); box-shadow: 0 1px 4px rgba(0,0,0,.45); }
+.live-marker--detenido { background: var(--status-detenido); }
+.live-marker--sin_senal { background: var(--status-sin-senal); opacity: .7; }
+@media (min-width: 900px) {
+  .live-shell { height: 100vh; }
+  .live-body { flex-direction: row; }
+  .live-map { flex: 1; height: auto; }
+  .live-panel { width: 340px; overflow-y: auto; border-left: 1px solid var(--color-border); }
+}
+</style><script>var t=new URLSearchParams(location.search).get('t');document.documentElement.dataset.theme=t==='claro'?'claro':'oscuro';</script></head><body class="live-page"><div class="live-shell"><header class="live-header"><h1 class="live-header__title">Camiones en vivo · Laguna Salada</h1><p class="live-header__updated" aria-live="polite">Actualizado hace 6 s</p></header><div class="live-body"><div class="live-map"><svg viewBox="0 0 400 260" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Mapa de ejemplo"><rect width="400" height="260" fill="var(--color-background-alt)"/><polyline points="30,160 44,170.0877878718461 58,178.7347921227895 72,184.65883939231585 86,186.87751605453252 100,184.81631831007059 114,178.37189707302727 128,167.92343526953297 142,154.29090506543247 156,138.6448003223947 170,122.37728148498059 184,106.9489180564662 198,93.72790018768288 212,83.83941994916952 226,78.04180331608288 240,76.64302901347446 254,79.4668243372968 268,85.87207033022764 282,94.82338007204297 296,105.00508039528691 310,114.9660492228488 324,123.27946394875156 338,128.69987478475224 352,130.30031147945493" fill="none" stroke="var(--color-muted)" stroke-width="3" stroke-dasharray="6 5"/><circle cx="142" cy="154.29090506543247" r="11" fill="var(--status-en-ruta)" stroke="var(--color-surface)" stroke-width="3"/></svg></div><div class="live-panel"><ul class="live-list"><li><button type="button" class="live-card live-card--en_ruta" data-live-vehicle="SW-LS-01" aria-current="true"><span class="live-card__code">SW-LS-01</span><span class="live-card__route">Ruta Norte</span><span class="live-card__status">En ruta</span></button></li></ul></div></div></div></body></html>

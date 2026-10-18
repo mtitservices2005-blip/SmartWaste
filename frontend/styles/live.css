@@ -1,0 +1,33 @@
+/* SW-097: mapa público en vivo. Móvil primero; solo tokens. */
+.live-page { margin: 0; min-height: 100vh; background: var(--color-background); color: var(--color-text); font-family: var(--font-family); line-height: var(--line-height); }
+.live-shell { display: flex; flex-direction: column; min-height: 100vh; }
+.live-header { padding: var(--space-3) var(--space-4); background: var(--color-ink); color: var(--color-on-ink); }
+.live-header__title { margin: 0; font-size: var(--font-size-3); font-weight: 700; }
+.live-header__updated { margin: 0; font-size: var(--font-size-1); color: var(--color-on-ink-muted); }
+.live-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.live-map { position: relative; height: 55vh; min-height: 280px; background: var(--color-background-alt); }
+.live-map svg { width: 100%; height: 100%; display: block; }
+.live-panel { padding: var(--space-3) var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); }
+.live-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.live-card { width: 100%; display: grid; grid-template-columns: auto 1fr; gap: 0 var(--space-3); text-align: left; padding: var(--space-3); border: 1px solid var(--color-border); border-left: 6px solid var(--status-en-ruta); border-radius: var(--radius-2); background: var(--color-surface); color: var(--color-text); font: inherit; cursor: pointer; }
+.live-card--detenido { border-left-color: var(--status-detenido); }
+.live-card--sin_senal { border-left-color: var(--status-sin-senal); }
+.live-card[aria-current="true"] { outline: 2px solid var(--color-focus); outline-offset: 1px; }
+.live-card.is-stale { opacity: .75; }
+.live-card__code { font-weight: 700; grid-row: 1 / 3; align-self: center; font-size: var(--font-size-3); }
+.live-card__route { font-size: var(--font-size-2); }
+.live-card__status { font-size: var(--font-size-1); color: var(--color-muted); }
+.live-notice { padding: var(--space-4); border-radius: var(--radius-2); background: var(--color-surface); border: 1px solid var(--color-border); text-align: center; }
+.live-notice p { margin: 0; }
+.live-notice__hint { margin-top: var(--space-2) !important; font-size: var(--font-size-1); color: var(--color-muted); }
+.live-notice--error { background: var(--color-warning-bg); color: var(--color-warning); border-color: var(--color-warning); }
+.live-notice--error .live-notice__hint { color: inherit; }
+.live-marker { width: 22px; height: 22px; border-radius: 50%; background: var(--status-en-ruta); border: 3px solid var(--color-surface); box-shadow: 0 1px 4px rgba(0,0,0,.45); }
+.live-marker--detenido { background: var(--status-detenido); }
+.live-marker--sin_senal { background: var(--status-sin-senal); opacity: .7; }
+@media (min-width: 900px) {
+  .live-shell { height: 100vh; }
+  .live-body { flex-direction: row; }
+  .live-map { flex: 1; height: auto; }
+  .live-panel { width: 340px; overflow-y: auto; border-left: 1px solid var(--color-border); }
+}
