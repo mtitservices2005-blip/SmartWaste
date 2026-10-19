@@ -71,6 +71,14 @@ const payload = (extra = {}) => ({
   h.stop();
   assert.equal(win.timeouts.size, 0); assert.equal(win.intervals.size, 0);
 }
+{ // sin slug pero con municipio del despliegue (SW-100)
+  const root = makeRoot(); const win = makeWin(); let calls = 0;
+  const h = mountLiveMap({ root, win, municipalityId: 'uuid-1', loadLeaflet: async () => chain(), fetchFleet: async () => { calls++; return payload(); } });
+  await flush();
+  assert.equal(calls, 1);
+  assert.match(root.els['#livePanel'].innerHTML, /data-live-vehicle="SW-LS-01"/);
+  h.stop();
+}
 { // sin camiones
   const root = makeRoot(); const win = makeWin();
   const h = mountLiveMap({ root, win, slug: 'laguna', loadLeaflet: async () => chain(), fetchFleet: async () => payload({ vehicles: [] }) });
