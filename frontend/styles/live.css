@@ -66,3 +66,7 @@
 .is-empty .live-map { display: none; }
 .sw-citizen__stage.is-empty { height: auto; min-height: 0; }
 .is-empty .live-panel { flex: 1; width: auto; border-left: 0; }
+
+/* SW-103: live.css se carga después de styles.css; un display propio no puede ganarle a .hidden / [hidden]. */
+.sw-citizen.hidden { display: none; }
+.sw-citizen__live[hidden], #liveCalendarWrap[hidden], .sw-citizen__info[hidden] { display: none; }
