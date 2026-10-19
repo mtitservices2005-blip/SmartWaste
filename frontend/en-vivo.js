@@ -12,8 +12,8 @@ function agoText(seconds) {
   return `hace ${Math.floor(seconds / 60)} min`;
 }
 
-export function mountLiveMap({ root, win = globalThis, fetchFleet, loadLeaflet, slug } = {}) {
-  if (!slug) {
+export function mountLiveMap({ root, win = globalThis, fetchFleet, loadLeaflet, slug, municipalityId } = {}) {
+  if (!slug && !municipalityId) {
     root.innerHTML = `<div class="live-shell">${renderLiveNoMunicipality()}</div>`;
     return { stop() {} };
   }
@@ -160,16 +160,20 @@ async function loadLeafletFromCdn() {
 if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   const root = document.getElementById('liveRoot');
   if (root) {
-    const slug = new URLSearchParams(window.location.search).get('m') ?? '';
+    const params = new URLSearchParams(window.location.search);
+    const slug = params.get('m') ?? '';
     const cfg = window.SMARTWASTE_SUPABASE_CONFIG;
+    // Sin ?m= se usa el municipio del despliegue (SW-100): así /en-vivo y el Portal ciudadano funcionan sin slug.
+    const municipalityId = slug ? '' : (cfg?.municipality_id ?? '');
+    if (params.get('embed') === '1') root.classList.add('live-embed-mode');
     let clientPromise = null;
     const getClient = () => clientPromise ??= import('./vendor/supabase-js.mjs').then(({ createClient }) => createClient(cfg.url, cfg.anonKey, { auth: { persistSession: false, autoRefreshToken: false } }));
     mountLiveMap({
-      root, win: window, slug,
+      root, win: window, slug, municipalityId,
       loadLeaflet: loadLeafletFromCdn,
       fetchFleet: async () => {
         if (!cfg?.url || !cfg?.anonKey) throw new Error('Sin configuración de Supabase');
-        const { data, error } = await (await getClient()).rpc('public_live_fleet', { p_municipality_slug: slug });
+        const { data, error } = await (await getClient()).rpc('public_live_fleet', slug ? { p_municipality_slug: slug } : { p_municipality_id: municipalityId });
         if (error) throw error;
         return data;
       }

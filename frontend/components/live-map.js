@@ -50,3 +50,11 @@ export function renderLiveIconPicker({ selected } = {}) {
   const opts = LIVE_ICONS.map((i) => `<button type="button" class="live-icon-option" data-live-icon="${i.id}" aria-pressed="${i.id === current}" title="${esc(i.label)}" aria-label="${esc(i.label)}">${renderLiveIconSvg(i.id)}</button>`).join('');
   return `<div class="live-icons" role="group" aria-label="Ícono de los camiones"><div class="live-icons__row">${opts}</div></div>`;
 }
+
+// SW-100: el Portal ciudadano abre con el mapa en vivo (iframe a /en-vivo; toma el municipio de la config del despliegue).
+export function renderCitizenLiveMap({ enabled } = {}) {
+  if (!enabled) {
+    return '<div class="live-embed live-embed--demo"><h3>Camiones en vivo</h3><p class="demo">Disponible cuando el ayuntamiento esté conectado (modo demo: sin mapa real).</p></div>';
+  }
+  return '<div class="live-embed"><h3>Camiones en vivo</h3><iframe class="live-embed__frame" src="./en-vivo.html?embed=1" title="Mapa en vivo de los camiones de recogida" loading="lazy" referrerpolicy="no-referrer"></iframe></div>';
+}
