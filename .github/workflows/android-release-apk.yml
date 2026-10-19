@@ -11,6 +11,10 @@ on:
         description: 'Versión visible, por ejemplo 1.0.0'
         required: false
         default: '1.0.0'
+      version_code:
+        description: 'Código de versión (opcional; vacío = fecha UTC AAAAMMDD + 2 dígitos, siempre ascendente)'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -25,10 +29,21 @@ jobs:
       SUPABASE_HIDE_DEMO: 'true'
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-      ANDROID_VERSION_CODE: ${{ github.run_number }}
       ANDROID_VERSION_NAME: ${{ inputs.version_name }}
 
     steps:
+      - name: Compute Android version code
+        env:
+          INPUT_CODE: ${{ inputs.version_code }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_CODE}" ]; then CODE="${INPUT_CODE}"; else CODE="$(( $(date -u +%Y%m%d) * 100 + RUN_NUMBER % 100 ))"; fi
+          case "$CODE" in ''|*[!0-9]*) echo "::error::version_code debe ser numérico"; exit 1;; esac
+          if [ "$CODE" -gt 2100000000 ]; then echo "::error::version_code supera 2100000000 (límite de Android)"; exit 1; fi
+          echo "ANDROID_VERSION_CODE=$CODE" >> "$GITHUB_ENV"
+          echo "versionCode = $CODE"
+
       - name: Check required secrets
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
