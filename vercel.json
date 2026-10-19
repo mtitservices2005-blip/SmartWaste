@@ -1,4 +1,10 @@
 {
   "buildCommand": "node scripts/build-frontend-config.mjs",
-  "outputDirectory": "dist"
+  "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/en-vivo",
+      "destination": "/en-vivo.html"
+    }
+  ]
 }
