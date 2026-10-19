@@ -37,12 +37,6 @@
 }
 .live-map__canvas { position: absolute; inset: 0; }
 .live-marker-wrap { background: none; border: 0; }
-.live-embed { margin: var(--space-3) 0 var(--space-4); }
-.live-embed h3 { margin: 0 0 var(--space-2); }
-.live-embed__frame { display: block; width: 100%; height: 520px; border: 1px solid var(--color-border); border-radius: var(--radius-2); background: var(--color-background-alt); }
-.live-embed--demo { padding: var(--space-4); border: 1px dashed var(--color-border); border-radius: var(--radius-2); }
-.live-embed-mode .live-header { display: none; }
-.live-embed-mode .live-shell { height: 100vh; min-height: 0; }
 
 /* SW-101: Ciudadanía a pantalla completa (mapa + panel + calendario + consultas). */
 .sw-citizen { display: flex; flex-direction: column; gap: var(--space-4); }
@@ -67,3 +61,5 @@
   .sw-citizen__stage .live-map { flex: 1; height: auto; }
   .sw-citizen__stage .live-panel { width: 340px; border-top: 0; border-left: 1px solid var(--color-border); overflow-y: auto; }
 }
+.sw-citizen__live { display: flex; flex-direction: column; gap: var(--space-4); }
+.sw-citizen__stage .live-map { position: relative; }
