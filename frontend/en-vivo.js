@@ -1,7 +1,8 @@
 // SW-097: página pública /en-vivo?m=<slug>. Solo lectura: consulta la RPC public_live_fleet cada 15 s.
 import { normalizeLiveFleet, describeVehicleStatus } from '../shared/live-fleet.js';
 import { pollLiveFleet } from '../shared/live-fleet-poll.js';
-import { renderLiveHeader, renderLiveVehicleList, renderLiveEmpty, renderLiveError, renderLiveNoMunicipality, renderLiveMarker, renderLiveIconPicker, LIVE_ICONS } from './components/live-map.js';
+import { normalizeRouteSchedule, buildWeekCalendar, describeNextDeparture } from '../shared/route-calendar.js';
+import { renderLiveHeader, renderCitizenHead, renderRouteCalendar, renderNextDeparture, renderLiveVehicleList, renderLiveEmpty, renderLiveError, renderLiveNoMunicipality, renderLiveMarker, renderLiveIconPicker, LIVE_ICONS } from './components/live-map.js';
 
 const ICON_KEY = 'smartwaste-live-icon';
 const FOCUS_ZOOM = 16;
@@ -12,15 +13,22 @@ function agoText(seconds) {
   return `hace ${Math.floor(seconds / 60)} min`;
 }
 
-export function mountLiveMap({ root, win = globalThis, fetchFleet, loadLeaflet, slug, municipalityId } = {}) {
+// variant 'page': página pública /en-vivo. variant 'section': dentro de Ciudadanía (sin cabecera oscura, con calendario).
+export function mountLiveMap({ root, win = globalThis, fetchFleet, fetchSchedule, loadLeaflet, slug, municipalityId, variant = 'page' } = {}) {
+  const section = variant === 'section';
   if (!slug && !municipalityId) {
     root.innerHTML = `<div class="live-shell">${renderLiveNoMunicipality()}</div>`;
     return { stop() {} };
   }
-  root.innerHTML = '<div class="live-shell"><div id="liveHeader"></div><div class="live-body"><div class="live-map"><div id="liveMapCanvas" class="live-map__canvas"></div></div><div id="livePanel" class="live-panel"></div></div></div>';
+  root.innerHTML = section
+    ? '<div class="sw-citizen__live"><div id="liveHeader"></div><div class="sw-citizen__stage"><div class="live-map"><div id="liveMapCanvas" class="live-map__canvas"></div></div><div id="livePanel" class="live-panel"></div></div><div id="liveCalendarWrap" hidden><h3>Calendario de rutas</h3><div id="liveCalendar"></div></div></div>'
+    : '<div class="live-shell"><div id="liveHeader"></div><div class="live-body"><div class="live-map"><div id="liveMapCanvas" class="live-map__canvas"></div></div><div id="livePanel" class="live-panel"></div></div></div>';
   const $header = root.querySelector('#liveHeader');
   const $panel = root.querySelector('#livePanel');
   const $canvas = root.querySelector('#liveMapCanvas');
+  const $calWrap = root.querySelector('#liveCalendarWrap');
+  const $cal = root.querySelector('#liveCalendar');
+  let schedule = null;
 
   let icon = 'compactador';
   try { const s = win.localStorage?.getItem(ICON_KEY); if (LIVE_ICONS.some((i) => i.id === s)) icon = s; } catch { /* sin almacenamiento */ }
@@ -39,7 +47,20 @@ export function mountLiveMap({ root, win = globalThis, fetchFleet, loadLeaflet, 
 
   function renderHeader() {
     const ago = lastOkMs == null ? '' : agoText(Math.max(0, Math.round((now() - lastOkMs) / 1000)));
-    $header.innerHTML = renderLiveHeader({ municipalityName: fleet?.municipality?.name ?? '', updatedAgoText: ago });
+    const head = { municipalityName: fleet?.municipality?.name ?? '', updatedAgoText: ago };
+    $header.innerHTML = section ? renderCitizenHead(head) : renderLiveHeader(head);
+  }
+
+  function renderCalendar() {
+    if (!section || !schedule || !schedule.length || !$cal) return;
+    $cal.innerHTML = renderRouteCalendar({ days: buildWeekCalendar(schedule, now()) });
+    if ($calWrap) $calWrap.hidden = false;
+  }
+
+  async function loadSchedule() {
+    if (!fetchSchedule || schedule) return;
+    try { schedule = normalizeRouteSchedule(await fetchSchedule()); } catch { schedule = null; return; }
+    if (!stopped) { renderPanel(); renderCalendar(); }
   }
 
   function renderPanel() {
@@ -47,7 +68,7 @@ export function mountLiveMap({ root, win = globalThis, fetchFleet, loadLeaflet, 
     const vehicles = (fleet?.vehicles ?? []).map((v) => ({ ...v, statusText: describeVehicleStatus(v, t) }));
     let body = '';
     if (hasError) body += renderLiveError({ hasData: vehicles.length > 0 });
-    if (fleet && !vehicles.length) body += renderLiveEmpty();
+    if (fleet && !vehicles.length) body += renderNextDeparture(schedule?.length ? describeNextDeparture(schedule, t) : '') + renderLiveEmpty();
     else if (vehicles.length) body += renderLiveVehicleList({ vehicles, selectedCode: selected });
     $panel.innerHTML = renderLiveIconPicker({ selected: icon }) + body;
   }
@@ -107,7 +128,9 @@ export function mountLiveMap({ root, win = globalThis, fetchFleet, loadLeaflet, 
   root.addEventListener('click', onClick);
 
   renderHeader(); renderPanel();
-  const tick = win.setInterval(renderHeader, 1000);
+  let ticks = 0;
+  const tick = win.setInterval(() => { renderHeader(); ticks += 1; if (ticks % 60 === 0) { renderCalendar(); } }, 1000);
+  loadSchedule();
 
   let leafletStarted = false;
   function ensureMap() {
@@ -132,7 +155,8 @@ export function mountLiveMap({ root, win = globalThis, fetchFleet, loadLeaflet, 
       hasError = false; lastOkMs = now();
       if (!fleet.municipality) { root.innerHTML = `<div class="live-shell">${renderLiveNoMunicipality()}</div>`; return; }
       if (selected === null && fleet.vehicles.length === 1) selected = fleet.vehicles[0].code;
-      renderHeader(); renderPanel(); ensureMap(); drawMap();
+      renderHeader(); renderPanel(); renderCalendar(); ensureMap(); drawMap();
+      loadSchedule();
     },
     onError: () => { hasError = true; renderPanel(); }
   });
@@ -145,6 +169,23 @@ export function mountLiveMap({ root, win = globalThis, fetchFleet, loadLeaflet, 
       root.removeEventListener?.('click', onClick);
       try { map?.remove(); } catch { /* ya liberado */ }
     }
+  };
+}
+
+// RPCs públicas (solo lectura) con un cliente anónimo sin sesión persistente. Sin slug usa el municipio del despliegue.
+export function createLiveFetchers({ cfg, slug = '', municipalityId = '' } = {}) {
+  let clientPromise = null;
+  const getClient = () => clientPromise ??= import('./vendor/supabase-js.mjs').then(({ createClient }) => createClient(cfg.url, cfg.anonKey, { auth: { persistSession: false, autoRefreshToken: false } }));
+  const args = slug ? { p_municipality_slug: slug } : { p_municipality_id: municipalityId };
+  const call = async (fn) => {
+    if (!cfg?.url || !cfg?.anonKey) throw new Error('Sin configuración de Supabase');
+    const { data, error } = await (await getClient()).rpc(fn, args);
+    if (error) throw error;
+    return data;
+  };
+  return {
+    fetchFleet: () => call('public_live_fleet'),
+    fetchSchedule: async () => (await call('public_route_schedule'))?.routes ?? []
   };
 }
 
@@ -165,18 +206,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     const cfg = window.SMARTWASTE_SUPABASE_CONFIG;
     // Sin ?m= se usa el municipio del despliegue (SW-100): así /en-vivo y el Portal ciudadano funcionan sin slug.
     const municipalityId = slug ? '' : (cfg?.municipality_id ?? '');
-    if (params.get('embed') === '1') root.classList.add('live-embed-mode');
-    let clientPromise = null;
-    const getClient = () => clientPromise ??= import('./vendor/supabase-js.mjs').then(({ createClient }) => createClient(cfg.url, cfg.anonKey, { auth: { persistSession: false, autoRefreshToken: false } }));
-    mountLiveMap({
-      root, win: window, slug, municipalityId,
-      loadLeaflet: loadLeafletFromCdn,
-      fetchFleet: async () => {
-        if (!cfg?.url || !cfg?.anonKey) throw new Error('Sin configuración de Supabase');
-        const { data, error } = await (await getClient()).rpc('public_live_fleet', slug ? { p_municipality_slug: slug } : { p_municipality_id: municipalityId });
-        if (error) throw error;
-        return data;
-      }
-    });
+    const { fetchFleet, fetchSchedule } = createLiveFetchers({ cfg, slug, municipalityId });
+    mountLiveMap({ root, win: window, slug, municipalityId, loadLeaflet: loadLeafletFromCdn, fetchFleet, fetchSchedule, variant: 'page' });
   }
 }

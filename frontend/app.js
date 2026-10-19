@@ -2,7 +2,8 @@ import { demoNotice as rawDemoNotice, simulationNotice as rawSimulationNotice, p
 import { operationsAdapter, resolveOperationsAdapter } from '../shared/operations-adapter.js';
 import { DeviceSimulator, createDemoPositionHistory, createTelemetryIngestionAdapter } from '../shared/telemetry-simulator.js';
 import { validateEvidenceFile } from '../shared/channel-contracts.js';
-import { renderCitizenLiveMap } from './components/live-map.js';
+import { renderCitizenLiveDemo } from './components/live-map.js';
+import { mountLiveMap, createLiveFetchers } from './en-vivo.js';
 import { createDemoFolio, findSectorService, findIncidentStatus, submitCitizenReport, fetchRealSectors } from '../shared/citizen-portal.js';
 import { generateRouteStopPoints, deriveStopStatus, haversineMeters, splitIntoTrips } from '../shared/route-engine.js';
 import { fetchRoadRoute } from '../shared/osrm-routing.js';
@@ -687,7 +688,8 @@ function renderFlotaPanel() {
 }
 function renderIncidenciasPanel() {
   return `<h2>Incidencias</h2><p class="demo">${demoNotice}</p>
-    <div class="list">${incidents.map((incident) => `<button class="row selectable${incident.code === selectedIncidentId ? ' selected' : ''}" data-incident="${incident.code}"><span>${incident.type}<br>${incident.sector}</span>${pill('open')}</button>`).join('')}</div>`;
+    <div class="list">${incidents.map((incident) => `<button class="row selectable${incident.code === selectedIncidentId ? ' selected' : ''}" data-incident="${incident.code}"><span>${incident.type}<br>${incident.sector}</span>${pill('open')}</button>`).join('')}</div>
+    ${renderCitizenReportBlock()}`;
 }
 // SW-090: Métricas (reemplaza Estadísticas). Usa corridas completadas, litros del conductor y el rendimiento
 // que digita el ayuntamiento. Sin rendimiento ni litros: "Sin datos" (nunca una cifra genérica).
@@ -1556,7 +1558,21 @@ function renderSupervisor() {
     ${renderCitizenReportsBlock()}
   </div></section>`;
 }
-function renderCitizen() { return `<section id="ciudadania" class="section card"><h2>Portal ciudadano</h2><p class="demo">${demoNotice}</p>${renderCitizenLiveMap({ enabled: Boolean(readSupabaseConfig()?.municipality_id) })}<div class="panel-grid"><div><h3>Consulta de recogida</h3><select id="citizenSector">${sectors.map((s) => `<option value="${s.id}">${s.name}</option>`).join('')}</select><p id="pickupResult"></p><h3>Avisos municipales</h3>${notifications.map((n) => `<div class="row">🔔 ${n}</div>`).join('')}</div><form id="incidentForm"><h3>Reportar incidencia</h3><select name="type"><option>Basura no recogida</option><option>Vertedero improvisado</option></select><select name="sector" id="incidentSector">${sectors.map((s) => `<option value="${s.id}">${s.name}</option>`).join('')}</select><textarea name="description" aria-label="Descripción demo" placeholder="Descripción demo"></textarea><input id="manualAddress" name="address" aria-label="Dirección manual si no usa GPS" placeholder="Dirección manual si no usa GPS"><button type="button" id="useGeo">Usar ubicación GPS del navegador</button><p id="geoStatus" class="demo">GPS requiere permiso del usuario.</p><input id="evidence" type="file" accept="image/png,image/jpeg,image/webp,application/pdf" aria-label="Adjuntar evidencia demo"><p id="evidencePreview" class="demo">Evidencia local; no upload real verificado.</p><button class="btn-primary">Obtener folio</button><p id="folio"></p></form><div><h3>Consultar estado</h3><input id="folioSearch" value="SW-FOLIO-1001"><button id="checkFolio">Consultar</button><p id="folioStatus"></p><h3>Futura relación</h3><p>Preparado para Chatbot Municipal: preguntas frecuentes, folios y avisos por sector.</p></div></div></section>`; }
+// SW-101: Ciudadanía es la vista a pantalla completa del mapa en vivo + calendario de rutas (los monta
+// syncCitizenLive() al entrar). Reportar incidencia y consultar estado viven ahora en Incidencias.
+function citizenLiveConfig() {
+  const cfg = readSupabaseConfig();
+  return cfg?.url && cfg?.anonKey && cfg?.municipality_id ? cfg : null;
+}
+function renderCitizen() { return `<section id="ciudadania" class="section card sw-citizen"><div id="citizenLiveRoot">${citizenLiveConfig() ? '' : renderCitizenLiveDemo()}</div><div class="sw-citizen__info"><div><h3>Consulta de recogida</h3><select id="citizenSector">${sectors.map((s) => `<option value="${s.id}">${s.name}</option>`).join('')}</select><p id="pickupResult"></p></div><div><h3>Avisos municipales</h3>${notifications.map((n) => `<div class="row">🔔 ${n}</div>`).join('')}</div></div><p class="demo">${demoNotice}</p></section>`; }
+// SW-101: formulario de reporte ciudadano y consulta de folio, ahora dentro de Incidencias. Las opciones de sector salen de
+// los sectores reales cuando ya cargaron (el panel se vuelve a pintar tras el login real).
+function incidentSectorOptions() {
+  return (realSectors.length ? realSectors : sectors).map((s) => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
+}
+function renderCitizenReportBlock() {
+  return `<div class="sw-incident-intake"><form id="incidentForm"><h3>Reportar incidencia</h3><select name="type"><option>Basura no recogida</option><option>Vertedero improvisado</option></select><select name="sector" id="incidentSector">${incidentSectorOptions()}</select><textarea name="description" aria-label="Descripción demo" placeholder="Descripción demo"></textarea><input id="manualAddress" name="address" aria-label="Dirección manual si no usa GPS" placeholder="Dirección manual si no usa GPS"><button type="button" id="useGeo">Usar ubicación GPS del navegador</button><p id="geoStatus" class="demo">GPS requiere permiso del usuario.</p><input id="evidence" type="file" accept="image/png,image/jpeg,image/webp,application/pdf" aria-label="Adjuntar evidencia demo"><p id="evidencePreview" class="demo">Evidencia local; no upload real verificado.</p><button class="btn-primary">Obtener folio</button><p id="folio"></p></form><div><h3>Consultar estado</h3><input id="folioSearch" value="SW-FOLIO-1001"><button id="checkFolio">Consultar</button><p id="folioStatus"></p><h3>Futura relación</h3><p>Preparado para Chatbot Municipal: preguntas frecuentes, folios y avisos por sector.</p></div></div>`;
+}
 
 const money = (value) => `RD$ ${Number(value).toLocaleString('es-DO', { maximumFractionDigits: 0 })}`;
 const num = (value, suffix = '') => `${Number(value).toLocaleString('es-DO', { maximumFractionDigits: 1 })}${suffix}`;
@@ -2443,10 +2459,21 @@ function showOpsView(view) {
   if (view === 'rutas') requestAnimationFrame(() => { if (createRouteMapReady) createRouteMap.invalidateSize(); drawRutasMiniMap(); });
   if (view === 'estadisticas') refreshEfficiencyDashboard();
 }
+let citizenLive = null;
+// SW-101: el mapa en vivo solo corre mientras Ciudadanía está visible (sondeo cada 15 s y Leaflet con tamaño correcto).
+function syncCitizenLive(id) {
+  const root = document.getElementById('citizenLiveRoot');
+  if (id !== 'ciudadania' || !root) { citizenLive?.stop(); citizenLive = null; return; }
+  if (citizenLive) return;
+  const cfg = citizenLiveConfig();
+  if (!cfg) return;
+  citizenLive = mountLiveMap({ root, win: window, variant: 'section', municipalityId: cfg.municipality_id, loadLeaflet, ...createLiveFetchers({ cfg, municipalityId: cfg.municipality_id }) });
+}
 function showSection(id) {
   Array.from(app.children).forEach((section) => section.classList.toggle('hidden', section.id !== id));
   document.querySelectorAll('.topbar nav a').forEach((link) => link.classList.toggle('active', link.getAttribute('href') === `#${id}`));
   if (id === 'operaciones') showOpsView(currentOpsView());
+  syncCitizenLive(id);
   // Codex review (PR #75, P2): re-fetches real citizen reports every time Supervisor is entered
   // (same "refetch on view entry" precedent as showOpsView()'s 'estadisticas' branch above) —
   // otherwise a report submitted after login bootstrap never appeared without a full page reload.
@@ -2869,7 +2896,9 @@ $('#citizenSector').dispatchEvent(new Event('change'));
 // backendMode/timing, so a selected value that's still one of the demo options (hydration never
 // ran, failed, or came back empty) can never reach the FK as a bogus id; citizen_reports.sector_id
 // stays nullable specifically for that fallback case.
-$('#incidentForm').addEventListener('submit', async (event) => {
+// SW-101: delegado en document porque el formulario vive en Incidencias, cuyo panel se vuelve a pintar tras el login real.
+document.addEventListener('submit', async (event) => {
+  if (!event.target.matches?.('#incidentForm')) return;
   event.preventDefault();
   const config = readSupabaseConfig();
   const client = getAuthClient();
@@ -2906,7 +2935,8 @@ document.addEventListener('input', (event) => {
 });
 // SW-039: the upload itself only happens on submit (submitCitizenReport, above) — this handler
 // only validates + previews, so the note here just needs to say what will happen next.
-$('#evidence').addEventListener('change', (event) => {
+document.addEventListener('change', (event) => {
+  if (event.target.id !== 'evidence') return;
   const file = event.target.files?.[0];
   const result = validateEvidenceFile(file);
   const uploadNote = (getAuthClient() && readSupabaseConfig()?.municipality_id) ? 'se sube al enviar el formulario' : 'sin upload real (modo demo)';

@@ -37,9 +37,29 @@
 }
 .live-map__canvas { position: absolute; inset: 0; }
 .live-marker-wrap { background: none; border: 0; }
-.live-embed { margin: var(--space-3) 0 var(--space-4); }
-.live-embed h3 { margin: 0 0 var(--space-2); }
-.live-embed__frame { display: block; width: 100%; height: 520px; border: 1px solid var(--color-border); border-radius: var(--radius-2); background: var(--color-background-alt); }
-.live-embed--demo { padding: var(--space-4); border: 1px dashed var(--color-border); border-radius: var(--radius-2); }
-.live-embed-mode .live-header { display: none; }
-.live-embed-mode .live-shell { height: 100vh; min-height: 0; }
+
+/* SW-101: Ciudadanía a pantalla completa (mapa + panel + calendario + consultas). */
+.sw-citizen { display: flex; flex-direction: column; gap: var(--space-4); }
+.sw-citizen__head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
+.sw-citizen__head h2 { margin: 0; }
+.sw-citizen__stage { display: flex; flex-direction: column; border: 1px solid var(--color-border); border-radius: var(--radius-2); overflow: hidden; background: var(--color-surface); }
+.sw-citizen__stage .live-map { height: 52vh; min-height: 300px; }
+.sw-citizen__stage .live-panel { border-top: 1px solid var(--color-border); }
+.sw-citizen__info { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--space-4); }
+.live-next { margin: 0; padding: var(--space-3); border-radius: var(--radius-1); background: var(--color-info-bg); color: var(--color-info); font-weight: 600; }
+.live-cal__grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: var(--space-2); }
+.live-cal__day { padding: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-1); background: var(--color-surface); }
+.live-cal__day.is-today { border-color: var(--color-primary); outline: 1px solid var(--color-primary); }
+.live-cal__label { margin: 0 0 var(--space-2); font-size: var(--font-size-1); text-transform: uppercase; letter-spacing: .04em; color: var(--color-muted); }
+.live-cal__routes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.live-cal__route { display: flex; flex-direction: column; font-size: var(--font-size-1); }
+.live-cal__name { font-weight: 600; }
+.live-cal__time { color: var(--color-muted); }
+.live-cal__empty { font-size: var(--font-size-1); color: var(--color-muted); }
+@media (min-width: 900px) {
+  .sw-citizen__stage { flex-direction: row; height: 62vh; min-height: 440px; }
+  .sw-citizen__stage .live-map { flex: 1; height: auto; }
+  .sw-citizen__stage .live-panel { width: 340px; border-top: 0; border-left: 1px solid var(--color-border); overflow-y: auto; }
+}
+.sw-citizen__live { display: flex; flex-direction: column; gap: var(--space-4); }
+.sw-citizen__stage .live-map { position: relative; }

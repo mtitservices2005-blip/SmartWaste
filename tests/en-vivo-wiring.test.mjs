@@ -79,6 +79,28 @@ const payload = (extra = {}) => ({
   assert.match(root.els['#livePanel'].innerHTML, /data-live-vehicle="SW-LS-01"/);
   h.stop();
 }
+{ // variante Ciudadanía con calendario y próxima salida (SW-101)
+  const root = makeRoot(); const win = makeWin();
+  const h = mountLiveMap({ root, win, municipalityId: 'uuid-1', variant: 'section', loadLeaflet: async () => chain(),
+    fetchFleet: async () => payload({ vehicles: [] }),
+    fetchSchedule: async () => [{ name: 'Ruta Centro', days_of_week: [1, 4], start_time: '08:00:00' }] });
+  await flush();
+  assert.match(root.els['#liveHeader'].innerHTML, /<h2>Camiones en vivo · Laguna Salada<\/h2>/);
+  assert.match(root.els['#liveCalendar'].innerHTML, /aria-label="Calendario de rutas"/);
+  assert.match(root.els['#livePanel'].innerHTML, /Próxima salida: Ruta Centro/);
+  assert.match(root.els['#livePanel'].innerHTML, /Hoy aún no hay camiones en ruta/);
+  assert.equal(root.els['#liveCalendarWrap'].hidden, false);
+  h.stop();
+}
+{ // el calendario falla: el mapa y la lista siguen
+  const root = makeRoot(); const win = makeWin();
+  const h = mountLiveMap({ root, win, municipalityId: 'uuid-1', variant: 'section', loadLeaflet: async () => chain(),
+    fetchFleet: async () => payload(), fetchSchedule: async () => { throw new Error('x'); } });
+  await flush();
+  assert.match(root.els['#livePanel'].innerHTML, /data-live-vehicle="SW-LS-01"/);
+  assert.equal(root.els['#liveCalendar'].innerHTML, '');
+  h.stop();
+}
 { // sin camiones
   const root = makeRoot(); const win = makeWin();
   const h = mountLiveMap({ root, win, slug: 'laguna', loadLeaflet: async () => chain(), fetchFleet: async () => payload({ vehicles: [] }) });
