@@ -295,7 +295,7 @@ assert.equal(getAlreadyCompletedPatch().completed_at, undefined, 'must not overw
 // SW-045: on completion, with a vehicle_id and started_at present, transitionRouteRun() also sums
 // the real vehicle_positions trail since started_at into distance_meters. Fake client routes by
 // table name — route_runs uses the same chain as above, vehicle_positions gets its own
-// select().eq().neq().order() chain.
+// select().eq().neq().order().order().range() chain (SW-099: por páginas).
 function makeRouteRunWithPositionsFakeClient(currentRun, positions) {
   let updatePatch = null;
   let positionsQueryArgs = null;
@@ -312,7 +312,7 @@ function makeRouteRunWithPositionsFakeClient(currentRun, positions) {
       }
       if (table === 'vehicle_positions') {
         return {
-          select: () => ({ eq: (...eqArgs) => { positionsQueryArgs = eqArgs; return { neq: () => ({ order: async () => ({ data: positions, error: null }) }) }; } })
+          select: () => ({ eq: (...eqArgs) => { positionsQueryArgs = eqArgs; return { neq: () => ({ order: () => ({ order: () => ({ range: async (a, z) => ({ data: positions.slice(a, z + 1), error: null }) }) }) }) }; } })
         };
       }
       throw new Error(`unexpected table ${table}`);
