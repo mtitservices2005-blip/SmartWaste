@@ -63,3 +63,6 @@
 }
 .sw-citizen__live { display: flex; flex-direction: column; gap: var(--space-4); }
 .sw-citizen__stage .live-map { position: relative; }
+.is-empty .live-map { display: none; }
+.sw-citizen__stage.is-empty { height: auto; min-height: 0; }
+.is-empty .live-panel { flex: 1; width: auto; border-left: 0; }

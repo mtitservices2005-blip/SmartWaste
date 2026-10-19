@@ -71,6 +71,8 @@ export function mountLiveMap({ root, win = globalThis, fetchFleet, fetchSchedule
     if (fleet && !vehicles.length) body += renderNextDeparture(schedule?.length ? describeNextDeparture(schedule, t) : '') + renderLiveEmpty();
     else if (vehicles.length) body += renderLiveVehicleList({ vehicles, selectedCode: selected });
     $panel.innerHTML = renderLiveIconPicker({ selected: icon }) + body;
+    // Sin camiones no hay nada que dibujar: se oculta el cuadro del mapa y el panel ocupa todo el ancho.
+    $panel.parentElement?.classList?.toggle('is-empty', !vehicles.length);
   }
 
   function drawMap() {
