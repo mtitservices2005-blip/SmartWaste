@@ -5,6 +5,10 @@
     {
       "source": "/en-vivo",
       "destination": "/en-vivo.html"
+    },
+    {
+      "source": "/privacidad",
+      "destination": "/privacidad.html"
     }
   ]
 }
