@@ -81,7 +81,7 @@ jobs:
           packages: 'platform-tools'
 
       - name: Install Android SDK packages
-        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
 
       - name: Install locked mobile dependencies
         working-directory: mobile
@@ -118,13 +118,13 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           chmod +x ./gradlew
-          ./gradlew --no-daemon assembleRelease
+          ./gradlew --no-daemon assembleRelease bundleRelease
 
       - name: Verify APK signature
         run: |
           set -euo pipefail
           APK=mobile/android/app/build/outputs/apk/release/app-release.apk
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$APK"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$APK"
 
       - name: Scan final APK for service_role
         run: |
@@ -135,13 +135,28 @@ jobs:
           node scripts/scan-apk-keys.mjs "$RUNNER_TEMP/apk-scan"
           echo "APK limpio: sin claves service_role."
 
-      - name: Stage APK with a clear download name
-        run: cp mobile/android/app/build/outputs/apk/release/app-release.apk SmartWaste-Driver-release.apk
+      - name: Verify AAB signature and scan it for service_role
+        run: |
+          set -euo pipefail
+          AAB=mobile/android/app/build/outputs/bundle/release/app-release.aab
+          test -f "$AAB"
+          jarsigner -verify "$AAB" | grep -q "jar verified"
+          rm -rf "$RUNNER_TEMP/aab-scan" && mkdir -p "$RUNNER_TEMP/aab-scan"
+          unzip -q "$AAB" -d "$RUNNER_TEMP/aab-scan"
+          node scripts/scan-apk-keys.mjs "$RUNNER_TEMP/aab-scan"
+          echo "AAB limpio y firmado."
+
+      - name: Stage APK and AAB with clear download names
+        run: |
+          cp mobile/android/app/build/outputs/apk/release/app-release.apk SmartWaste-Driver-release.apk
+          cp mobile/android/app/build/outputs/bundle/release/app-release.aab SmartWaste-Driver-release.aab
 
       - name: Upload SmartWaste Driver release APK
         uses: actions/upload-artifact@v4
         with:
           name: SmartWaste-Driver-release-APK
-          path: SmartWaste-Driver-release.apk
+          path: |
+            SmartWaste-Driver-release.apk
+            SmartWaste-Driver-release.aab
           if-no-files-found: error
           retention-days: 30
