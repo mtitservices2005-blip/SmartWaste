@@ -9,7 +9,7 @@ assert.ok(!('renderCitizenLiveMap' in live), 'el marco incrustado de SW-100 ya n
 assert.match(renderCitizenLiveDemo(), /modo demo/);
 assert.match(renderCitizenHead({ municipalityName: 'Laguna <Salada>', updatedAgoText: 'hace 6 s' }), /<h2>Camiones en vivo · Laguna &lt;Salada&gt;<\/h2>[\s\S]*hace 6 s/);
 
-const app = readFileSync('frontend/app.js', 'utf8');
+const app = readFileSync('frontend/app.js', 'utf8').replace(/\r\n/g, '\n');
 const citizen = app.match(/function renderCitizen\(\) \{ return `([\s\S]*?)`; \}\n/)[1];
 assert.match(citizen, /id="citizenLiveRoot"/);
 assert.match(citizen, /Consulta de recogida/);
