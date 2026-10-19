@@ -8,7 +8,7 @@ const ICONS = {
   mapa: '<path d="M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>',
   rutas: '<circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M8 19h6a4 4 0 0 0 0-8h-4a4 4 0 0 1 0-8h6"/>',
   flota: '<path d="M3 6h11v10H3zM14 9h4l3 3v4h-7"/><circle cx="7" cy="18" r="1.8"/><circle cx="17" cy="18" r="1.8"/>',
-  incidencias: '<path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/>',
+  ciudadania: '<circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="9" r="2.2"/><path d="M16 14.2c2.6.2 5 2.2 5 5.8"/>',
   estadisticas: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
   mas: '<circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/>',
   tema: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M5 19l1.5-1.5M17.5 6.5L19 5"/>'
@@ -18,13 +18,13 @@ export const OPS_ITEMS = [
   { href: '#operaciones/mapa', label: 'Mapa en vivo', icon: 'mapa' },
   { href: '#operaciones/rutas', label: 'Rutas', icon: 'rutas' },
   { href: '#operaciones/flota', label: 'Flotilla', icon: 'flota' },
-  { href: '#operaciones/incidencias', label: 'Incidencias', icon: 'incidencias' },
+  { href: '#ciudadania', label: 'Ciudadanía', icon: 'ciudadania' },
   { href: '#operaciones/estadisticas', label: 'Métricas', icon: 'estadisticas' }
 ];
 export const MORE_ITEMS = [
   { href: '#resumen', label: 'Resumen' },
   { href: '#supervisor', label: 'Supervisor' },
-  { href: '#ciudadania', label: 'Ciudadanía' },
+  { href: '#operaciones/incidencias', label: 'Incidencias' },
   { href: '#impacto', label: 'Impacto y Ahorros' },
   { href: '#configuracion', label: 'Configuración' },
   { href: '#master', label: 'Master Admin' }
@@ -35,11 +35,11 @@ export const MORE_ITEMS = [
 export function activeHref(hash = '') {
   const [id, view] = String(hash).replace(/^#/, '').split('/');
   if (id === 'operaciones') {
-    const match = OPS_ITEMS.find((i) => i.href === `#operaciones/${view}`);
+    const match = [...OPS_ITEMS, ...MORE_ITEMS].find((i) => i.href === `#operaciones/${view}`);
     return match ? match.href : '#operaciones/mapa';
   }
-  const more = MORE_ITEMS.find((i) => i.href === `#${id}`);
-  return more ? more.href : '#resumen';
+  const direct = [...OPS_ITEMS, ...MORE_ITEMS].find((i) => i.href === `#${id}`);
+  return direct ? direct.href : '#resumen';
 }
 
 export function renderRail({ hash = '', hideDemo = false } = {}) {

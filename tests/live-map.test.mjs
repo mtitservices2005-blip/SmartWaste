@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { renderLiveHeader, renderLiveVehicleList, renderLiveEmpty, renderLiveError, renderLiveNoMunicipality, renderLiveIconPicker, renderLiveMarker, LIVE_ICONS } from '../frontend/components/live-map.js';
+import { renderLiveHeader, renderLiveVehicleList, renderLiveEmpty, renderLiveError, renderLiveNoMunicipality, renderRouteCalendar, renderNextDeparture, renderLiveIconPicker, renderLiveMarker, LIVE_ICONS } from '../frontend/components/live-map.js';
 
 const v = (o = {}) => ({ code: 'C-01', routeName: 'Ruta Norte', status: 'en_ruta', statusText: 'En ruta', ...o });
 
@@ -33,4 +33,17 @@ assert.match(picker, /aria-label="Volquete"/);
 assert.equal((picker.match(/aria-pressed="true"/g) || []).length, 1);
 assert.match(renderLiveIconPicker({ selected: 'xx' }), /data-live-icon="compactador"[^>]*aria-pressed="true"/);
 assert.match(renderLiveMarker({ icon: 'camioneta', status: 'detenido' }), /live-marker--detenido[\s\S]*<svg/);
+const cal = renderRouteCalendar({ days: [
+  { label: 'Lun', isToday: true, routes: [{ name: 'Ruta <Norte>', time: '06:30' }, { name: 'Ruta Sur', time: null }] },
+  { label: 'Mar', isToday: false, routes: [] }
+] });
+assert.match(cal, /aria-label="Calendario de rutas"/);
+assert.match(cal, /live-cal__day is-today/);
+assert.equal((cal.match(/is-today/g) || []).length, 1);
+assert.ok(cal.includes('Ruta &lt;Norte&gt;'));
+assert.match(cal, /6:30 a\. m\./);
+assert.match(cal, /live-cal__empty/);
+assert.equal(renderRouteCalendar({ days: [] }), '');
+assert.match(renderNextDeparture('Próxima salida: Ruta Centro, jueves 8:00 a. m.'), /live-next[\s\S]*Próxima salida: Ruta Centro/);
+assert.equal(renderNextDeparture(''), '');
 console.log('live-map ok');

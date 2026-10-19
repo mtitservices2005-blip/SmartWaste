@@ -58,3 +58,21 @@ export function renderCitizenLiveMap({ enabled } = {}) {
   }
   return '<div class="live-embed"><h3>Camiones en vivo</h3><iframe class="live-embed__frame" src="./en-vivo.html?embed=1" title="Mapa en vivo de los camiones de recogida" loading="lazy" referrerpolicy="no-referrer"></iframe></div>';
 }
+
+const timeLabel = (t) => { const h = Number(t.slice(0, 2)); return `${h % 12 || 12}:${t.slice(3)} ${h < 12 ? 'a. m.' : 'p. m.'}`; };
+
+// SW-101: calendario semanal de rutas (los días ya vienen calculados por shared/route-calendar.js).
+export function renderRouteCalendar({ days = [] } = {}) {
+  if (!days.length) return '';
+  const cols = days.map((d) => {
+    const items = d.routes.length
+      ? d.routes.map((r) => `<li class="live-cal__route"><span class="live-cal__name">${esc(r.name)}</span>${r.time ? `<span class="live-cal__time">${esc(timeLabel(r.time))}</span>` : ''}</li>`).join('')
+      : '<li class="live-cal__empty">Sin recogida</li>';
+    return `<li class="live-cal__day${d.isToday ? ' is-today' : ''}"><h4 class="live-cal__label">${esc(d.label)}${d.isToday ? ' · hoy' : ''}</h4><ul class="live-cal__routes">${items}</ul></li>`;
+  }).join('');
+  return `<section class="live-cal" aria-label="Calendario de rutas"><ol class="live-cal__grid">${cols}</ol></section>`;
+}
+
+export function renderNextDeparture(text) {
+  return text ? `<p class="live-next">${esc(text)}</p>` : '';
+}

@@ -4,9 +4,12 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { OPS_ITEMS, MORE_ITEMS, renderRail, activeHref } from '../frontend/components/rail.js';
 
-assert.deepEqual(OPS_ITEMS.map((i) => i.href), ['#operaciones/mapa', '#operaciones/rutas', '#operaciones/flota', '#operaciones/incidencias', '#operaciones/estadisticas']);
-assert.deepEqual(OPS_ITEMS.map((i) => i.label), ['Mapa en vivo', 'Rutas', 'Flotilla', 'Incidencias', 'Métricas']);
-assert.deepEqual(MORE_ITEMS.map((i) => i.href), ['#resumen', '#supervisor', '#ciudadania', '#impacto', '#configuracion', '#master']);
+// SW-101: Ciudadanía sube a la barra principal (donde estaba Incidencias) e Incidencias baja al menú «⋯».
+assert.deepEqual(OPS_ITEMS.map((i) => i.href), ['#operaciones/mapa', '#operaciones/rutas', '#operaciones/flota', '#ciudadania', '#operaciones/estadisticas']);
+assert.deepEqual(OPS_ITEMS.map((i) => i.label), ['Mapa en vivo', 'Rutas', 'Flotilla', 'Ciudadanía', 'Métricas']);
+assert.deepEqual(MORE_ITEMS.map((i) => i.href), ['#resumen', '#supervisor', '#operaciones/incidencias', '#impacto', '#configuracion', '#master']);
+assert.equal(activeHref('#operaciones/incidencias'), '#operaciones/incidencias');
+assert.equal(activeHref('#ciudadania'), '#ciudadania');
 
 // Qué elemento está activo según el hash.
 assert.equal(activeHref('#operaciones/rutas'), '#operaciones/rutas');
