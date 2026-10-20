@@ -3,7 +3,7 @@
 Orden sugerido. Las casillas con **(M)** las haces tú, Miguel; **(C)** son de Claude.
 
 ## Fase A · Preparar el binario
-- [ ] (C) SW-107: pantalla de divulgación destacada antes de pedir la ubicación en segundo plano (requisito de Play; hoy no existe).
+- [x] (C) SW-107: pantalla de divulgación destacada antes de pedir la ubicación en segundo plano.
 - [ ] (M) Mergear SW-104, SW-105 y SW-106 (CI en verde).
 - [ ] (M) Ejecutar "Android release APK (signed)" en `main`; descargar `.apk` y `.aab`.
 - [ ] (M) Prueba de campo en teléfono real con API 35/36: corrida de 10 a 15 min con pantalla apagada; confirmar que los puntos llegan.

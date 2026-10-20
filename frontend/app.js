@@ -3293,6 +3293,16 @@ async function hydrateMasterRealMunicipalities() {
   const el = document.getElementById('masterCostParametersSection');
   if (el) el.innerHTML = renderMasterCostParametersSection();
 }
+// SW-107: la aceptación de la divulgación de ubicación en segundo plano se recuerda en el teléfono.
+const DRIVER_DISCLOSURE_KEY = 'smartwaste.driver-location-disclosure.v1';
+function createLocationDisclosure() {
+  const read = () => { try { return window.localStorage.getItem(DRIVER_DISCLOSURE_KEY) === 'accepted'; } catch { return false; } };
+  return {
+    isAccepted: read,
+    accept: () => { try { window.localStorage.setItem(DRIVER_DISCLOSURE_KEY, 'accepted'); } catch { /* sin almacenamiento: se vuelve a preguntar */ } },
+    privacyUrl: window.SMARTWASTE_PRIVACY_URL || ''
+  };
+}
 async function startDriverExperience(ctx) {
   document.body.classList.add('sw-driver-mode');
   let root = document.getElementById('driverApp');
@@ -3302,7 +3312,8 @@ async function startDriverExperience(ctx) {
   driverController = await mountDriverApp({
     root, client, ctx, adapter: realAdapter,
     gps: { start: () => startDriverGps(), stop: (opts) => stopDriverGps(opts) },
-    toast: showToast, logout
+    toast: showToast, logout,
+    disclosure: createLocationDisclosure()
   });
 }
 async function bootstrapRealBackend(ctx) {
