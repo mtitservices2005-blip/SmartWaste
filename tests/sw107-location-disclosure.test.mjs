@@ -77,3 +77,10 @@ assert.match(app, /smartwaste\.driver-location-disclosure\.v1/);
 assert.match(app, /disclosure:/);
 assert.match(readFileSync('frontend/driver-app.js', 'utf8'), /data-driver-disclosure-accept/);
 console.log('sw107-location-disclosure OK');
+
+// 8) La política pública vive en el sitio de MT IT Services y la app enlaza a ella.
+const PRIVACY = 'https://mtitservices.net/soluciones/smartwaste/privacidad';
+assert.ok(app.includes(PRIVACY), 'app.js enlaza la política en mtitservices.net');
+assert.ok(readFileSync('frontend/privacidad.html', 'utf8').includes(`<link rel="canonical" href="${PRIVACY}">`), 'canónica de la política');
+assert.ok(readFileSync('docs/play-store/01-seguridad-de-los-datos.md', 'utf8').includes(PRIVACY), 'formulario de Play usa la misma URL');
+console.log('sw107 privacy-url OK');

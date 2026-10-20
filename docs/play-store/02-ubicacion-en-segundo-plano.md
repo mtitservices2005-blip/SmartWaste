@@ -26,5 +26,5 @@ Subir el video a YouTube como "no listado" y pegar el enlace en el formulario.
 
 ## Antes de enviar
 - **Divulgación destacada (SW-107, hecha):** antes de la primera ruta la app muestra la pantalla "Ubicación en segundo plano" con los botones "Entiendo y continuar" y "Ahora no", y solo después se abre el diálogo de Android. Grábala completa en el video.
-- **Enlace a la política:** la pantalla muestra el enlace solo si la app conoce la URL pública de la política (`window.SMARTWASTE_PRIVACY_URL`); si no, indica que está en la ficha de Google Play. Conviene definirla antes de grabar el video.
+- **Enlace a la política:** la pantalla enlaza a `https://mtitservices.net/soluciones/smartwaste/privacidad`. Esa página debe estar publicada antes de grabar el video y de enviar a Play.
 - El texto de la política de privacidad debe decir lo mismo que esta declaración. Ya lo dice la sección 3.

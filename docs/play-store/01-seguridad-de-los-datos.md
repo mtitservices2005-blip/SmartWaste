@@ -2,7 +2,7 @@
 
 Respuestas propuestas para el formulario. Revísalas contra lo que realmente hace la app antes de enviarlas: Google compara el formulario con el comportamiento observado, y una respuesta inexacta puede bloquear la publicación.
 
-URL de la política de privacidad: `https://<tu-dominio-de-produccion>/privacidad`
+URL de la política de privacidad: `https://mtitservices.net/soluciones/smartwaste/privacidad` (debe estar publicada y abrir sin iniciar sesión antes de enviar el formulario)
 
 ## Preguntas generales
 

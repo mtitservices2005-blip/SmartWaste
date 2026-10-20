@@ -12,7 +12,7 @@ Orden sugerido. Las casillas con **(M)** las haces tú, Miguel; **(C)** son de C
 ## Fase B · Cuenta y ficha
 - [ ] (M) Crear la cuenta de desarrollador (pago único de $25; verificación de identidad).
 - [ ] (M) Crear la app en Play Console: "SmartWaste Conductor", gratuita, español.
-- [ ] (M) Pegar la URL de la política de privacidad (`/privacidad` de producción).
+- [ ] (M) Publicar la política en `https://mtitservices.net/soluciones/smartwaste/privacidad` (copiar `frontend/privacidad.html` al sitio) y pegar esa URL en Play Console.
 - [ ] (M) Completar Seguridad de los datos con `01-seguridad-de-los-datos.md`.
 - [ ] (M) Declaración de ubicación en segundo plano con `02-ubicacion-en-segundo-plano.md` (+ video).
 - [ ] (M) Ficha con `03-ficha-de-la-tienda.md`; ícono, imagen destacada y capturas.
