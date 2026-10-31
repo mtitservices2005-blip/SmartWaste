@@ -72,3 +72,9 @@ body.sw-driver-mode #driverApp { display: block; }
 .sw-driver--disclosure { justify-content: center; }
 .sw-driver--disclosure p { margin: 0; line-height: 1.5; }
 .sw-driver__fine { color: var(--color-text-muted, var(--color-text)); font-size: var(--font-size-1); }
+
+/* SW-108: aviso de nueva versión en Hoy. */
+.sw-driver__update { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3) var(--space-4); background: var(--color-surface); border: 1px solid var(--color-primary); border-radius: var(--radius-3); }
+.sw-driver__update-note { color: var(--color-muted); font-size: var(--font-size-1); }
+.sw-driver__update-actions { display: flex; gap: var(--space-2); }
+.sw-driver__update-actions .sw-driver__cta { min-height: 44px; }

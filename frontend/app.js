@@ -38,6 +38,7 @@ import { DAY_CHIPS, normalizeDays, normalizeStartTime, formatDays, formatTimeOfD
 import { buildVehicleRows, buildDriverRows, fleetHeader, validateVehicleForm, validateDriverForm, validateFuelConfig } from '../shared/fleet-list.js';
 import { buildMetricsView, formatNumber, formatKm, formatDuration } from '../shared/metrics-view.js';
 import { buildWeeklySummary } from '../shared/weekly-summary.js';
+import { createUpdateChecker } from '../shared/app-update.js';
 import { renderHomeWeekly } from './components/summary-screens.js';
 import { renderMetricsPage } from './components/metrics-screens.js';
 import { renderFleetTabs, renderVehiclesTable, renderDriversTable, renderVehicleForm, renderDriverForm } from './components/fleet-screens.js';
@@ -3304,6 +3305,22 @@ function createLocationDisclosure() {
     privacyUrl: window.SMARTWASTE_PRIVACY_URL || DRIVER_PRIVACY_URL
   };
 }
+// SW-108: aviso de nueva versión del APK. Solo actúa dentro de la app nativa y si el build trae la URL del manifiesto
+// (variable SMARTWASTE_UPDATE_BASE_URL al compilar); en el navegador o sin URL no hace nada.
+function createAppUpdater() {
+  const plugins = window.Capacitor?.Plugins ?? {};
+  const native = Boolean(window.Capacitor?.isNativePlatform?.()) && typeof plugins.App?.getInfo === 'function';
+  const checker = createUpdateChecker({
+    manifestUrl: native ? (window.SMARTWASTE_APP_UPDATE_URL || '') : '',
+    fetchImpl: (url, options) => window.fetch(url, options),
+    getCurrentBuild: async () => Number((await plugins.App.getInfo())?.build)
+  });
+  return {
+    check: () => checker.check(),
+    dismiss: (code) => checker.dismiss(code),
+    open: async (url) => { if (typeof plugins.Browser?.open === 'function') await plugins.Browser.open({ url }); else window.open(url, '_blank', 'noopener'); }
+  };
+}
 async function startDriverExperience(ctx) {
   document.body.classList.add('sw-driver-mode');
   let root = document.getElementById('driverApp');
@@ -3314,7 +3331,8 @@ async function startDriverExperience(ctx) {
     root, client, ctx, adapter: realAdapter,
     gps: { start: () => startDriverGps(), stop: (opts) => stopDriverGps(opts) },
     toast: showToast, logout,
-    disclosure: createLocationDisclosure()
+    disclosure: createLocationDisclosure(),
+    update: createAppUpdater()
   });
 }
 async function bootstrapRealBackend(ctx) {

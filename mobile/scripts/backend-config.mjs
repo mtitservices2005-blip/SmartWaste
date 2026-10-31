@@ -21,3 +21,12 @@ export function resolveBackendConfig(env = process.env) {
     hideDemo: env.SUPABASE_HIDE_DEMO === 'true'
   };
 }
+
+// SW-108: URL del version.json que la app consulta para avisar de una versión nueva. Opcional: sin la variable
+// (o con una URL que no sea https) no se incrusta nada y la app simplemente no busca actualizaciones.
+export function resolveUpdateManifestUrl(env = process.env) {
+  const base = (env.SMARTWASTE_UPDATE_BASE_URL ?? '').trim().replace(/\/+$/, '');
+  if (!base) return null;
+  if (!/^https:\/\/[^\s/]+/i.test(base)) throw new Error('SMARTWASTE_UPDATE_BASE_URL debe empezar con https:// (ejemplo: https://tu-sitio.vercel.app).');
+  return `${base}/downloads/version.json`;
+}
