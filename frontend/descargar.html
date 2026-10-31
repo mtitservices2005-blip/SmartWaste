@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Descargar SmartWaste Conductor</title>
+  <meta name="robots" content="noindex">
+  <style>
+    :root { color-scheme: light dark; --bg:#f6f8f7; --fg:#14201b; --muted:#53635b; --card:#fff; --line:#d5dfda; --accent:#0f7b4f; --accent-fg:#fff; --warn:#a86a00; }
+    @media (prefers-color-scheme: dark) { :root { --bg:#0e1512; --fg:#e6efea; --muted:#9db0a6; --card:#16211c; --line:#2a3a33; --accent:#4cc38a; --accent-fg:#06281a; --warn:#f2c14e; } }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+    main { max-width:640px; margin:0 auto; padding:24px 16px 56px; }
+    .brand { display:flex; align-items:center; gap:10px; margin-bottom:18px; }
+    .logo { width:40px; height:40px; border-radius:10px; background:var(--accent); color:var(--accent-fg); display:grid; place-items:center; font-weight:800; }
+    .brand b { display:block; line-height:1.1; } .brand span { color:var(--muted); font-size:.9rem; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:20px; }
+    h1 { font-size:1.45rem; margin:0 0 4px; } p { margin:0 0 14px; } .muted { color:var(--muted); }
+    .btn { display:inline-flex; align-items:center; gap:8px; background:var(--accent); color:var(--accent-fg); border-radius:10px; padding:13px 20px; font-weight:700; text-decoration:none; }
+    .btn[hidden] { display:none; }
+    .meta { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:18px 0 12px; }
+    .meta div { border:1px solid var(--line); border-radius:10px; padding:8px 10px; }
+    .meta small { display:block; color:var(--muted); font-size:.72rem; text-transform:uppercase; letter-spacing:.05em; } .meta b { font-size:.95rem; }
+    .hash { font:12px/1.4 ui-monospace,Consolas,monospace; color:var(--muted); word-break:break-all; border:1px solid var(--line); border-radius:8px; padding:8px 10px; }
+    h2 { font-size:1rem; margin:22px 0 8px; }
+    ol { margin:0; padding-left:22px; } li { margin-bottom:8px; }
+    .note { border-left:3px solid var(--warn); padding:8px 12px; border-radius:0 8px 8px 0; background:color-mix(in srgb, var(--warn) 10%, transparent); color:var(--muted); font-size:.92rem; margin-top:16px; }
+    .foot { margin-top:18px; color:var(--muted); font-size:.88rem; } a { color:var(--accent); } .btn { color:var(--accent-fg); }
+    @media (max-width:480px) { .meta { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <div class="brand"><div class="logo" aria-hidden="true">SW</div><div><b>SmartWaste Conductor</b><span>App Android para choferes</span></div></div>
+  <div class="card">
+    <h1 id="title">Buscando la última versión…</h1>
+    <p class="muted" id="subtitle">Un momento.</p>
+    <a class="btn" id="download" href="downloads/SmartWaste-Conductor.apk" hidden download>Descargar APK</a>
+    <div class="meta" id="meta" hidden>
+      <div><small>Versión</small><b id="m-version">—</b></div>
+      <div><small>Tamaño</small><b id="m-size">—</b></div>
+      <div><small>Publicada</small><b id="m-date">—</b></div>
+    </div>
+    <div id="hash-box" hidden>
+      <small class="muted">Huella SHA-256 (sirve para comprobar que el archivo no fue alterado)</small>
+      <div class="hash" id="m-hash"></div>
+    </div>
+    <h2>Cómo instalarla</h2>
+    <ol>
+      <li>Descarga el archivo desde este teléfono.</li>
+      <li>Ábrelo. Si Android lo pide, permite <b>instalar desde esta fuente</b> (solo para el navegador o la app Archivos).</li>
+      <li>Si Play Protect avisa, toca <b>Más detalles → Instalar de todos modos</b>. La app es de MT IT Services y no está en Play Store.</li>
+      <li>Abre la app, entra con tu correo registrado y concede la ubicación <b>"Permitir todo el tiempo"</b>.</li>
+    </ol>
+    <div class="note">Para actualizar, instala el APK nuevo encima: no se pierde la sesión ni hay que desinstalar. Requiere Android 7 o superior.</div>
+  </div>
+  <p class="foot">¿Problemas? <a href="mailto:mtitservices2005@gmail.com">mtitservices2005@gmail.com</a> · <a href="privacidad">Política de privacidad</a></p>
+</main>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  fetch('downloads/version.json', { cache: 'no-store' })
+    .then(function (r) { if (!r.ok) throw new Error('sin versión'); return r.json(); })
+    .then(function (m) {
+      if (!m || !m.versionName) throw new Error('manifiesto inválido');
+      $('title').textContent = 'Versión ' + m.versionName + ' disponible';
+      $('subtitle').textContent = m.notes || 'Descarga la app e instálala en tu teléfono.';
+      $('m-version').textContent = m.versionName + (m.versionCode ? ' (' + m.versionCode + ')' : '');
+      $('m-size').textContent = m.sizeBytes ? (m.sizeBytes / 1048576).toFixed(1).replace('.', ',') + ' MB' : '—';
+      $('m-date').textContent = m.publishedAt ? new Date(m.publishedAt).toLocaleDateString('es-DO', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+      if (m.sha256) { $('m-hash').textContent = m.sha256; $('hash-box').hidden = false; }
+      $('meta').hidden = false; $('download').hidden = false;
+    })
+    .catch(function () {
+      $('title').textContent = 'Todavía no hay una versión publicada';
+      $('subtitle').textContent = 'Vuelve a intentarlo más tarde o escribe a mtitservices2005@gmail.com.';
+    });
+})();
+</script>
+</body>
+</html>

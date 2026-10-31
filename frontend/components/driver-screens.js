@@ -18,11 +18,18 @@ function routeCard(r) {
   return `<li class="${cls}"><div class="sw-driver__route-top"><h3>${e(r.routeName)}</h3>${time}</div><p class="sw-driver__meta">${meta.map(e).join(' · ')}</p>${action}</li>`;
 }
 
-export function renderDriverToday({ name = '', dateText = '', unit = null, gpsActive = false, routes = [] } = {}) {
+// SW-108: aviso de nueva versión (solo en Hoy, nunca durante una ruta). "Actualizar" abre la descarga del APK.
+export function renderUpdateBanner({ versionName = '', notes = '' } = {}) {
+  const note = notes ? `<span class="sw-driver__update-note">${e(notes)}</span>` : '';
+  return `<div class="sw-driver__update" role="status"><strong>Hay una versión nueva (${e(versionName)})</strong>${note}<div class="sw-driver__update-actions"><button type="button" class="sw-driver__cta sw-driver__cta--ghost" data-driver-update-dismiss>Después</button><button type="button" class="sw-driver__cta" data-driver-update-open>Actualizar</button></div></div>`;
+}
+
+export function renderDriverToday({ name = '', dateText = '', unit = null, gpsActive = false, routes = [], update = null } = {}) {
   const list = routes.length
     ? `<ul class="sw-driver__routes">${routes.map(routeCard).join('')}</ul>`
     : '<div class="sw-driver__empty"><p><strong>No tienes rutas asignadas para hoy.</strong></p><p>Cuando la central te asigne una, aparecerá aquí.</p></div>';
   return `<section class="sw-driver sw-driver--today" aria-label="Rutas de hoy">
+    ${update ? renderUpdateBanner(update) : ''}
     <header class="sw-driver__head"><div><p class="sw-driver__date">${e(dateText)} · Camión ${e(unit ?? '—')}</p><h1>Hola, ${e(name)}</h1></div><span class="sw-driver__chip${gpsActive ? ' sw-driver__chip--on' : ''}" role="status">${gpsActive ? 'GPS activo' : 'GPS inactivo'}</span></header>
     <h2 class="sw-driver__label">Rutas de hoy · ${routes.length}</h2>
     ${list}

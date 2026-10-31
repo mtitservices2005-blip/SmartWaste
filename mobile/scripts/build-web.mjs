@@ -2,7 +2,7 @@ import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } f
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildSync } from 'esbuild';
-import { resolveBackendConfig } from './backend-config.mjs';
+import { resolveBackendConfig, resolveUpdateManifestUrl } from './backend-config.mjs';
 
 const mobileDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const repositoryDir = dirname(mobileDir);
@@ -23,10 +23,11 @@ function stripGeneratedConfig(html) {
   return html.slice(0, start) + html.slice(end + configEnd.length).replace(/^\r?\n/, '');
 }
 
-function injectSupabaseConfig(config) {
+function injectSupabaseConfig(config, updateManifestUrl = null) {
   const configScript = config ? `  <script>\n    window.SMARTWASTE_SUPABASE_CONFIG = ${JSON.stringify(config)};\n  </script>\n` : '';
   const driverFlag = '  <script>\n    window.SMARTWASTE_DRIVER_APP = true;\n  </script>\n';
-  const block = `${configStart}\n${driverFlag}${configScript}  <script src="./native-background-geolocation.js"></script>\n  ${configEnd}\n`;
+  const updateScript = updateManifestUrl ? `  <script>\n    window.SMARTWASTE_APP_UPDATE_URL = ${JSON.stringify(updateManifestUrl)};\n  </script>\n` : '';
+  const block = `${configStart}\n${driverFlag}${configScript}${updateScript}  <script src="./native-background-geolocation.js"></script>\n  ${configEnd}\n`;
   const html = stripGeneratedConfig(readFileSync(indexPath, 'utf8'));
   const scriptTag = '<script type="module" src="./app.js"></script>';
   if (!html.includes(scriptTag)) throw new Error(`Expected ${scriptTag} in copied frontend/index.html.`);
@@ -35,12 +36,15 @@ function injectSupabaseConfig(config) {
 
 // Se valida antes de tocar nada: un build de lanzamiento sin variables debe fallar de inmediato.
 const backendConfig = resolveBackendConfig();
+const updateManifestUrl = resolveUpdateManifestUrl();
 if (!backendConfig) console.warn('SUPABASE_URL/SUPABASE_ANON_KEY absent: mobile bundle built in demo mode.');
 
 rmSync(outputDir, { recursive: true, force: true });
 mkdirSync(outputDir, { recursive: true });
 cpSync(frontendDir, outputDir, { recursive: true });
 cpSync(sharedDir, outputSharedDir, { recursive: true });
+// SW-108: la página de descarga es solo del sitio web; no tiene sentido dentro del APK.
+rmSync(join(outputDir, 'descargar.html'), { force: true });
 
 buildSync({ entryPoints: [nativeEntryPath], bundle: true, outfile: join(outputDir, 'native-background-geolocation.js'), format: 'iife', platform: 'browser' });
 
@@ -51,5 +55,5 @@ for (const entry of readdirSync(outputDir, { withFileTypes: true })) {
   writeFileSync(path, source.replaceAll('../shared/', './shared/'));
 }
 
-injectSupabaseConfig(backendConfig);
+injectSupabaseConfig(backendConfig, updateManifestUrl);
 console.log(`Mobile web bundle generated at ${outputDir}.`);

@@ -10,8 +10,8 @@ import { parseFuelLiters, buildFuelEntry } from '../shared/fuel-entry.js';
 
 const firstName = (full) => String(full ?? '').trim().split(/\s+/)[0] ?? '';
 
-export function createDriverController({ load, adapter, gps, municipalityId, userId, toast = () => {}, draw, now = () => new Date(), logout = async () => {}, disclosure = { isAccepted: () => true, accept: () => {}, privacyUrl: '' } }) {
-  const state = { screen: 'today', data: null, error: '', runId: null, startedAt: {}, visited: {}, position: null, finishError: '', fuelValue: '', fuelSaved: {}, busy: false, pendingDisclosure: null };
+export function createDriverController({ load, adapter, gps, municipalityId, userId, toast = () => {}, draw, now = () => new Date(), logout = async () => {}, disclosure = { isAccepted: () => true, accept: () => {}, privacyUrl: '' }, update = { check: async () => null, dismiss: () => {}, open: async () => {} } }) {
+  const state = { screen: 'today', data: null, error: '', runId: null, startedAt: {}, visited: {}, position: null, finishError: '', fuelValue: '', fuelSaved: {}, busy: false, pendingDisclosure: null, update: null };
   const c = { state, onField: null, onPosition: null };
 
   const runs = () => state.data?.runs ?? [];
@@ -47,6 +47,7 @@ export function createDriverController({ load, adapter, gps, municipalityId, use
     const today = selectTodayRoutes(runs(), { now: now() });
     draw('today', renderDriverToday({
       name: firstName(state.data?.driver?.display_name), dateText: formatTodayText(now()), unit: state.data?.unit ?? null, gpsActive: Boolean(gps.isActive?.()),
+      update: gps.isActive?.() ? null : state.update,
       routes: today.items.map((r) => ({ id: r.id, routeName: r.routeName, stopsCount: r.stopsCount, distanceText: r.distanceText, estimatedMinutes: r.estimatedMinutes, slot: r.slot, startLabel: r.startLabel }))
     }));
   }
@@ -69,6 +70,15 @@ export function createDriverController({ load, adapter, gps, municipalityId, use
 
   // Rutas nuevas sin cerrar la app: solo se recarga en la pantalla Hoy y sin acciones en curso.
   c.refreshIfIdle = async () => { if (state.screen !== 'today' || state.busy) return; await c.refresh(); };
+
+  // SW-108: busca una versión nueva del APK. Solo se muestra en Hoy y sin GPS activo; cualquier fallo se ignora.
+  c.checkUpdate = async () => {
+    if (state.screen !== 'today' || state.busy || gps.isActive?.()) return;
+    let found = null;
+    try { found = await update.check(); } catch { found = null; }
+    state.update = found;
+    if (state.screen === 'today' && !state.error && state.data) render();
+  };
 
   c.setPosition = (position) => {
     state.position = position;
@@ -143,6 +153,8 @@ export function createDriverController({ load, adapter, gps, municipalityId, use
     if (name === 'finish-open') { state.screen = 'finish'; state.finishError = ''; return render(); }
     if (name === 'finish-back') { state.screen = 'run'; state.finishError = ''; return render(); }
     if (name === 'finish-save') return finish(payload);
+    if (name === 'update-open') { if (state.update?.apkUrl) await update.open(state.update.apkUrl); return undefined; }
+    if (name === 'update-dismiss') { if (state.update) update.dismiss(state.update.versionCode); state.update = null; return render(); }
     if (name === 'retry') return c.refresh();
     if (name === 'logout') { if (gps.isActive?.()) await gps.stop({ flush: true }); return logout(); }
     return undefined;
@@ -153,14 +165,14 @@ export function createDriverController({ load, adapter, gps, municipalityId, use
 }
 
 // ---- Conexión con el navegador / WebView ----
-export async function mountDriverApp({ root, client, ctx, adapter, gps, toast, logout, disclosure, win = globalThis.window, nav = globalThis.navigator }) {
+export async function mountDriverApp({ root, client, ctx, adapter, gps, toast, logout, disclosure, update, win = globalThis.window, nav = globalThis.navigator }) {
   const userResult = await client.auth.getUser();
   const email = userResult?.data?.user?.email ?? '';
   let map = null; let live = null;
 
   const controller = createDriverController({
     load: () => loadDriverToday(client, { userId: ctx.user_id, municipalityId: ctx.municipality_id, email }),
-    adapter, gps, toast, logout, disclosure, municipalityId: ctx.municipality_id, userId: ctx.user_id,
+    adapter, gps, toast, logout, disclosure, update, municipalityId: ctx.municipality_id, userId: ctx.user_id,
     draw: (screen, html) => {
       if (map) { map.remove(); map = null; live = null; }
       root.innerHTML = html;
@@ -186,7 +198,7 @@ export async function mountDriverApp({ root, client, ctx, adapter, gps, toast, l
   controller.onPosition = (position) => { live?.update(position); };
 
   root.addEventListener('click', (event) => {
-    const t = event.target.closest?.('[data-driver-start-route],[data-driver-disclosure-accept],[data-driver-disclosure-decline],[data-driver-open-run],[data-driver-finish-open],[data-driver-finish-back],[data-driver-finish-save],[data-driver-retry],[data-driver-logout],[data-driver-recenter]');
+    const t = event.target.closest?.('[data-driver-start-route],[data-driver-disclosure-accept],[data-driver-disclosure-decline],[data-driver-open-run],[data-driver-finish-open],[data-driver-finish-back],[data-driver-finish-save],[data-driver-retry],[data-driver-logout],[data-driver-recenter],[data-driver-update-open],[data-driver-update-dismiss]');
     if (!t) return;
     const d = t.dataset;
     if ('driverStartRoute' in d) controller.action('start', d.driverStartRoute);
@@ -196,6 +208,8 @@ export async function mountDriverApp({ root, client, ctx, adapter, gps, toast, l
     else if ('driverFinishOpen' in d) controller.action('finish-open');
     else if ('driverFinishBack' in d) controller.action('finish-back');
     else if ('driverFinishSave' in d) controller.action('finish-save', root.querySelector('#driverFuelLiters')?.value ?? '');
+    else if ('driverUpdateOpen' in d) controller.action('update-open');
+    else if ('driverUpdateDismiss' in d) controller.action('update-dismiss');
     else if ('driverRetry' in d) controller.action('retry');
     else if ('driverLogout' in d) controller.action('logout');
     else if ('driverRecenter' in d) live?.recenter();
@@ -209,9 +223,11 @@ export async function mountDriverApp({ root, client, ctx, adapter, gps, toast, l
   win?.addEventListener?.('online', setConn); win?.addEventListener?.('offline', setConn);
   win?.setInterval?.(() => controller.tick(), 30000);
   win?.setInterval?.(() => controller.refreshIfIdle(), 60000);
-  win?.document?.addEventListener?.('visibilitychange', () => { if (win.document.visibilityState === 'visible') controller.refreshIfIdle(); });
+  win?.document?.addEventListener?.('visibilitychange', () => { if (win.document.visibilityState === 'visible') { controller.refreshIfIdle(); controller.checkUpdate(); } });
+  win?.setInterval?.(() => controller.checkUpdate(), 6 * 60 * 60 * 1000);
 
   await controller.refresh();
+  controller.checkUpdate(); // sin await: el aviso no debe retrasar la pantalla Hoy
   return controller;
 }
 

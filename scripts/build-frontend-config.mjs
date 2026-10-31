@@ -12,7 +12,7 @@
 // as opening frontend/index.html locally with no config (rule 5, never break the demo). Only warns
 // loudly, never fails the build, so a misconfigured env doesn't take down a deploy that was only
 // ever meant to show the demo.
-import { readFileSync, writeFileSync, mkdirSync, cpSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, cpSync, readdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 
@@ -60,6 +60,11 @@ cpSync(FRONTEND_DIR, DIST_DIR, { recursive: true });
 // past the static <header> ever renders (no login overlay, no buttons wired up). Copy shared/ in
 // as dist/shared/ and rewrite the copied frontend files' import specifiers to match.
 cpSync(SHARED_DIR, DIST_SHARED_DIR, { recursive: true });
+
+// SW-108: APK y version.json para la descarga directa (/descargar). Viven en downloads/ (raíz del repo) y no en
+// frontend/ para que el paquete móvil, que copia frontend/ entero, no se incruste a sí mismo.
+const DOWNLOADS_DIR = fileURLToPath(new URL('../downloads', import.meta.url));
+if (existsSync(DOWNLOADS_DIR)) cpSync(DOWNLOADS_DIR, join(DIST_DIR, 'downloads'), { recursive: true });
 for (const file of readdirSync(DIST_DIR)) {
   if (!file.endsWith('.js')) continue;
   const filePath = join(DIST_DIR, file);
