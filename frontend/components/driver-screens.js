@@ -93,3 +93,19 @@ export function renderDriverLoadError({ message = '' } = {}) {
     <button type="button" class="sw-driver__link sw-driver__link--center" data-driver-logout>Cerrar sesión</button>
   </section>`;
 }
+
+// SW-107: divulgación destacada que Google Play exige antes de pedir la ubicación en segundo plano.
+export function renderDriverDisclosure({ notificationText = 'SmartWaste está registrando tu recorrido', privacyUrl = '' } = {}) {
+  const policy = privacyUrl
+    ? `<a class="sw-driver__link" href="${e(privacyUrl)}" target="_blank" rel="noopener">Política de privacidad</a>`
+    : 'Política de privacidad (disponible en la ficha de la app en Google Play)';
+  return `<section class="sw-driver sw-driver--disclosure" aria-labelledby="driverDisclosureTitle">
+    <h1 id="driverDisclosureTitle">Ubicación en segundo plano</h1>
+    <p>SmartWaste Conductor recoge la <strong>ubicación precisa de tu teléfono</strong> para mostrarle a tu ayuntamiento dónde va el camión, medir los kilómetros y verificar el avance de la ruta.</p>
+    <p>Sigue funcionando en <strong>segundo plano</strong>, también con la pantalla apagada o con la app cerrada, pero <strong>solo durante una ruta que tú inicies</strong>. Mientras tanto verás la notificación "${e(notificationText)}". Al terminar la ruta, se detiene.</p>
+    <p>El público ve el camión en el mapa, nunca tu nombre. Puedes retirar el permiso cuando quieras desde los ajustes de Android, pero sin él no podemos registrar tu recorrido.</p>
+    <p class="sw-driver__fine">${policy}.</p>
+    <button type="button" class="sw-driver__cta" data-driver-disclosure-accept>Entiendo y continuar</button>
+    <button type="button" class="sw-driver__cta sw-driver__cta--ghost" data-driver-disclosure-decline>Ahora no</button>
+  </section>`;
+}

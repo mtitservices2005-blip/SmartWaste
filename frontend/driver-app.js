@@ -1,7 +1,7 @@
 // SW-085: la app del conductor. El controlador (createDriverController) no toca el DOM ni la red por su
 // cuenta: recibe adaptador, GPS y dibujo por parámetro, así se prueba entero. mountDriverApp() lo conecta al
 // navegador (clics, mapa, posición). Hoy → Iniciar → En ruta → Terminar → Hoy.
-import { renderDriverToday, renderDriverRun, renderDriverFinish, renderDriverLoadError } from './components/driver-screens.js';
+import { renderDriverToday, renderDriverRun, renderDriverFinish, renderDriverLoadError, renderDriverDisclosure } from './components/driver-screens.js';
 import { selectTodayRoutes, formatTodayText } from '../shared/driver-today.js';
 import { loadDriverToday } from '../shared/driver-data.js';
 import { nextStopInfo, formatElapsed, formatDistance, markVisitedStops, haversineMeters } from '../shared/driver-nav.js';
@@ -10,8 +10,8 @@ import { parseFuelLiters, buildFuelEntry } from '../shared/fuel-entry.js';
 
 const firstName = (full) => String(full ?? '').trim().split(/\s+/)[0] ?? '';
 
-export function createDriverController({ load, adapter, gps, municipalityId, userId, toast = () => {}, draw, now = () => new Date(), logout = async () => {} }) {
-  const state = { screen: 'today', data: null, error: '', runId: null, startedAt: {}, visited: {}, position: null, finishError: '', fuelValue: '', fuelSaved: {}, busy: false };
+export function createDriverController({ load, adapter, gps, municipalityId, userId, toast = () => {}, draw, now = () => new Date(), logout = async () => {}, disclosure = { isAccepted: () => true, accept: () => {}, privacyUrl: '' } }) {
+  const state = { screen: 'today', data: null, error: '', runId: null, startedAt: {}, visited: {}, position: null, finishError: '', fuelValue: '', fuelSaved: {}, busy: false, pendingDisclosure: null };
   const c = { state, onField: null, onPosition: null };
 
   const runs = () => state.data?.runs ?? [];
@@ -30,6 +30,7 @@ export function createDriverController({ load, adapter, gps, municipalityId, use
 
   function render() {
     if (state.error) { draw('error', renderDriverLoadError({ message: state.error })); return; }
+    if (state.screen === 'disclosure') { draw('disclosure', renderDriverDisclosure({ privacyUrl: disclosure.privacyUrl ?? '' })); return; }
     if (state.screen === 'run' || state.screen === 'finish') {
       const run = currentRun();
       if (run) {
@@ -57,7 +58,11 @@ export function createDriverController({ load, adapter, gps, municipalityId, use
     state.data = res;
     if (state.screen === 'today') {
       const { activeId } = selectTodayRoutes(res.runs, { now: now() });
-      if (activeId) { state.runId = activeId; state.screen = 'run'; await gps.start(); }
+      if (activeId) {
+        state.runId = activeId;
+        if (!disclosure.isAccepted()) { state.pendingDisclosure = { type: 'resume' }; state.screen = 'disclosure'; render(); return; }
+        state.screen = 'run'; await gps.start();
+      }
     }
     render();
   };
@@ -84,6 +89,8 @@ export function createDriverController({ load, adapter, gps, municipalityId, use
   async function start(id) {
     const run = runs().find((r) => r.id === id);
     if (!run || state.busy) return;
+    // SW-107: antes de iniciar (y de pedir la ubicación en segundo plano) Play exige la divulgación destacada.
+    if (!disclosure.isAccepted()) { state.pendingDisclosure = { type: 'start', id }; state.screen = 'disclosure'; return render(); }
     state.busy = true;
     try {
       const res = await adapter.startRoute(run.routeId);
@@ -124,6 +131,14 @@ export function createDriverController({ load, adapter, gps, municipalityId, use
 
   c.action = async (name, payload) => {
     if (name === 'start') return start(payload);
+    if (name === 'disclosure-accept') {
+      const pending = state.pendingDisclosure; state.pendingDisclosure = null;
+      disclosure.accept();
+      if (pending?.type === 'start') { state.screen = 'today'; return start(pending.id); }
+      if (pending?.type === 'resume') { state.screen = 'run'; await gps.start(); return render(); }
+      state.screen = 'today'; return render();
+    }
+    if (name === 'disclosure-decline') { state.pendingDisclosure = null; state.runId = null; state.screen = 'today'; return render(); }
     if (name === 'open-run') { state.runId = payload; state.screen = 'run'; return render(); }
     if (name === 'finish-open') { state.screen = 'finish'; state.finishError = ''; return render(); }
     if (name === 'finish-back') { state.screen = 'run'; state.finishError = ''; return render(); }
@@ -138,14 +153,14 @@ export function createDriverController({ load, adapter, gps, municipalityId, use
 }
 
 // ---- Conexión con el navegador / WebView ----
-export async function mountDriverApp({ root, client, ctx, adapter, gps, toast, logout, win = globalThis.window, nav = globalThis.navigator }) {
+export async function mountDriverApp({ root, client, ctx, adapter, gps, toast, logout, disclosure, win = globalThis.window, nav = globalThis.navigator }) {
   const userResult = await client.auth.getUser();
   const email = userResult?.data?.user?.email ?? '';
   let map = null; let live = null;
 
   const controller = createDriverController({
     load: () => loadDriverToday(client, { userId: ctx.user_id, municipalityId: ctx.municipality_id, email }),
-    adapter, gps, toast, logout, municipalityId: ctx.municipality_id, userId: ctx.user_id,
+    adapter, gps, toast, logout, disclosure, municipalityId: ctx.municipality_id, userId: ctx.user_id,
     draw: (screen, html) => {
       if (map) { map.remove(); map = null; live = null; }
       root.innerHTML = html;
@@ -171,10 +186,12 @@ export async function mountDriverApp({ root, client, ctx, adapter, gps, toast, l
   controller.onPosition = (position) => { live?.update(position); };
 
   root.addEventListener('click', (event) => {
-    const t = event.target.closest?.('[data-driver-start-route],[data-driver-open-run],[data-driver-finish-open],[data-driver-finish-back],[data-driver-finish-save],[data-driver-retry],[data-driver-logout],[data-driver-recenter]');
+    const t = event.target.closest?.('[data-driver-start-route],[data-driver-disclosure-accept],[data-driver-disclosure-decline],[data-driver-open-run],[data-driver-finish-open],[data-driver-finish-back],[data-driver-finish-save],[data-driver-retry],[data-driver-logout],[data-driver-recenter]');
     if (!t) return;
     const d = t.dataset;
     if ('driverStartRoute' in d) controller.action('start', d.driverStartRoute);
+    else if ('driverDisclosureAccept' in d) controller.action('disclosure-accept');
+    else if ('driverDisclosureDecline' in d) controller.action('disclosure-decline');
     else if ('driverOpenRun' in d) controller.action('open-run', d.driverOpenRun);
     else if ('driverFinishOpen' in d) controller.action('finish-open');
     else if ('driverFinishBack' in d) controller.action('finish-back');
