@@ -49,6 +49,8 @@ import { renderRoutesTable, renderFilterChips, renderDayChips, renderHistory, re
 const demoNotice = demoOnly(rawDemoNotice, readSupabaseConfig());
 const simulationNotice = demoOnly(rawSimulationNotice, readSupabaseConfig());
 const demoPrefix = demoNotice ? `${demoNotice} · ` : '';
+// SW-112: despliegue real. Sin datos ni textos de demostración en pantalla.
+const HIDE_DEMO = Boolean(readSupabaseConfig()?.hideDemo);
 const simulationPrefix = simulationNotice ? `${simulationNotice} · ` : '';
 
 const $ = (selector) => document.querySelector(selector);
@@ -85,7 +87,7 @@ function showToast(message, { type = 'success' } = {}) {
 // anything downstream (module-init seeding below, the initial render) ever reads them, so a
 // deployment with this flag set stays demo-free permanently, regardless of how much real data
 // accumulates.
-if (readSupabaseConfig()?.hideDemo) { trucks.length = 0; routes.length = 0; drivers.length = 0; incidents.length = 0; }
+if (readSupabaseConfig()?.hideDemo) { trucks.length = 0; routes.length = 0; drivers.length = 0; incidents.length = 0; sectors.length = 0; notifications.length = 0; municipalities.length = 0; } // SW-112: también sectores, avisos y municipios de la demo
 const driverName = (id) => drivers.find((driver) => driver.id === id)?.name ?? 'Sin asignar';
 const routeById = (id) => routes.find((route) => route.id === id);
 const routeName = (id) => routeById(id)?.name ?? 'Sin ruta asignada';
@@ -437,9 +439,9 @@ function renderSummary() {
     ...openIncidents.map((incident) => `<button class="row selectable" data-incident="${incident.code}"><span>⚠️ ${incident.type}<br>${incident.sector} · ${incident.priority}</span>${pill('open')}</button>`)
   ];
   return `<section id="resumen" class="section card">
-    <p class="eyebrow">${pilotMunicipality.branding.label}</p>
+    <p class="eyebrow">${HIDE_DEMO ? 'SmartWaste' : pilotMunicipality.branding.label}</p>
     <h1>Resumen del día</h1>
-    <p class="demo">${demoPrefix}Municipio piloto: ${pilotMunicipality.name}, ${pilotMunicipality.country}</p>
+    <p class="demo">${HIDE_DEMO ? `${pilotMunicipality.name}, ${pilotMunicipality.country}` : `${demoPrefix}Municipio piloto: ${pilotMunicipality.name}, ${pilotMunicipality.country}`}</p>
     <div class="kpis summary-grid">${summaryCards.map((card) => `<a class="kpi${card.tone ? ` ${card.tone}` : ''}" href="${card.href}"${card.scrollTo ? ` data-scroll-to="${card.scrollTo}"` : ''}><strong>${card.value}</strong><br>${card.label}</a>`).join('')}</div>
     ${attentionItems.length
       ? `<div><h3>Necesita tu atención</h3><div class="list">${attentionItems.join('')}</div></div>`
@@ -537,15 +539,23 @@ function driverAssignmentControl(truck) {
   return `<div class="controls"><select id="assignDriverSelect">${candidateDrivers.map((driver) => `<option value="${driver.id}">${driver.name}</option>`).join('')}</select><button type="button" class="btn-primary" data-assign-driver="${truck.id}">${truck.driverId ? 'Reasignar chofer' : 'Asignar chofer'}</button></div>`;
 }
 
+// SW-112: detalle del camión solo con datos reales (conductor, ruta y estado en vivo). Sin velocidad, carga ni próxima parada inventadas.
+function realTruckGrid(truck) {
+  const live = liveFleet?.vehicles.find((v) => v.code === truck.unit) ?? null;
+  const status = live ? describeVehicleStatus(live, Date.now()) : 'Sin ruta en curso';
+  const signal = live && Number.isFinite(live.ageSeconds) ? (live.ageSeconds < 5 ? 'ahora' : live.ageSeconds < 60 ? `hace ${live.ageSeconds} s` : `hace ${Math.floor(live.ageSeconds / 60)} min`) : '—';
+  const efficiency = truck.fuel_efficiency_km_per_l ? `${truck.fuel_efficiency_km_per_l} km/L` : 'Sin configurar';
+  return `<div class="detail-grid"><p><b>Conductor</b><span>${escapeHtml(driverName(truck.driverId))}</span></p><p><b>Matrícula</b><span>${escapeHtml(truck.plate || '—')}</span></p><p><b>Ruta</b><span>${escapeHtml(routeName(truck.routeId))}</span></p><p><b>Estado</b><span>${escapeHtml(status)}</span></p><p><b>Última señal GPS</b><span>${signal}</span></p><p><b>Rendimiento</b><span>${escapeHtml(efficiency)}</span></p></div>`;
+}
 function renderTruckDetail(truck) {
   const route = routeById(truck.routeId);
   const relatedIncidents = route ? incidents.filter((incident) => route.incidents.includes(incident.code)) : [];
   return `<div class="drawer-head"><p class="eyebrow">Detalle del camión</p><h2>${truck.unit} · ${truck.name}</h2>${pill(truck.state)}</div>
-    <div class="detail-grid"><p><b>Conductor</b><span>${driverName(truck.driverId)}</span></p><p><b>Matrícula demo</b><span>${truck.plate}</span></p><p><b>Ruta</b><span>${routeName(truck.routeId)}</span></p><p><b>Velocidad demo</b><span>${truck.speedKmh} km/h</span></p><p><b>Última actualización</b><span>${truck.updatedAt}</span></p><p><b>Sector actual</b><span>${truck.sector}</span></p><p><b>Próxima parada</b><span>${truck.nextStop}</span></p><p><b>Nivel de carga demo</b><span>${truck.loadLevel}%</span></p></div>
+    ${HIDE_DEMO ? realTruckGrid(truck) : `<div class="detail-grid"><p><b>Conductor</b><span>${driverName(truck.driverId)}</span></p><p><b>Matrícula demo</b><span>${truck.plate}</span></p><p><b>Ruta</b><span>${routeName(truck.routeId)}</span></p><p><b>Velocidad demo</b><span>${truck.speedKmh} km/h</span></p><p><b>Última actualización</b><span>${truck.updatedAt}</span></p><p><b>Sector actual</b><span>${truck.sector}</span></p><p><b>Próxima parada</b><span>${truck.nextStop}</span></p><p><b>Nivel de carga demo</b><span>${truck.loadLevel}%</span></p></div>`}
     ${driverAssignmentControl(truck)}
     ${progress(truck.progress)}<p><strong>${truck.progress}%</strong> completado${demoNotice ? ` · ${demoNotice}` : ''}</p>
     <h3>Incidencias</h3>${relatedIncidents.length ? relatedIncidents.map((incident) => `<button class="incident-row" data-incident="${incident.code}">${incident.type} · ${incident.priority}</button>`).join('') : '<p>Sin incidencias demo asociadas.</p>'}
-    <div class="actions"><button data-route="${truck.routeId ?? ''}">Ver ruta completa</button><button data-history="${truck.id}">Ver historial demo</button></div>`;
+    <div class="actions"><button data-route="${truck.routeId ?? ''}">Ver ruta completa</button>${HIDE_DEMO ? '' : `<button data-history="${truck.id}">Ver historial demo</button>`}</div>`;
 }
 
 function renderRouteDetail(route) {
@@ -650,7 +660,7 @@ function renderRouteDetail(route) {
     <h3>Timeline operativo</h3><div class="timeline">${routeFlow.map((step) => `<p>${step === route.status ? '●' : '○'} ${label(step)}</p>`).join('')}</div>
     ${reoptimizationPreview}`;
 }
-function renderIncidentDetail(incident) { return `<div class="drawer-head"><p class="eyebrow">Incidencia operativa demo</p><h2>${incident.type}</h2>${pill('open')}</div><p><b>Folio:</b> ${incident.id}</p><p><b>Sector:</b> ${incident.sector}</p><p><b>Prioridad:</b> ${incident.priority}</p><p><b>Estado:</b> ${incident.status}</p><p>${incident.detail}</p><p class="demo">${demoNotice}</p>`; }
+function renderIncidentDetail(incident) { return `<div class="drawer-head"><p class="eyebrow">${HIDE_DEMO ? 'Incidencia operativa' : 'Incidencia operativa demo'}</p><h2>${incident.type}</h2>${pill('open')}</div><p><b>Folio:</b> ${incident.id}</p><p><b>Sector:</b> ${incident.sector}</p><p><b>Prioridad:</b> ${incident.priority}</p><p><b>Estado:</b> ${incident.status}</p><p>${incident.detail}</p><p class="demo">${demoNotice}</p>`; }
 
 // SW-054: "+ Nueva ruta" used to be the last thing in this panel, collapsed below the entire route
 // list — the Project Owner reported it was "muy difícil de encontrar". Moved above the list, same
@@ -660,7 +670,7 @@ function renderIncidentDetail(incident) { return `<div class="drawer-head"><p cl
 // block in the app.
 function renderRutasPanel() {
   return `<div class="sw-rutas" id="rutasView">
-    <div class="sw-rutas__head"><div><h2>Rutas</h2><p class="sw-rutas__sub" id="routesHeaderText">${escapeHtmlText(routesHeaderLine())}</p><p class="demo sw-rutas__demo">${demoPrefix}Municipio piloto configurable: ${pilotMunicipality.name}, ${pilotMunicipality.country}</p></div>
+    <div class="sw-rutas__head"><div><h2>Rutas</h2><p class="sw-rutas__sub" id="routesHeaderText">${escapeHtmlText(routesHeaderLine())}</p>${HIDE_DEMO ? '' : `<p class="demo sw-rutas__demo">${demoPrefix}Municipio piloto configurable: ${pilotMunicipality.name}, ${pilotMunicipality.country}</p>`}</div>
       <button type="button" class="sw-rutas__new" data-route-new><span aria-hidden="true">+</span> Nueva ruta</button></div>
     <div class="sw-rutas__body">
       <div class="sw-rutas__main"><div id="routesChips">${renderRoutesChips()}</div><div class="sw-routes" id="routeList">${renderRoutes(routes)}</div></div>
@@ -1567,14 +1577,18 @@ function citizenLiveConfig() {
   const cfg = readSupabaseConfig();
   return cfg?.url && cfg?.anonKey && cfg?.municipality_id ? cfg : null;
 }
-function renderCitizen() { return `<section id="ciudadania" class="section card sw-citizen"><div id="citizenLiveRoot">${citizenLiveConfig() ? '' : renderCitizenLiveDemo()}</div><div class="sw-citizen__info"><div><h3>Consulta de recogida</h3><select id="citizenSector">${sectors.map((s) => `<option value="${s.id}">${s.name}</option>`).join('')}</select><p id="pickupResult"></p></div><div><h3>Avisos municipales</h3>${notifications.map((n) => `<div class="row">🔔 ${n}</div>`).join('')}</div></div><p class="demo">${demoNotice}</p></section>`; }
+function renderCitizen() {
+  // SW-112: en producción Ciudadanía es el mapa en vivo con el calendario real de rutas; sin consulta ni avisos de demostración.
+  const info = HIDE_DEMO ? '' : `<div class="sw-citizen__info"><div><h3>Consulta de recogida</h3><select id="citizenSector">${sectors.map((s) => `<option value="${s.id}">${s.name}</option>`).join('')}</select><p id="pickupResult"></p></div><div><h3>Avisos municipales</h3>${notifications.map((n) => `<div class="row">🔔 ${n}</div>`).join('')}</div></div><p class="demo">${demoNotice}</p>`;
+  return `<section id="ciudadania" class="section card sw-citizen"><div id="citizenLiveRoot">${citizenLiveConfig() ? '' : renderCitizenLiveDemo()}</div>${info}</section>`;
+}
 // SW-101: formulario de reporte ciudadano y consulta de folio, ahora dentro de Incidencias. Las opciones de sector salen de
 // los sectores reales cuando ya cargaron (el panel se vuelve a pintar tras el login real).
 function incidentSectorOptions() {
   return (realSectors.length ? realSectors : sectors).map((s) => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
 }
 function renderCitizenReportBlock() {
-  return `<div class="sw-incident-intake"><form id="incidentForm"><h3>Reportar incidencia</h3><select name="type"><option>Basura no recogida</option><option>Vertedero improvisado</option></select><select name="sector" id="incidentSector">${incidentSectorOptions()}</select><textarea name="description" aria-label="Descripción demo" placeholder="Descripción demo"></textarea><input id="manualAddress" name="address" aria-label="Dirección manual si no usa GPS" placeholder="Dirección manual si no usa GPS"><button type="button" id="useGeo">Usar ubicación GPS del navegador</button><p id="geoStatus" class="demo">GPS requiere permiso del usuario.</p><input id="evidence" type="file" accept="image/png,image/jpeg,image/webp,application/pdf" aria-label="Adjuntar evidencia demo"><p id="evidencePreview" class="demo">Evidencia local; no upload real verificado.</p><button class="btn-primary">Obtener folio</button><p id="folio"></p></form><div><h3>Consultar estado</h3><input id="folioSearch" value="SW-FOLIO-1001"><button id="checkFolio">Consultar</button><p id="folioStatus"></p><h3>Futura relación</h3><p>Preparado para Chatbot Municipal: preguntas frecuentes, folios y avisos por sector.</p></div></div>`;
+  return `<div class="sw-incident-intake"><form id="incidentForm"><h3>Reportar incidencia</h3><select name="type"><option>Basura no recogida</option><option>Vertedero improvisado</option></select><select name="sector" id="incidentSector">${incidentSectorOptions()}</select><textarea name="description" aria-label="${HIDE_DEMO ? 'Descripción' : 'Descripción demo'}" placeholder="${HIDE_DEMO ? 'Descripción' : 'Descripción demo'}"></textarea><input id="manualAddress" name="address" aria-label="Dirección manual si no usa GPS" placeholder="Dirección manual si no usa GPS"><button type="button" id="useGeo">Usar ubicación GPS del navegador</button><p id="geoStatus" class="demo">GPS requiere permiso del usuario.</p><input id="evidence" type="file" accept="image/png,image/jpeg,image/webp,application/pdf" aria-label="${HIDE_DEMO ? 'Adjuntar evidencia' : 'Adjuntar evidencia demo'}"><p id="evidencePreview" class="demo">Evidencia local; no upload real verificado.</p><button class="btn-primary">Obtener folio</button><p id="folio"></p></form><div><h3>Consultar estado</h3><input id="folioSearch" value="${HIDE_DEMO ? '' : 'SW-FOLIO-1001'}" placeholder="${HIDE_DEMO ? 'Folio' : ''}"><button id="checkFolio">Consultar</button><p id="folioStatus"></p>${HIDE_DEMO ? '' : '<h3>Futura relación</h3><p>Preparado para Chatbot Municipal: preguntas frecuentes, folios y avisos por sector.</p>'}</div></div>`;
 }
 
 const money = (value) => `RD$ ${Number(value).toLocaleString('es-DO', { maximumFractionDigits: 0 })}`;
@@ -1688,6 +1702,8 @@ function renderEnvironmentalImpact(environmental) {
   return `<p><b>${num(environmental.estimatedKg, ' kg')}</b> de residuos recolectados (estimado).</p>${co2}<p class="demo">Supuestos: ${environmental.assumptions.kgPerStop} kg por casa · ${environmental.assumptions.co2KgPerLiter} kg de CO2 por litro. ${environmental.notice}</p>`;
 }
 function renderImpactCenter(assumptions = defaultImpactAssumptions, filters = {}) {
+  // SW-112: el Centro de Impacto se calcula con supuestos y datos de demostración; en producción no se muestra hasta que se alimente solo de corridas reales.
+  if (HIDE_DEMO) return '<section id="impacto" class="section impact-center card"><h2>Impacto y Ahorros</h2><p>Esta pantalla se activa cuando haya corridas reales suficientes. Mientras tanto, la distancia, el combustible y el CO2 de cada corrida están en Operaciones · Métricas.</p><p><a href="#operaciones/estadisticas">Ir a Métricas</a></p></section>';
   const metrics = calculateImpactMetrics(assumptions, filters, impactRealData);
   return `<section id="impacto" class="section impact-center card">
     <div class="impact-hero"><div><p class="eyebrow">Centro de Impacto Operacional</p><h2>Impacto y Ahorros</h2><p class="impact-notice">${IMPACT_DEMO_NOTICE}</p></div><div><strong>Ahorro potencial estimado mensual</strong><b>${money(metrics.economics.monthlyPotentialAvoided)}</b><span>Proyección anual demo: ${money(metrics.economics.annualProjectionDemo)}</span></div></div>
@@ -1762,7 +1778,11 @@ function renderMasterCostParametersSection() {
   if (!masterRealMunicipalities.length) return '<p class="demo" id="masterCostParametersEmpty">Sin municipios reales para editar todavía — conectate con una sesión real o espera a que se onboarde uno.</p>';
   return masterRealMunicipalities.map((m) => `<article class="card"><h3>${escapeHtml(m.name)}</h3><details class="cost-parameters-toggle" data-cost-parameters-toggle="${m.id}"><summary>Parámetros de costo (Impacto y Ahorros)</summary><div class="cost-parameters-form" data-cost-parameters-form="${m.id}"><p class="demo">Cargando…</p></div></details></article>`).join('');
 }
-function renderMaster() { return `<section id="master" class="section card"><h2>Master Admin MT IT Services</h2><p class="demo">${demoNotice}</p><div class="panel-grid">${municipalities.map((m) => `<article class="card"><h3>${m.name}</h3><p>Plan: ${m.plan}</p><p>Camiones: ${m.trucks} · Rutas: ${m.routes} · Usuarios: ${m.users}</p>${pill(m.status.toLowerCase().includes('operativo') ? 'active' : 'assigned')}<button class="btn-primary" data-onboarding="${m.id}">Onboarding demo</button><p class="demo" data-onboarding-status="${m.id}"></p></article>`).join('')}</div><h3>Parámetros de costo por municipio real</h3><div class="panel-grid" id="masterCostParametersSection">${renderMasterCostParametersSection()}</div><h3>Arquitectura futura</h3><p>${pilotMunicipality.integrationsReady.join(' · ')}</p></section>`; }
+function renderMaster() {
+  // SW-112: en producción solo se listan los municipios reales (parámetros de costo); sin tarjetas de demostración ni "arquitectura futura".
+  if (HIDE_DEMO) return `<section id="master" class="section card"><h2>Master Admin MT IT Services</h2><h3>Parámetros de costo por municipio real</h3><div class="panel-grid" id="masterCostParametersSection">${renderMasterCostParametersSection()}</div></section>`;
+  return `<section id="master" class="section card"><h2>Master Admin MT IT Services</h2><p class="demo">${demoNotice}</p><div class="panel-grid">${municipalities.map((m) => `<article class="card"><h3>${m.name}</h3><p>Plan: ${m.plan}</p><p>Camiones: ${m.trucks} · Rutas: ${m.routes} · Usuarios: ${m.users}</p>${pill(m.status.toLowerCase().includes('operativo') ? 'active' : 'assigned')}<button class="btn-primary" data-onboarding="${m.id}">Onboarding demo</button><p class="demo" data-onboarding-status="${m.id}"></p></article>`).join('')}</div><h3>Parámetros de costo por municipio real</h3><div class="panel-grid" id="masterCostParametersSection">${renderMasterCostParametersSection()}</div><h3>Arquitectura futura</h3><p>${pilotMunicipality.integrationsReady.join(' · ')}</p></section>`;
+}
 
 // SW-049 (roadmap SW-048's opción E, evaluada y confirmada con el Project Owner): preferencia de
 // operador, no un dato del municipio — se guarda en localStorage del navegador, no en Supabase, así
@@ -2964,8 +2984,8 @@ document.addEventListener('toggle', (event) => {
 }, true);
 $('#search')?.addEventListener('input', (event) => { const term = event.target.value.toLowerCase(); $('#routeList').innerHTML = renderRoutes(routes.filter((route) => JSON.stringify(route).toLowerCase().includes(term))); });
 $('#sectorFilter')?.addEventListener('change', (event) => { $('#routeList').innerHTML = renderRoutes(routes.filter((route) => !event.target.value || route.sectors.includes(event.target.value))); });
-$('#citizenSector').addEventListener('change', (event) => { const service = findSectorService(event.target.value); $('#pickupResult').textContent = service ? `${service.pickupDay} · Estado: ${service.status}` : 'Sector demo no encontrado'; });
-$('#citizenSector').dispatchEvent(new Event('change'));
+$('#citizenSector')?.addEventListener('change', (event) => { const service = findSectorService(event.target.value); $('#pickupResult').textContent = service ? `${service.pickupDay} · Estado: ${service.status}` : 'Sector demo no encontrado'; });
+$('#citizenSector')?.dispatchEvent(new Event('change'));
 // SW-039: real submission when a municipality-specific deployment is configured
 // (SMARTWASTE_SUPABASE_CONFIG.municipality_id — see frontend/auth-gate.js's readSupabaseConfig()),
 // demo folio otherwise (rule 5 — never breaks the approved demo when no real backend is set).

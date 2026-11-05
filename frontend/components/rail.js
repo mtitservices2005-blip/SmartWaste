@@ -46,7 +46,7 @@ export function renderRail({ hash = '', hideDemo = false } = {}) {
   const active = activeHref(hash);
   const cur = (href) => (href === active ? ' aria-current="page"' : '');
   const opsLinks = OPS_ITEMS.map((i) => `<a class="sw-rail__link" href="${i.href}" aria-label="${escapeHtml(i.label)}" title="${escapeHtml(i.label)}"${cur(i.href)}>${svg(ICONS[i.icon])}</a>`).join('');
-  const moreLinks = MORE_ITEMS.map((i) => `<a class="sw-rail__morelink" href="${i.href}"${cur(i.href)}>${escapeHtml(i.label)}</a>`).join('');
+  const moreLinks = MORE_ITEMS.filter((i) => !(hideDemo && i.href === '#impacto')).map((i) => `<a class="sw-rail__morelink" href="${i.href}"${cur(i.href)}>${escapeHtml(i.label)}</a>`).join('');
   const demo = hideDemo ? '' : '<span class="sw-rail__demo" title="Datos demo · no producción">DEMO</span>';
   return `<header class="topbar sw-rail" id="swRail">`
     + `<a class="sw-rail__brand" href="#operaciones/mapa" aria-label="SmartWaste, centro de control">SW</a>${demo}`
