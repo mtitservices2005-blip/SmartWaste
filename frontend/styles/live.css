@@ -70,3 +70,34 @@
 /* SW-103: live.css se carga después de styles.css; un display propio no puede ganarle a .hidden / [hidden]. */
 .sw-citizen.hidden { display: none; }
 .sw-citizen__live[hidden], #liveCalendarWrap[hidden], .sw-citizen__info[hidden] { display: none; }
+
+/* SW-110: selector único de camiones y pantalla completa sobre el mapa. */
+.live-panel[hidden] { display: none; }
+/* La bandera de atribución de Leaflet es un SVG: la regla `.live-map svg` la estiraba al tamaño del mapa. */
+.live-map .leaflet-attribution-flag { width: 1em; height: .6669em; display: inline !important; vertical-align: baseline !important; }
+.live-controls-host { position: absolute; inset: 0; z-index: 1100; pointer-events: none; }
+.live-controls { position: absolute; inset: var(--space-3) var(--space-3) auto var(--space-3); display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-2); }
+.live-controls > * { pointer-events: auto; }
+.live-picker { min-width: 0; max-width: calc(100% - 56px); }
+.live-picker__btn, .live-fs { display: inline-flex; align-items: center; gap: var(--space-2); max-width: 100%; padding: var(--space-2) var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-2); background: var(--color-surface); color: var(--color-text); font: inherit; font-weight: 700; cursor: pointer; box-shadow: 0 1px 6px rgba(0,0,0,.3); }
+.live-picker__icon { display: inline-flex; color: var(--color-primary); }
+.live-picker__label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-picker__count { color: var(--color-muted); font-weight: 500; }
+.live-fs { justify-content: center; width: 42px; height: 42px; padding: 0; font-size: 1.2rem; }
+.live-picker__btn:focus-visible, .live-fs:focus-visible, .live-picker__opt:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.live-picker__menu { margin-top: var(--space-2); width: min(320px, calc(100vw - 80px)); max-height: 60vh; overflow-y: auto; border: 1px solid var(--color-border); border-radius: var(--radius-2); background: var(--color-surface); box-shadow: 0 6px 18px rgba(0,0,0,.35); }
+.live-picker__menu[hidden] { display: none; }
+.live-picker__opt { display: flex; align-items: center; gap: var(--space-3); width: 100%; padding: var(--space-3); border: 0; border-bottom: 1px solid var(--color-border); background: none; color: var(--color-text); font: inherit; text-align: left; cursor: pointer; }
+.live-picker__opt b, .live-picker__opt small { display: block; }
+.live-picker__opt small { color: var(--color-muted); font-size: var(--font-size-1); }
+.live-picker__opt:hover { background: var(--color-background-alt); }
+.live-picker__opt.is-on { background: var(--color-background-alt); box-shadow: inset 3px 0 0 var(--color-primary); }
+.live-picker__dot { flex: none; width: 11px; height: 11px; border-radius: 50%; background: var(--status-en-ruta); }
+.live-picker__dot--all { background: var(--color-primary); }
+.live-picker__dot--detenido { background: var(--status-detenido); }
+.live-picker__dot--sin_senal { background: var(--status-sin-senal); }
+.live-picker__foot { padding: var(--space-3); background: var(--color-background-alt); }
+/* Pantalla completa del mapa (también dentro de Ciudadanía). */
+.live-map.is-full { position: fixed; inset: 0; z-index: 2000; height: auto; min-height: 0; border-radius: 0; }
+.live-fullscreen { overflow: hidden; }
+.live-map.is-full .live-controls { inset: calc(var(--space-3) + env(safe-area-inset-top, 0px)) calc(var(--space-3) + env(safe-area-inset-right, 0px)) auto calc(var(--space-3) + env(safe-area-inset-left, 0px)); }

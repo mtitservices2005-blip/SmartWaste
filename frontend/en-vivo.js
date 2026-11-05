@@ -2,7 +2,8 @@
 import { normalizeLiveFleet, describeVehicleStatus } from '../shared/live-fleet.js';
 import { pollLiveFleet } from '../shared/live-fleet-poll.js';
 import { normalizeRouteSchedule, buildWeekCalendar, describeNextDeparture } from '../shared/route-calendar.js';
-import { renderLiveHeader, renderCitizenHead, renderRouteCalendar, renderNextDeparture, renderLiveVehicleList, renderLiveEmpty, renderLiveError, renderLiveNoMunicipality, renderLiveMarker, renderLiveIconPicker, LIVE_ICONS } from './components/live-map.js';
+import { renderLiveHeader, renderCitizenHead, renderRouteCalendar, renderNextDeparture, renderLiveEmpty, renderLiveError, renderLiveNoMunicipality, renderLiveMarker, LIVE_ICONS } from './components/live-map.js';
+import { createLiveControls } from './live-controls.js';
 
 const ICON_KEY = 'smartwaste-live-icon';
 const FOCUS_ZOOM = 16;
@@ -21,11 +22,13 @@ export function mountLiveMap({ root, win = globalThis, fetchFleet, fetchSchedule
     return { stop() {} };
   }
   root.innerHTML = section
-    ? '<div class="sw-citizen__live"><div id="liveHeader"></div><div class="sw-citizen__stage"><div class="live-map"><div id="liveMapCanvas" class="live-map__canvas"></div></div><div id="livePanel" class="live-panel"></div></div><div id="liveCalendarWrap" hidden><h3>Calendario de rutas</h3><div id="liveCalendar"></div></div></div>'
-    : '<div class="live-shell"><div id="liveHeader"></div><div class="live-body"><div class="live-map"><div id="liveMapCanvas" class="live-map__canvas"></div></div><div id="livePanel" class="live-panel"></div></div></div>';
+    ? '<div class="sw-citizen__live"><div id="liveHeader"></div><div class="sw-citizen__stage"><div class="live-map"><div id="liveMapCanvas" class="live-map__canvas"></div><div id="liveControls" class="live-controls-host"></div></div><div id="livePanel" class="live-panel"></div></div><div id="liveCalendarWrap" hidden><h3>Calendario de rutas</h3><div id="liveCalendar"></div></div></div>'
+    : '<div class="live-shell"><div id="liveHeader"></div><div class="live-body"><div class="live-map"><div id="liveMapCanvas" class="live-map__canvas"></div><div id="liveControls" class="live-controls-host"></div></div><div id="livePanel" class="live-panel"></div></div></div>';
   const $header = root.querySelector('#liveHeader');
   const $panel = root.querySelector('#livePanel');
   const $canvas = root.querySelector('#liveMapCanvas');
+  const $controls = root.querySelector('#liveControls');
+  const $mapBox = root.querySelector('.live-map');
   const $calWrap = root.querySelector('#liveCalendarWrap');
   const $cal = root.querySelector('#liveCalendar');
   let schedule = null;
@@ -39,6 +42,7 @@ export function mountLiveMap({ root, win = globalThis, fetchFleet, fetchSchedule
   let lastOkMs = null;
   let stopped = false;
   let userMoved = false;
+  let fullscreen = false;
   let framed = false;
   let L = null; let map = null;
   const markers = new Map(); const lines = new Map();
@@ -63,22 +67,31 @@ export function mountLiveMap({ root, win = globalThis, fetchFleet, fetchSchedule
     if (!stopped) { renderPanel(); renderCalendar(); }
   }
 
-  function renderPanel() {
+  function renderControls() {
     const t = now();
     const vehicles = (fleet?.vehicles ?? []).map((v) => ({ ...v, statusText: describeVehicleStatus(v, t) }));
+    controls.render({ vehicles, selectedCode: selected, icon, fullscreen });
+  }
+
+  function renderPanel() {
+    const t = now();
+    const vehicles = fleet?.vehicles ?? [];
     let body = '';
     if (hasError) body += renderLiveError({ hasData: vehicles.length > 0 });
     if (fleet && !vehicles.length) body += renderNextDeparture(schedule?.length ? describeNextDeparture(schedule, t) : '') + renderLiveEmpty();
-    else if (vehicles.length) body += renderLiveVehicleList({ vehicles, selectedCode: selected });
-    $panel.innerHTML = renderLiveIconPicker({ selected: icon }) + body;
+    // SW-110: la lista de camiones ya no vive en el panel; el selector está sobre el mapa. El panel solo muestra avisos.
+    $panel.innerHTML = body;
+    $panel.hidden = !body;
     // Sin camiones no hay nada que dibujar: se oculta el cuadro del mapa y el panel ocupa todo el ancho.
     $panel.parentElement?.classList?.toggle('is-empty', !vehicles.length);
+    renderControls();
   }
 
   function drawMap() {
     if (!L || !map || !fleet) return;
     const seen = new Set();
     for (const v of fleet.vehicles) {
+      if (selected && v.code !== selected) continue; // SW-110: con un camión elegido solo se dibuja ese
       seen.add(v.code);
       const html = renderLiveMarker({ icon, status: v.status });
       const divIcon = L.divIcon({ html, className: 'live-marker-wrap', iconSize: [34, 34], iconAnchor: [17, 17] });
@@ -101,8 +114,7 @@ export function mountLiveMap({ root, win = globalThis, fetchFleet, fetchSchedule
     if (!vs.length) return;
     if (!framed) {
       framed = true;
-      if (vs.length === 1) map.setView([vs[0].lat, vs[0].lng], FOCUS_ZOOM);
-      else map.fitBounds(L.latLngBounds(vs.map((v) => [v.lat, v.lng])), { padding: [40, 40], maxZoom: FOCUS_ZOOM });
+      fitAll();
       return;
     }
     const sel = vs.find((v) => v.code === selected);
@@ -110,24 +122,39 @@ export function mountLiveMap({ root, win = globalThis, fetchFleet, fetchSchedule
   }
 
   function select(code) {
-    selected = code; userMoved = false;
-    const v = fleet?.vehicles.find((x) => x.code === code);
+    selected = code || null; userMoved = false;
+    drawMap();
+    const v = selected ? fleet?.vehicles.find((x) => x.code === selected) : null;
     if (v && map) map.setView([v.lat, v.lng], Math.max(map.getZoom?.() ?? 0, FOCUS_ZOOM));
+    else if (!selected && map && fleet?.vehicles.length) fitAll();
     renderPanel();
   }
 
-  const onClick = (e) => {
-    const iconBtn = e.target?.closest?.('[data-live-icon]');
-    if (iconBtn) {
-      icon = iconBtn.getAttribute('data-live-icon');
-      try { win.localStorage?.setItem(ICON_KEY, icon); } catch { /* sin almacenamiento */ }
-      renderPanel(); drawMap();
-      return;
-    }
-    const card = e.target?.closest?.('[data-live-vehicle]');
-    if (card) select(card.getAttribute('data-live-vehicle'));
-  };
-  root.addEventListener('click', onClick);
+  function fitAll() {
+    const vs = fleet.vehicles;
+    if (vs.length === 1) map.setView([vs[0].lat, vs[0].lng], FOCUS_ZOOM);
+    else map.fitBounds(L.latLngBounds(vs.map((v) => [v.lat, v.lng])), { padding: [40, 40], maxZoom: FOCUS_ZOOM });
+  }
+
+  function setIcon(next) {
+    if (!LIVE_ICONS.some((i) => i.id === next)) return;
+    icon = next;
+    try { win.localStorage?.setItem(ICON_KEY, icon); } catch { /* sin almacenamiento */ }
+    renderControls(); drawMap();
+  }
+
+  // Pantalla completa con CSS (funciona igual en celulares y dentro de Ciudadanía); Esc o ✕ para salir.
+  function toggleFullscreen() {
+    fullscreen = !fullscreen;
+    $mapBox.classList.toggle('is-full', fullscreen);
+    win.document?.body?.classList?.toggle('live-fullscreen', fullscreen);
+    renderControls();
+    win.setTimeout(() => { try { map?.invalidateSize(); } catch { /* mapa liberado */ } }, 50);
+  }
+  const onKeyFull = (e) => { if (e.key === 'Escape' && fullscreen) toggleFullscreen(); };
+  win.document?.addEventListener?.('keydown', onKeyFull);
+
+  const controls = createLiveControls({ host: $controls, doc: win.document, onSelect: select, onIcon: setIcon, onFullscreen: toggleFullscreen });
 
   renderHeader(); renderPanel();
   let ticks = 0;
@@ -141,7 +168,8 @@ export function mountLiveMap({ root, win = globalThis, fetchFleet, fetchSchedule
     Promise.resolve(loadLeaflet()).then((Lib) => {
       if (stopped) return;
       L = Lib;
-      map = L.map($canvas, { zoomControl: true, attributionControl: true }).setView([fleet.vehicles[0].lat, fleet.vehicles[0].lng], FOCUS_ZOOM);
+      map = L.map($canvas, { zoomControl: false, attributionControl: true }).setView([fleet.vehicles[0].lat, fleet.vehicles[0].lng], FOCUS_ZOOM);
+      L.control.zoom({ position: 'bottomright' }).addTo(map); // el selector ocupa la esquina superior izquierda
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
       map.on('dragstart', () => { userMoved = true; });
       drawMap();
@@ -156,7 +184,7 @@ export function mountLiveMap({ root, win = globalThis, fetchFleet, fetchSchedule
       fleet = normalizeLiveFleet(payload, now());
       hasError = false; lastOkMs = now();
       if (!fleet.municipality) { root.innerHTML = `<div class="live-shell">${renderLiveNoMunicipality()}</div>`; return; }
-      if (selected === null && fleet.vehicles.length === 1) selected = fleet.vehicles[0].code;
+      if (selected && !fleet.vehicles.some((v) => v.code === selected)) selected = null; // el camión elegido terminó su ruta
       renderHeader(); renderPanel(); renderCalendar(); ensureMap(); drawMap();
       loadSchedule();
     },
@@ -168,7 +196,9 @@ export function mountLiveMap({ root, win = globalThis, fetchFleet, fetchSchedule
       stopped = true;
       poller.stop();
       win.clearInterval(tick);
-      root.removeEventListener?.('click', onClick);
+      controls.destroy();
+      win.document?.removeEventListener?.('keydown', onKeyFull);
+      win.document?.body?.classList?.remove('live-fullscreen');
       try { map?.remove(); } catch { /* ya liberado */ }
     }
   };

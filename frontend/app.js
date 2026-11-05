@@ -2,8 +2,10 @@ import { demoNotice as rawDemoNotice, simulationNotice as rawSimulationNotice, p
 import { operationsAdapter, resolveOperationsAdapter } from '../shared/operations-adapter.js';
 import { DeviceSimulator, createDemoPositionHistory, createTelemetryIngestionAdapter } from '../shared/telemetry-simulator.js';
 import { validateEvidenceFile } from '../shared/channel-contracts.js';
-import { renderCitizenLiveDemo } from './components/live-map.js';
+import { renderCitizenLiveDemo, renderLiveMarker, LIVE_ICONS } from './components/live-map.js';
 import { mountLiveMap, createLiveFetchers } from './en-vivo.js';
+import { createLiveControls } from './live-controls.js';
+import { normalizeLiveFleet, describeVehicleStatus } from '../shared/live-fleet.js';
 import { createDemoFolio, findSectorService, findIncidentStatus, submitCitizenReport, fetchRealSectors } from '../shared/citizen-portal.js';
 import { generateRouteStopPoints, deriveStopStatus, haversineMeters, splitIntoTrips } from '../shared/route-engine.js';
 import { fetchRoadRoute } from '../shared/osrm-routing.js';
@@ -1796,10 +1798,64 @@ function loadLeaflet() {
   }).catch((error) => { leafletLoadPromise = null; throw error; }); // allow a retry later instead of caching a permanent failure
   return leafletLoadPromise;
 }
+// SW-110: Operaciones · Mapa muestra la misma flota en vivo que ve el público (RPC public_live_fleet) y su selector.
+// Con un camión elegido solo se ve ese camión, su recorrido y su ruta planificada; "todos" encuadra la flota.
+const LIVE_ICON_KEY = 'smartwaste-live-icon';
+let liveFleet = null;
+let liveSelectedCode = null;
+let liveFitPending = true;
+let liveFocusCode = null;
+let liveMarkers = [];
+let liveControls = null;
+let liveIcon = 'compactador';
+try { const saved = window.localStorage?.getItem(LIVE_ICON_KEY); if (LIVE_ICONS.some((i) => i.id === saved)) liveIcon = saved; } catch { /* sin almacenamiento */ }
+function liveVehicleRows() {
+  const now = Date.now();
+  return (liveFleet?.vehicles ?? []).map((v) => ({ ...v, statusText: describeVehicleStatus(v, now) }));
+}
+function renderLiveControlsAdmin() {
+  if (!liveControls) return;
+  liveControls.render({ vehicles: liveVehicleRows(), selectedCode: liveSelectedCode, icon: liveIcon, fullscreen: Boolean(document.fullscreenElement) });
+}
+async function refreshLiveFleet() {
+  const cfg = citizenLiveConfig();
+  if (!cfg) return;
+  try {
+    const payload = await createLiveFetchers({ cfg, municipalityId: cfg.municipality_id }).fetchFleet();
+    liveFleet = normalizeLiveFleet(payload, Date.now());
+    if (liveSelectedCode && !liveFleet.vehicles.some((v) => v.code === liveSelectedCode)) liveSelectedCode = null; // terminó su ruta
+  } catch { /* se conserva la última flota conocida */ }
+  renderLiveControlsAdmin();
+}
+function selectLiveVehicle(code) {
+  liveFocusCode = null;
+  if (!code) { liveSelectedCode = null; liveFitPending = true; closeDetail(); return; }
+  const truck = trucks.find((item) => item.unit === code);
+  if (truck) { selectTruck(truck.id); return; } // abre el detalle del camión y fija liveSelectedCode
+  liveSelectedCode = code; drawMapLayers(); renderLiveControlsAdmin();
+}
+function setLiveIcon(next) {
+  if (!LIVE_ICONS.some((i) => i.id === next)) return;
+  liveIcon = next;
+  try { window.localStorage?.setItem(LIVE_ICON_KEY, liveIcon); } catch { /* sin almacenamiento */ }
+  drawMapLayers(); renderLiveControlsAdmin();
+}
+// Se monta una sola vez, cuando Leaflet ya creó el mapa: el selector vive dentro de #realMap y por eso también se ve en pantalla completa.
+function mountLiveControlsAdmin() {
+  if (liveControls || !citizenLiveConfig()) return;
+  const host = document.createElement('div');
+  host.className = 'live-controls-host';
+  $('#realMap')?.append(host);
+  liveControls = createLiveControls({ host, onSelect: selectLiveVehicle, onIcon: setLiveIcon, onFullscreen: toggleMapFullscreen });
+  renderLiveControlsAdmin();
+}
 function initMap() {
   loadLeaflet().then((L) => {
     mapReady = true;
-    map = L.map('realMap', { zoomControl: true }).setView(pilotMunicipality.center, pilotMunicipality.zoom);
+    const liveUi = Boolean(citizenLiveConfig());
+    map = L.map('realMap', { zoomControl: !liveUi }).setView(pilotMunicipality.center, pilotMunicipality.zoom);
+    if (liveUi) L.control.zoom({ position: 'bottomright' }).addTo(map); // el selector ocupa la esquina superior izquierda
+    mountLiveControlsAdmin();
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
     drawMapLayers(L);
   }).catch(() => $('#realMap').classList.add('fallback-active'));
@@ -1812,10 +1868,15 @@ function drawMapLayers(L = window.L) {
   refreshControlCenter(); // SW-084: la lista de flota y los indicadores siguen el mismo ritmo que el mapa
   const colorPrimary = themeColor('--color-primary', '#0f7b4f'); const colorInfo = themeColor('--color-info', '#155eef');
   if (!mapReady) return;
-  [...routeLayers, ...truckMarkers, ...incidentMarkers].forEach((layer) => layer.remove()); routeLayers = []; truckMarkers = []; incidentMarkers = [];
+  [...routeLayers, ...truckMarkers, ...incidentMarkers, ...liveMarkers].forEach((layer) => layer.remove()); routeLayers = []; truckMarkers = []; incidentMarkers = []; liveMarkers = [];
   const focusRoute = selectedRouteId ? routeById(selectedRouteId) : null;
-  const visibleRoutes = focusRoute ? [focusRoute] : routes;
-  const visibleTrucks = focusRoute ? trucks.filter((truck) => truck.routeId === focusRoute.id) : trucks;
+  const liveVisible = (liveFleet?.vehicles ?? []).filter((v) => !liveSelectedCode || v.code === liveSelectedCode);
+  const liveRoute = !focusRoute && liveSelectedCode ? routes.find((r) => r.name === liveVisible[0]?.routeName) : null;
+  const visibleRoutes = focusRoute ? [focusRoute] : (liveRoute ? [liveRoute] : routes);
+  // SW-110: el camión con posición en vivo se dibuja con el marcador público; con uno elegido se ocultan los demás.
+  const liveCodes = new Set((liveFleet?.vehicles ?? []).map((v) => v.code));
+  const baseTrucks = focusRoute ? trucks.filter((truck) => truck.routeId === focusRoute.id) : trucks;
+  const visibleTrucks = liveSelectedCode ? [] : baseTrucks.filter((truck) => !liveCodes.has(truck.unit));
   const visibleIncidents = focusRoute ? incidents.filter((incident) => focusRoute.incidents.includes(incident.code)) : incidents;
   visibleRoutes.forEach((route) => {
     const path = routeGeometry(route.id); const cut = Math.max(1, Math.round((path.length - 1) * (route.progress / 100)));
@@ -1837,6 +1898,20 @@ function drawMapLayers(L = window.L) {
     truckMarkers.push(marker);
     if (focusRoute) focusTruckPosition = markerPosition;
   });
+  liveVisible.forEach((v) => {
+    const statusColor = v.status === 'detenido' ? themeColor('--status-detenido', '#c0392b') : themeColor('--status-en-ruta', '#1d9b5f');
+    if (v.path.length > 1) liveMarkers.push(L.polyline(v.path, { color: statusColor, weight: 4, opacity: .85 }).addTo(map));
+    const divIcon = L.divIcon({ html: renderLiveMarker({ icon: liveIcon, status: v.status }), className: 'live-marker-wrap', iconSize: [34, 34], iconAnchor: [17, 17] });
+    liveMarkers.push(L.marker([v.lat, v.lng], { icon: divIcon }).addTo(map).on('click', () => selectLiveVehicle(v.code)));
+  });
+  if (liveSelectedCode && liveVisible[0]) {
+    const at = [liveVisible[0].lat, liveVisible[0].lng];
+    if (liveFocusCode !== liveSelectedCode) { map.setView(at, Math.max(map.getZoom?.() ?? 0, 16)); liveFocusCode = liveSelectedCode; } else map.panTo(at, { animate: true });
+  } else if (liveFitPending && !focusRoute && liveVisible.length) {
+    liveFitPending = false;
+    if (liveVisible.length === 1) map.setView([liveVisible[0].lat, liveVisible[0].lng], 16);
+    else map.fitBounds(L.latLngBounds(liveVisible.map((v) => [v.lat, v.lng])), { padding: [40, 40], maxZoom: 16 });
+  }
   visibleIncidents.forEach((incident) => { incidentMarkers.push(L.marker(incident.position, { icon: L.divIcon({ className: 'leaflet-incident', html: `<span>⚠<small>${incident.type}</small></span>`, iconSize: [90, 34] }) }).addTo(map).on('click', () => selectIncident(incident.code))); });
   // SW-043: keep the truck centered while a single route is focused, instead of re-fitting the
   // whole route's bounds on every redraw (which recenters on the path's static bounding box, not
@@ -1867,6 +1942,7 @@ document.addEventListener('fullscreenchange', () => {
   if (mapReady) requestAnimationFrame(() => map.invalidateSize());
   const button = document.querySelector('[data-sim="fullscreen"]');
   if (button) button.textContent = document.fullscreenElement ? 'Salir de pantalla completa' : 'Pantalla completa';
+  renderLiveControlsAdmin();
 });
 
 function initDriverMap() {
@@ -1963,7 +2039,8 @@ function initDriverPolling() {
 // (Supabase configured and bootstrapRealBackend() resolved) — same guard every other real-adapter
 // call in this file already uses, so this can start unconditionally at module init.
 async function fetchRealPositions() {
-  if (!realAdapter) return;
+  await refreshLiveFleet(); // SW-110: la flota en vivo se pide aunque aún no haya adaptador de datos reales
+  if (!realAdapter) { if (mapReady && liveFleet) drawMapLayers(); return; }
   const result = await realAdapter.listLatestPositions();
   if (result.ok) {
     const next = {};
@@ -2741,9 +2818,9 @@ function markSelection() {
   const mapStartActionEl = $('#mapStartAction');
   if (mapStartActionEl) mapStartActionEl.innerHTML = mapStartAction();
 }
-function closeDetail() { const detail = $('#detail'); document.querySelector('.sw-fleet')?.appendChild(detail); detail.classList.add('is-hidden'); detail.setAttribute('aria-hidden', 'true'); detail.innerHTML = ''; selectedTruckId = null; selectedRouteId = null; selectedIncidentId = null; drawMapLayers(); markSelection(); }
-function selectTruck(id) { selectedTruckId = id; selectedRouteId = null; selectedIncidentId = null; const truck = trucks.find((item) => item.id === id); openDetail(renderTruckDetail(truck)); drawMapLayers(); markSelection(); }
-function selectRoute(id) { if (routeReoptimizationPreview?.routeId !== id) routeReoptimizationPreview = null; selectedRouteId = id; selectedTruckId = null; selectedIncidentId = null; const route = routeById(id); openDetail(renderRouteDetail(route)); drawMapLayers(); markSelection(); refreshRouteDurationHistory(id); }
+function closeDetail() { const detail = $('#detail'); document.querySelector('.sw-fleet')?.appendChild(detail); detail.classList.add('is-hidden'); detail.setAttribute('aria-hidden', 'true'); detail.innerHTML = ''; selectedTruckId = null; selectedRouteId = null; selectedIncidentId = null; if (liveSelectedCode) { liveSelectedCode = null; liveFocusCode = null; liveFitPending = true; } drawMapLayers(); markSelection(); renderLiveControlsAdmin(); }
+function selectTruck(id) { selectedTruckId = id; selectedRouteId = null; selectedIncidentId = null; const truck = trucks.find((item) => item.id === id); liveSelectedCode = liveFleet?.vehicles.some((v) => v.code === truck?.unit) ? truck.unit : null; openDetail(renderTruckDetail(truck)); drawMapLayers(); markSelection(); renderLiveControlsAdmin(); }
+function selectRoute(id) { if (routeReoptimizationPreview?.routeId !== id) routeReoptimizationPreview = null; selectedRouteId = id; selectedTruckId = null; selectedIncidentId = null; liveSelectedCode = null; liveFocusCode = null; const route = routeById(id); openDetail(renderRouteDetail(route)); drawMapLayers(); markSelection(); refreshRouteDurationHistory(id); }
 // SW-044: fills the #routeDurationHistory placeholder renderRouteDetail() leaves for a real/
 // hydrated route — a network read (listRouteRuns()), so it can't run synchronously inside the
 // render itself like the rest of the panel. Fire-and-forget from selectRoute(); a route switch

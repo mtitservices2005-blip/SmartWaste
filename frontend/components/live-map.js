@@ -51,6 +51,17 @@ export function renderLiveIconPicker({ selected } = {}) {
   return `<div class="live-icons" role="group" aria-label="Ícono de los camiones"><div class="live-icons__row">${opts}</div></div>`;
 }
 
+// SW-110: un solo botón desplegable sobre el mapa. Elige "todos" o un camión; el pie del menú trae el ícono.
+// Más el botón de pantalla completa. Mismo HTML en /en-vivo, Ciudadanía y el mapa del panel.
+export function renderLiveControls({ vehicles = [], selectedCode = null, icon, open = false, fullscreen = false } = {}) {
+  const current = vehicles.find((v) => v.code === selectedCode) ?? null;
+  const label = current ? `${esc(current.code)}${current.routeName ? ` · ${esc(current.routeName)}` : ''}` : 'Todos los camiones';
+  const count = current ? '' : `<span class="live-picker__count">(${vehicles.length})</span>`;
+  const all = `<button type="button" class="live-picker__opt${current ? '' : ' is-on'}" data-live-vehicle=""><span class="live-picker__dot live-picker__dot--all"></span><span><b>Ver todos los camiones</b><small>${vehicles.length} ${vehicles.length === 1 ? 'activo' : 'activos'}</small></span></button>`;
+  const rows = vehicles.map((v) => `<button type="button" class="live-picker__opt${v.code === selectedCode ? ' is-on' : ''}" data-live-vehicle="${esc(v.code)}"><span class="live-picker__dot live-picker__dot--${esc(v.status)}"></span><span><b>${esc(v.code)}${v.routeName ? ` · ${esc(v.routeName)}` : ''}</b><small>${esc(v.statusText ?? '')}</small></span></button>`).join('');
+  return `<div class="live-controls"><div class="live-picker"><button type="button" class="live-picker__btn" data-live-picker aria-haspopup="true" aria-expanded="${open}"><span class="live-picker__icon">${renderLiveIconSvg(icon)}</span><span class="live-picker__label">${label}</span>${count}<span aria-hidden="true">▾</span></button><div class="live-picker__menu"${open ? '' : ' hidden'}>${all}${rows}<div class="live-picker__foot">${renderLiveIconPicker({ selected: icon })}</div></div></div><button type="button" class="live-fs" data-live-fullscreen aria-label="${fullscreen ? 'Salir de pantalla completa' : 'Pantalla completa'}" title="${fullscreen ? 'Salir de pantalla completa' : 'Pantalla completa'}">${fullscreen ? '✕' : '⛶'}</button></div>`;
+}
+
 const timeLabel = (t) => { const h = Number(t.slice(0, 2)); return `${h % 12 || 12}:${t.slice(3)} ${h < 12 ? 'a. m.' : 'p. m.'}`; };
 
 // SW-101: calendario semanal de rutas (los días ya vienen calculados por shared/route-calendar.js).
