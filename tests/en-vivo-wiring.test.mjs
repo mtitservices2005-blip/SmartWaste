@@ -60,13 +60,16 @@ const payload = (extra = {}) => ({
   await flush();
   assert.equal(calls, 1); assert.equal(leaflet, 1);
   const panel = () => root.els['#livePanel'].innerHTML;
-  assert.match(panel(), /data-live-vehicle="SW-LS-01"/);
-  assert.match(panel(), /Ruta Norte/);
+  const controls = () => root.els['#liveControls'].innerHTML; // SW-110: la lista de camiones es el selector sobre el mapa
+  assert.match(controls(), /data-live-vehicle="SW-LS-01"/);
+  assert.match(controls(), /Ruta Norte/);
+  assert.equal(panel(), '', 'sin avisos el panel queda vacío');
+  assert.equal(root.els['#livePanel'].hidden, true);
   assert.match(root.els['#liveHeader'].innerHTML, /Laguna Salada/);
   fail = true;
   const [id, t] = [...win.timeouts.entries()][0]; win.timeouts.delete(id); t.fn(); await flush();
   assert.equal(calls, 2);
-  assert.match(panel(), /data-live-vehicle="SW-LS-01"/);
+  assert.match(controls(), /data-live-vehicle="SW-LS-01"/);
   assert.match(panel(), /No pudimos actualizar/);
   h.stop();
   assert.equal(win.timeouts.size, 0); assert.equal(win.intervals.size, 0);
@@ -76,7 +79,7 @@ const payload = (extra = {}) => ({
   const h = mountLiveMap({ root, win, municipalityId: 'uuid-1', loadLeaflet: async () => chain(), fetchFleet: async () => { calls++; return payload(); } });
   await flush();
   assert.equal(calls, 1);
-  assert.match(root.els['#livePanel'].innerHTML, /data-live-vehicle="SW-LS-01"/);
+  assert.match(root.els['#liveControls'].innerHTML, /data-live-vehicle="SW-LS-01"/);
   h.stop();
 }
 { // variante Ciudadanía con calendario y próxima salida (SW-101)
@@ -97,7 +100,7 @@ const payload = (extra = {}) => ({
   const h = mountLiveMap({ root, win, municipalityId: 'uuid-1', variant: 'section', loadLeaflet: async () => chain(),
     fetchFleet: async () => payload(), fetchSchedule: async () => { throw new Error('x'); } });
   await flush();
-  assert.match(root.els['#livePanel'].innerHTML, /data-live-vehicle="SW-LS-01"/);
+  assert.match(root.els['#liveControls'].innerHTML, /data-live-vehicle="SW-LS-01"/);
   assert.equal(root.els['#liveCalendar'].innerHTML, '');
   h.stop();
 }
