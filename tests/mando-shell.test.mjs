@@ -20,6 +20,9 @@ assert.equal(activeHref('#nada'), '#resumen');
 assert.equal(activeHref('#operaciones/otra'), '#operaciones/mapa');
 
 const html = renderRail({ hash: '#operaciones/flota' });
+// SW-111: el logo SW es el «inicio» y lleva al Resumen, no al mapa.
+assert.match(html, /<a class="sw-rail__brand" href="#resumen"/);
+assert.match(renderRail({ hash: '' }), /<a [^>]*href="#resumen"[^>]*aria-current="page"/, 'sin hash el Resumen aparece activo');
 assert.match(html, /^<header class="topbar sw-rail"/, 'conserva la clase .topbar que usan app.js y auth-gate.js');
 for (const i of [...OPS_ITEMS, ...MORE_ITEMS]) assert.ok(html.includes(`href="${i.href}"`), `falta el enlace ${i.href}`);
 // Cada enlace de icono tiene nombre accesible (el icono solo no lo da).

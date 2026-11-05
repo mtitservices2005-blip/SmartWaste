@@ -49,7 +49,7 @@ export function renderRail({ hash = '', hideDemo = false } = {}) {
   const moreLinks = MORE_ITEMS.map((i) => `<a class="sw-rail__morelink" href="${i.href}"${cur(i.href)}>${escapeHtml(i.label)}</a>`).join('');
   const demo = hideDemo ? '' : '<span class="sw-rail__demo" title="Datos demo · no producción">DEMO</span>';
   return `<header class="topbar sw-rail" id="swRail">`
-    + `<a class="sw-rail__brand" href="#operaciones/mapa" aria-label="SmartWaste, centro de control">SW</a>${demo}`
+    + `<a class="sw-rail__brand" href="#resumen" aria-label="SmartWaste, resumen del día">SW</a>${demo}`
     + `<nav class="sw-rail__nav" aria-label="Navegación principal">${opsLinks}`
     + `<button type="button" class="sw-rail__link" id="swMoreBtn" aria-expanded="false" aria-controls="swMore" aria-label="Más secciones" title="Más secciones">${svg(ICONS.mas)}</button></nav>`
     + `<div class="sw-rail__more" id="swMore" hidden>${moreLinks}</div>`
