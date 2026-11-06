@@ -10,7 +10,8 @@ assert.match(renderCitizenLiveDemo(), /modo demo/);
 assert.match(renderCitizenHead({ municipalityName: 'Laguna <Salada>', updatedAgoText: 'hace 6 s' }), /<h2>Camiones en vivo · Laguna &lt;Salada&gt;<\/h2>[\s\S]*hace 6 s/);
 
 const app = readFileSync('frontend/app.js', 'utf8').replace(/\r\n/g, '\n');
-const citizen = app.match(/function renderCitizen\(\) \{ return `([\s\S]*?)`; \}\n/)[1];
+// SW-112: renderCitizen ahora es una función de varias líneas (en producción oculta la consulta y los avisos demo).
+const citizen = app.match(/function renderCitizen\(\) \{\n([\s\S]*?)\n\}\n/)[1];
 assert.match(citizen, /id="citizenLiveRoot"/);
 assert.match(citizen, /Consulta de recogida/);
 assert.match(citizen, /Avisos municipales/);
