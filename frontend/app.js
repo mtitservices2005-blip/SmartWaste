@@ -186,11 +186,12 @@ let impactCostParametersConfigured = false;
 let impactRealData = { operational: null, routeSavings: null, environmental: null };
 const costParametersStore = createDemoCostParametersStore();
 // SW-030 (Codex review, PR #88, P1): real municipalities (real uuid `id`, from the `municipalities`
-// table) Master Admin can edit cost parameters for — see renderMasterCostParametersSection()/
+// table) Master Admin lista — see renderMasterMunicipalities()/
 // hydrateMasterRealMunicipalities() below. Starts empty; only ever populated by a real fetch, never
 // backfilled with the demo municipalities' slugs (those aren't valid municipality_settings.municipality_id
 // values).
 let masterRealMunicipalities = [];
+let masterUsage = {}; // SW-116: consumo por municipio (camiones, rutas, corridas de 30 días)
 // Roadmap item 3 ("GPS real"): the signed-in session's context (user_id/municipality_id, from
 // initAuthGate()/bootstrapRealBackend() below), kept around so the driver GPS button can resolve
 // "my own real vehicle" on demand. driverGpsWatchId is the navigator.geolocation.watchPosition()
@@ -1667,9 +1668,9 @@ const COST_PARAMETER_FIELD_META = [
 // data-cost-param (not id): this form gets rendered more than once at a time (the municipal Economía
 // tab, plus one per municipality in Master Admin) — an id would collide across them. Callers scope
 // reads/writes to one form's own container (see readCostParameterFields()).
-function renderCostParameterFields(values) {
+function renderCostParameterFields(values, keys = null) {
   // SW-114: precio y rendimiento se muestran por galón; se guardan por litro (como todo lo demás).
-  return COST_PARAMETER_FIELD_META.map(({ key, label, step, toDisplay }) => `<label>${label} <input data-cost-param="${key}" type="number" step="${step}" min="0" value="${toDisplay ? Math.round(toDisplay(values[key]) * 100) / 100 : values[key]}"></label>`).join('');
+  return COST_PARAMETER_FIELD_META.filter(({ key }) => !keys || keys.includes(key)).map(({ key, label, step, toDisplay }) => `<label>${label} <input data-cost-param="${key}" type="number" step="${step}" min="0" value="${toDisplay ? Math.round(toDisplay(values[key]) * 100) / 100 : values[key]}"></label>`).join('');
 }
 function readCostParameterFields(container) {
   const values = {};
@@ -1766,31 +1767,23 @@ function renderImpactEconomics(m){return `<h3>Impacto económico estimado</h3><p
 function renderImpactBars(m){return [...m.coverage.bySector.map((s)=>`${s.name} cobertura ${s.coverage}% ${bar(s.coverage)}`),`Cumplimiento rutas ${m.routes.complianceRate}% ${bar(m.routes.complianceRate)}`,`Estado flota activa ${m.fleet.availabilityRate}% ${bar(m.fleet.availabilityRate)}`,`Kilómetros productivos ${m.operation.productiveKm}/${m.operation.distanceKm} ${bar(m.operation.productiveKm,m.operation.distanceKm)}`,`Combustible optimizado ${m.efficiency.fuelSavedLiters} L ${bar(m.efficiency.fuelSavedLiters,3)}`,`Ahorro mensual/anual ${money(m.economics.monthlyPotentialAvoided)} / ${money(m.economics.annualProjectionDemo)} ${bar(m.economics.monthlyPotentialAvoided,m.economics.annualProjectionDemo/6)}`].map(x=>`<p>${x}</p>`).join('')}
 function renderBeforeAfter(m){return `<div class="comparison-table">${m.beforeAfter.map((r)=>`<p><b>${r.label}</b><span>Antes: ${r.before} ${r.unit} · SmartWaste: ${r.after} ${r.unit}</span><small>Diferencia: ${r.absolute} ${r.unit} · variación: ${r.variation}%${r.reduction!==null?` · reducción: ${r.reduction}%`:''}${r.points!==null?` · ${r.points} puntos porcentuales`:''}</small></p>`).join('')}</div>`}
 
-// SW-030: cost-parameter editing for ANY municipality (mt_superadmin only — SECTION_ROLES.master in
-// frontend/auth-gate.js) — collapsed behind <details>, loaded lazily on first open
-// (loadMasterCostParameters() below), same idiom as #createRouteToggle just above. Isolation from
-// the municipal panel is enforced server-side by RLS (has_municipality_role()'s platform-role
-// bypass — see shared/cost-parameters.js's header comment), not by this UI: a municipal_admin
-// session never sees this section at all (role-gated), and even if it somehow reached this markup,
-// the real write would be rejected by tenant_update_staff for any municipality_id that isn't theirs.
-// Codex review (PR #88, P1): this used to render the cost-parameters <details> inside the demo
-// municipality cards above, keyed by shared/demo-data.js's slugs ('laguna-salada-rd', 'mun-norte').
-// In a connected mt_superadmin session those slugs are not real municipality_settings.municipality_id
-// values (that column is a uuid, see supabase/migrations/202607150001_sw007_foundation.sql) — opening
-// the form for either demo card would send a slug to a uuid filter and fail, and any actually
-// onboarded real municipality was never listed at all. Split into its own section, populated from
-// the real `municipalities` table (mt_superadmin already has a read policy on it —
-// 202607150004_sw014_auth_rls_policies.sql's municipalities_member_read) via
-// hydrateMasterRealMunicipalities() below, independent of the demo cards (which keep their
-// slug-keyed onboarding button/stats exactly as before — unrelated concern, unchanged).
-function renderMasterCostParametersSection() {
-  if (!masterRealMunicipalities.length) return '<p class="demo" id="masterCostParametersEmpty">Sin municipios reales para editar todavía — conectate con una sesión real o espera a que se onboarde uno.</p>';
-  return masterRealMunicipalities.map((m) => `<article class="card"><h3>${escapeHtml(m.name)}</h3><details class="cost-parameters-toggle" data-cost-parameters-toggle="${m.id}"><summary>Parámetros de costo (Impacto y Ahorros)</summary><div class="cost-parameters-form" data-cost-parameters-form="${m.id}"><p class="demo">Cargando…</p></div></details></article>`).join('');
+// SW-116: Master Admin (MT IT Services) ve la plataforma: municipios reales, su estado, suscripción y consumo.
+// Los datos y parámetros de cada ayuntamiento (precio del combustible, días operativos, rendimiento de sus camiones)
+// los administra cada ayuntamiento en su propia Configuración. Se lista desde la tabla real `municipalities`
+// (mt_superadmin ya tiene política de lectura) y nunca con los slugs de la demo.
+const MUNICIPALITY_STATUS = { onboarding: 'En instalación', active: 'Activo' };
+function renderMasterMunicipalities() {
+  if (!masterRealMunicipalities.length) return '<p class="demo" id="masterMunicipalitiesEmpty">Sin municipios reales todavía. Aparecerán aquí cuando se instale el primero.</p>';
+  return masterRealMunicipalities.map((m) => {
+    const u = masterUsage[m.id];
+    const usage = u ? `Camiones: ${u.vehicles ?? '—'} · Rutas: ${u.routes ?? '—'} · Corridas completadas (30 días): ${u.runs30 ?? '—'}` : 'Consumo: cargando…';
+    return `<article class="card" data-master-municipality="${escapeHtml(m.id)}"><h3>${escapeHtml(m.name)}</h3><p>${escapeHtml(MUNICIPALITY_STATUS[m.status] ?? m.status ?? 'Sin estado')}</p><p><b>Suscripción:</b> sin plan asignado todavía</p><p><b>Consumo:</b> ${usage}</p></article>`;
+  }).join('');
 }
 function renderMaster() {
   // SW-112: en producción solo se listan los municipios reales (parámetros de costo); sin tarjetas de demostración ni "arquitectura futura".
-  if (HIDE_DEMO) return `<section id="master" class="section card"><h2>Master Admin MT IT Services</h2><h3>Parámetros de costo por municipio real</h3><div class="panel-grid" id="masterCostParametersSection">${renderMasterCostParametersSection()}</div></section>`;
-  return `<section id="master" class="section card"><h2>Master Admin MT IT Services</h2><p class="demo">${demoNotice}</p><div class="panel-grid">${municipalities.map((m) => `<article class="card"><h3>${m.name}</h3><p>Plan: ${m.plan}</p><p>Camiones: ${m.trucks} · Rutas: ${m.routes} · Usuarios: ${m.users}</p>${pill(m.status.toLowerCase().includes('operativo') ? 'active' : 'assigned')}<button class="btn-primary" data-onboarding="${m.id}">Onboarding demo</button><p class="demo" data-onboarding-status="${m.id}"></p></article>`).join('')}</div><h3>Parámetros de costo por municipio real</h3><div class="panel-grid" id="masterCostParametersSection">${renderMasterCostParametersSection()}</div><h3>Arquitectura futura</h3><p>${pilotMunicipality.integrationsReady.join(' · ')}</p></section>`;
+  if (HIDE_DEMO) return `<section id="master" class="section card"><h2>Master Admin MT IT Services</h2><p class="demo">Plataforma: municipios, suscripción y consumo. Los datos y parámetros de cada ayuntamiento los administra cada ayuntamiento en su Configuración.</p><h3>Municipios</h3><div class="panel-grid" id="masterMunicipalities">${renderMasterMunicipalities()}</div></section>`;
+  return `<section id="master" class="section card"><h2>Master Admin MT IT Services</h2><p class="demo">${demoNotice}</p><div class="panel-grid">${municipalities.map((m) => `<article class="card"><h3>${m.name}</h3><p>Plan: ${m.plan}</p><p>Camiones: ${m.trucks} · Rutas: ${m.routes} · Usuarios: ${m.users}</p>${pill(m.status.toLowerCase().includes('operativo') ? 'active' : 'assigned')}<button class="btn-primary" data-onboarding="${m.id}">Onboarding demo</button><p class="demo" data-onboarding-status="${m.id}"></p></article>`).join('')}</div><h3>Municipios reales</h3><div class="panel-grid" id="masterMunicipalities">${renderMasterMunicipalities()}</div><h3>Arquitectura futura</h3><p>${pilotMunicipality.integrationsReady.join(' · ')}</p></section>`;
 }
 
 // SW-049 (roadmap SW-048's opción E, evaluada y confirmada con el Project Owner): preferencia de
@@ -1798,8 +1791,19 @@ function renderMaster() {
 // que cada despachador la elige para su propio equipo sin afectar a los demás. Apagada por defecto:
 // sin tocar esto, el flujo de asignación de ruta se comporta exactamente igual que en SW-048.
 function mapPrefStorage() { try { return localStorage; } catch { return null; } }
+// SW-116: los parámetros de costo los administra cada ayuntamiento aquí (no Master Admin). En producción solo se piden los
+// que usan Impacto y Ahorros y los reportes; el rendimiento de cada camión se escribe en Flota.
+const MUNICIPAL_COST_KEYS = ['fuelPrice', 'operatingDays', 'hourlyCost'];
+function renderConfigCostParameters() {
+  const status = impactCostParametersConfigured ? 'Parámetros guardados para este ayuntamiento.' : 'Valores de referencia: todavía no se configuró nada. Ajústalos con los datos reales de tu ayuntamiento.';
+  return `<p class="demo">${status}</p>${renderCostParameterFields(impactCostParameters, HIDE_DEMO ? MUNICIPAL_COST_KEYS : null)}<div class="controls"><button type="button" class="btn-primary" data-save-cost-parameters="municipal">Guardar parámetros</button></div><p class="demo" data-cost-params-save-status></p>`;
+}
+function refreshConfigCostParameters() {
+  const el = document.getElementById('configCostParameters');
+  if (el) el.innerHTML = renderConfigCostParameters();
+}
 function renderConfiguracion() {
-  return `<section id="configuracion" class="section card"><h2>Configuración</h2><p class="demo">${demoPrefix}Preferencias de este navegador/operador, no del municipio.</p>
+  return `<section id="configuracion" class="section card"><h2>Configuración</h2><h3>Parámetros de costo del ayuntamiento</h3><p class="demo">Los usan Impacto y Ahorros y los reportes. El rendimiento (km por galón) de cada camión se escribe en Flota.</p><div class="cost-parameters-form" id="configCostParameters" data-cost-parameters-form="municipal">${renderConfigCostParameters()}</div><h3>Preferencias de este navegador</h3><p class="demo">${demoPrefix}Preferencias de este navegador/operador, no del municipio.</p>
     <div class="controls"><label><input type="checkbox" id="mapLabelsToggle"${readMapLabels(mapPrefStorage()) ? ' checked' : ''}> Mostrar etiquetas en el mapa (número de camión y situaciones)</label></div>
     <p class="demo">Desactívalas para ver el mapa más despejado. Los camiones y las alertas siguen visibles; solo se oculta el texto. Se recuerda en este navegador.</p>
     <div class="controls"><label><input type="checkbox" id="guidedAssignmentToggle"${guidedAssignmentEnabled ? ' checked' : ''}> Activar flujo guiado "Poner en marcha" en el detalle de ruta</label></div>
@@ -2985,12 +2989,6 @@ document.addEventListener('change', (event) => { if (event.target.id === 'guided
 // module init regardless of visibility (see initCreateRouteMap() below), so — same as
 // showOpsView()'s invalidateSize() call for the 'rutas' ops-tab — it needs an explicit
 // invalidateSize() once the <details> actually opens, or it renders with zero size. The native
-// `toggle` event doesn't bubble, so this must listen on the capture phase to reach it via delegation.
-document.addEventListener('toggle', (event) => {
-  // SW-030: Master Admin's per-municipality cost-parameter form — same lazy-load-on-first-open
-  // idiom as #createRouteToggle above, via the same capture-phase listener ('toggle' doesn't bubble).
-  if (event.target.matches?.('[data-cost-parameters-toggle]') && event.target.open) loadMasterCostParameters(event.target.dataset.costParametersToggle);
-}, true);
 $('#search')?.addEventListener('input', (event) => { const term = event.target.value.toLowerCase(); $('#routeList').innerHTML = renderRoutes(routes.filter((route) => JSON.stringify(route).toLowerCase().includes(term))); });
 $('#sectorFilter')?.addEventListener('change', (event) => { $('#routeList').innerHTML = renderRoutes(routes.filter((route) => !event.target.value || route.sectors.includes(event.target.value))); });
 $('#citizenSector')?.addEventListener('change', (event) => { const service = findSectorService(event.target.value); $('#pickupResult').textContent = service ? `${service.pickupDay} · Estado: ${service.status}` : 'Sector demo no encontrado'; });
@@ -3297,6 +3295,7 @@ async function hydrateCostParameters() {
   const result = client ? await fetchCostParameters(client, municipalityId) : costParametersStore.get(municipalityId);
   if (result.ok) { impactCostParameters = result.values; impactCostParametersConfigured = result.configured; }
   refreshImpactCenter(impactCostParameters);
+  refreshConfigCostParameters();
 }
 // SW-030: "antes vs. después" (3a) and "ruta optimizada vs. manual" (3b) with real data — only ever
 // runs for a real, signed-in municipal session (realAdapter). Never fabricates a number: an empty/
@@ -3389,14 +3388,15 @@ async function hydrateRealComparisonData() {
   const envEl = document.getElementById('impactEnvironmental');
   if (envEl) envEl.innerHTML = renderEnvironmentalImpact(impactRealData.environmental);
 }
-// SW-030: shared by the municipal Economía tab's save button (token 'municipal') and Master Admin's
-// per-municipality forms (token = that municipality's real id) — see renderMaster()/
-// loadMasterCostParameters() below. formEl is whichever .cost-parameters-form the click happened
-// inside, found by the caller via event.target.closest(...).
+// SW-030/SW-116: guarda los parámetros de costo del ayuntamiento (token 'municipal', desde Configuración o la pestaña
+// Economía de la demo). Master Admin ya no edita parámetros de los ayuntamientos. formEl es el .cost-parameters-form
+// donde se hizo clic.
 async function saveCostParametersFromForm(municipalityToken, formEl) {
   if (!formEl) return;
   const municipalityId = municipalityToken === 'municipal' ? currentMunicipalityId() : municipalityToken;
-  const values = readCostParameterFields(formEl);
+  // SW-116: el formulario del ayuntamiento puede mostrar solo algunos parámetros; los demás conservan su valor guardado.
+  const edits = readCostParameterFields(formEl);
+  const values = { ...(municipalityToken === 'municipal' ? impactCostParameters : {}), ...Object.fromEntries(Object.entries(edits).filter(([, v]) => v !== undefined)) };
   const statusEl = formEl.querySelector('[data-cost-params-save-status]') ?? $('#costParametersStatus');
   const validation = validateCostParameters(values);
   if (!validation.valid) { if (statusEl) statusEl.textContent = validation.errors.join(' '); return; }
@@ -3408,21 +3408,10 @@ async function saveCostParametersFromForm(municipalityToken, formEl) {
     impactCostParameters = result.values;
     impactCostParametersConfigured = true;
     refreshImpactCenter(impactCostParameters);
+    refreshConfigCostParameters();
+    const saved = document.querySelector('#configCostParameters [data-cost-params-save-status]');
+    if (saved) saved.textContent = 'Parámetros guardados.';
   }
-}
-// SW-030: Master Admin's per-municipality cost-parameter form loads lazily, the first time that
-// municipality's <details> is opened (same "don't do the work until the user actually looks" idiom
-// as the existing #createRouteToggle handling below) — with only 2 demo municipalities this would
-// be cheap either way, but a real deployment could have many, and mt_superadmin sessions always have
-// a real client, so this is a real network call per municipality, not a demo-only formality.
-async function loadMasterCostParameters(municipalityId) {
-  const container = document.querySelector(`[data-cost-parameters-form="${municipalityId}"]`);
-  if (!container || container.dataset.loaded) return;
-  container.dataset.loaded = 'true';
-  const client = getAuthClient();
-  const result = client ? await fetchCostParameters(client, municipalityId) : costParametersStore.get(municipalityId);
-  if (!result.ok) { container.innerHTML = `<p class="demo">No se pudieron cargar los parámetros: ${result.error.message}</p>`; container.dataset.loaded = ''; return; }
-  container.innerHTML = `<p class="demo">${result.configured ? 'Parámetros guardados para este municipio.' : 'Estimado, ajustá con los datos reales de este municipio — todavía no se configuró nada.'}</p>${renderCostParameterFields(result.values)}<div class="controls"><button type="button" class="btn-primary" data-save-cost-parameters="${municipalityId}">Guardar parámetros</button></div><p class="demo" data-cost-params-save-status></p>`;
 }
 // SW-030 (Codex review, PR #88, P1): real municipalities, for Master Admin's cost-parameters
 // section — mt_superadmin already has a read policy on `municipalities` (municipalities_member_read,
@@ -3431,17 +3420,33 @@ async function loadMasterCostParameters(municipalityId) {
 // valid municipality_settings.municipality_id, so pretending one is real would just move the bug.
 async function fetchRealMunicipalities(client) {
   if (!client?.from) return { ok: false, error: { code: 'SUPABASE_CLIENT_MISSING', message: 'No hay backend real configurado.' } };
-  const result = await client.from('municipalities').select('id, name').order('name');
+  const result = await client.from('municipalities').select('id, name, status').order('name');
   if (result.error) return { ok: false, error: { code: result.error.code ?? 'SUPABASE_ERROR', message: result.error.message } };
   return { ok: true, data: result.data };
+}
+// SW-116: consumo por municipio para Master Admin (solo conteos; mt_superadmin lee todos los municipios por RLS).
+async function fetchMunicipalityUsage(client, municipalityId) {
+  const count = async (table, build = (q) => q) => {
+    const result = await build(client.from(table).select('id', { count: 'exact', head: true }).eq('municipality_id', municipalityId));
+    return result.error ? null : result.count;
+  };
+  const since = new Date(Date.now() - 30 * 86400000).toISOString();
+  const [vehicles, routes, runs30] = await Promise.all([
+    count('vehicles'), count('routes'),
+    count('route_runs', (q) => q.eq('status', 'completed').eq('is_test', false).gte('started_at', since))
+  ]);
+  return { vehicles, routes, runs30 };
 }
 async function hydrateMasterRealMunicipalities() {
   const client = getAuthClient();
   const result = await fetchRealMunicipalities(client);
-  if (!result.ok || !result.data.length) return; // no client, no permission, or nothing onboarded yet — keep the "sin municipios reales" placeholder
+  if (!result.ok || !result.data.length) return; // sin cliente, sin permiso o sin municipios: se queda el aviso vacío
   masterRealMunicipalities = result.data;
-  const el = document.getElementById('masterCostParametersSection');
-  if (el) el.innerHTML = renderMasterCostParametersSection();
+  const el = document.getElementById('masterMunicipalities');
+  if (el) el.innerHTML = renderMasterMunicipalities();
+  await Promise.all(result.data.map(async (m) => { masterUsage[m.id] = await fetchMunicipalityUsage(client, m.id); }));
+  const again = document.getElementById('masterMunicipalities');
+  if (again) again.innerHTML = renderMasterMunicipalities();
 }
 // SW-107: la aceptación de la divulgación de ubicación en segundo plano se recuerda en el teléfono.
 const DRIVER_DISCLOSURE_KEY = 'smartwaste.driver-location-disclosure.v1';
