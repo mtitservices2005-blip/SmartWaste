@@ -22,7 +22,7 @@ assert.match(master, /if \(HIDE_DEMO\) return[^;]*renderMasterCostParametersSect
 assert.ok(!/if \(HIDE_DEMO\) return[^;]*(data-onboarding|integrationsReady)/.test(master));
 
 // Impacto y Ahorros: sin cifras de demostración.
-assert.match(fn('renderImpactCenter'), /if \(HIDE_DEMO\) return '<section id="impacto"/);
+assert.match(fn('renderImpactCenter'), /if \(HIDE_DEMO\) return '<section id="impacto"[^']*impactReal/);
 
 // Detalle del camión: solo campos reales.
 const grid = fn('realTruckGrid');
@@ -34,8 +34,8 @@ assert.match(src, /HIDE_DEMO \? 'SmartWaste' : pilotMunicipality\.branding\.labe
 assert.match(src, /HIDE_DEMO \? '' : `<button data-history/);
 assert.match(src, /value="\$\{HIDE_DEMO \? '' : 'SW-FOLIO-1001'\}"/);
 
-// Barra lateral: con hideDemo no hay enlace a Impacto; sin hideDemo sigue igual.
-assert.ok(!renderRail({ hash: '', hideDemo: true }).includes('href="#impacto"'));
+// Barra lateral: Impacto y Ahorros está disponible también con hideDemo (SW-113).
+assert.ok(renderRail({ hash: '', hideDemo: true }).includes('href="#impacto"'));
 assert.ok(renderRail({ hash: '', hideDemo: false }).includes('href="#impacto"'));
 assert.ok(!renderRail({ hash: '', hideDemo: true }).includes('DEMO'));
 console.log('sw112-sin-demo ok');

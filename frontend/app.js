@@ -20,6 +20,8 @@ import { routeReadinessStage, ROUTE_READINESS_LABELS } from '../shared/route-rea
 import { IMPACT_DEMO_NOTICE, IMPACT_SCENARIO_NOTICE, defaultImpactAssumptions, metricReadiness, calculateImpactMetrics } from '../shared/impact-center.js';
 import { COST_PARAMETER_KEYS, validateCostParameters, fetchCostParameters, saveCostParameters, createDemoCostParametersStore } from '../shared/cost-parameters.js';
 import { aggregateRouteSavings } from '../shared/route-savings.js';
+import { buildRealImpact } from '../shared/impact-real.js';
+import { renderImpactReal } from './components/impact-real-screen.js';
 import { initAuthGate, readSupabaseConfig, getAuthClient, isDriverApp } from './auth-gate.js';
 import { mountDriverApp } from './driver-app.js';
 import { createDriverTelemetrySession, createPersistentTelemetryQueue } from '../shared/driver-app-telemetry.js';
@@ -1703,7 +1705,7 @@ function renderEnvironmentalImpact(environmental) {
 }
 function renderImpactCenter(assumptions = defaultImpactAssumptions, filters = {}) {
   // SW-112: el Centro de Impacto se calcula con supuestos y datos de demostración; en producción no se muestra hasta que se alimente solo de corridas reales.
-  if (HIDE_DEMO) return '<section id="impacto" class="section impact-center card"><h2>Impacto y Ahorros</h2><p>Esta pantalla se activa cuando haya corridas reales suficientes. Mientras tanto, la distancia, el combustible y el CO2 de cada corrida están en Operaciones · Métricas.</p><p><a href="#operaciones/estadisticas">Ir a Métricas</a></p></section>';
+  if (HIDE_DEMO) return '<section id="impacto" class="section impact-center card"><div id="impactReal"><p class="demo">Cargando impacto…</p></div></section>';
   const metrics = calculateImpactMetrics(assumptions, filters, impactRealData);
   return `<section id="impacto" class="section impact-center card">
     <div class="impact-hero"><div><p class="eyebrow">Centro de Impacto Operacional</p><h2>Impacto y Ahorros</h2><p class="impact-notice">${IMPACT_DEMO_NOTICE}</p></div><div><strong>Ahorro potencial estimado mensual</strong><b>${money(metrics.economics.monthlyPotentialAvoided)}</b><span>Proyección anual demo: ${money(metrics.economics.annualProjectionDemo)}</span></div></div>
@@ -2582,7 +2584,7 @@ function showSection(id) {
   // SW-030: same "refetch on tab entry" precedent as the Supervisor line above — a corrida real
   // recién medida, o una parada recién guardada, no debería requerir un reload completo para
   // aparecer en las comparaciones con datos reales.
-  if (id === 'impacto') hydrateRealComparisonData();
+  if (id === 'impacto') { if (HIDE_DEMO) loadImpactReal(); else hydrateRealComparisonData(); }
 }
 window.addEventListener('hashchange', () => { if (!redirectLegacyHash()) showSection(sectionFromHash()); });
 // SW-036 fix: an outerHTML replace swaps in a brand-new element that never had the 'hidden' class
@@ -3301,6 +3303,34 @@ async function hydrateCostParameters() {
 // resulting hidden-class state (see refreshImpactCenter()'s own comment), which would re-enter
 // showSection('impacto') and call this function again — an infinite loop. Patching two known ids
 // sidesteps that entirely.
+// SW-113: Impacto y Ahorros con datos reales (despliegue sin demo). Todo sale de las corridas completadas que no son de prueba.
+const impactReal = { period: 30, data: null, routeStops: {} };
+function renderImpactRealScreen() {
+  const root = document.getElementById('impactReal');
+  if (!root || !impactReal.data) return;
+  const d = impactReal.data;
+  const model = buildRealImpact({ runs: d.runs, vehicles: d.vehicles, fuelLogs: d.fuelLogs, routes: d.routes, routeStops: impactReal.routeStops, costParameters: currentImpactAssumptions(), periodDays: impactReal.period });
+  root.innerHTML = renderImpactReal({ model, period: impactReal.period, fmt: { number: formatNumber }, priceConfigured: impactCostParametersConfigured });
+}
+async function loadImpactReal() {
+  const root = document.getElementById('impactReal');
+  if (!root) return;
+  if (impactReal.data) renderImpactRealScreen();
+  const data = await loadMetricsData();
+  if (!data) { if (!impactReal.data) root.innerHTML = '<p class="demo">No se pudo cargar el histórico de corridas.</p>'; return; }
+  impactReal.data = data;
+  if (realAdapter) {
+    const results = await Promise.all(data.routes.map((route) => realAdapter.listRouteStops(route.id)));
+    impactReal.routeStops = Object.fromEntries(data.routes.map((route, i) => [route.id, results[i].ok ? results[i].data : []]));
+  }
+  renderImpactRealScreen();
+}
+document.addEventListener('click', (event) => {
+  const chip = event.target.closest?.('[data-impact-period]');
+  if (!chip) return;
+  impactReal.period = Number(chip.dataset.impactPeriod) || 30;
+  renderImpactRealScreen();
+});
 async function hydrateRealComparisonData() {
   if (!realAdapter) { impactRealData = { operational: null, routeSavings: null, environmental: null }; return; }
   const runsResult = await realAdapter.listRouteRuns();
