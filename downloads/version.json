@@ -1,9 +1,9 @@
 {
-  "versionName": "1.0.1",
-  "versionCode": 2026110509,
+  "versionName": "1.0.2",
+  "versionCode": 2026110610,
   "apkUrl": "SmartWaste-Conductor.apk",
-  "sha256": "dda6ce6bd3f9f6bf16e2ddca8ba335b24dacf76822338a134c13e64c32819eef",
-  "sizeBytes": 4038580,
-  "notes": "Aviso de actualización y distancia GPS completa",
-  "publishedAt": "2026-11-05T03:04:45.476Z"
+  "sha256": "64e5148b1b082cb127bd25548717468ad4be87a37f20ed6ff737f3cf299430da",
+  "sizeBytes": 4059917,
+  "notes": "Combustible en galones y gasto estimado por rendimiento del camión",
+  "publishedAt": "2026-11-06T10:32:10.284Z"
 }
