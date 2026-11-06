@@ -18,7 +18,7 @@ assert.match(src, /\$\('#citizenSector'\)\?\.dispatchEvent/);
 
 // Master Admin: solo municipios reales, sin tarjetas demo ni "arquitectura futura".
 const master = fn('renderMaster');
-assert.match(master, /if \(HIDE_DEMO\) return[^;]*renderMasterCostParametersSection\(\)/);
+assert.match(master, /if \(HIDE_DEMO\) return[^;]*renderMasterMunicipalities\(\)/);
 assert.ok(!/if \(HIDE_DEMO\) return[^;]*(data-onboarding|integrationsReady)/.test(master));
 
 // Impacto y Ahorros: sin cifras de demostración.
