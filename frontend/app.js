@@ -23,6 +23,8 @@ import { aggregateRouteSavings } from '../shared/route-savings.js';
 import { buildRealImpact } from '../shared/impact-real.js';
 import { litersToGallons, kmPerLiterToKmPerGallon, kmPerGallonToKmPerLiter, pricePerLiterToPerGallon, pricePerGallonToPerLiter } from '../shared/fuel-units.js';
 import { renderImpactReal } from './components/impact-real-screen.js';
+import { renderMetricsReport, renderImpactReport } from '../shared/report-html.js';
+import { printReport } from './report-print.js';
 import { initAuthGate, readSupabaseConfig, getAuthClient, isDriverApp } from './auth-gate.js';
 import { mountDriverApp } from './driver-app.js';
 import { createDriverTelemetrySession, createPersistentTelemetryQueue } from '../shared/driver-app-telemetry.js';
@@ -3330,7 +3332,22 @@ async function loadImpactReal() {
   }
   renderImpactRealScreen();
 }
+// SW-115: "Descargar reporte PDF" (Métricas e Impacto y Ahorros). Abre el diálogo de impresión con el reporte; ahí se elige "Guardar como PDF".
+const REPORT_MUNICIPALITY = 'Laguna Salada';
+function downloadReport(kind) {
+  if (kind === 'metricas' && metrics.data) {
+    const d = metrics.data;
+    const view = buildMetricsView({ ...d, period: metrics.period, filters: metrics.filters });
+    printReport(renderMetricsReport({ view, period: metrics.period, municipalityName: REPORT_MUNICIPALITY, rawRuns: d.runs }));
+  } else if (kind === 'impacto' && impactReal.data) {
+    const d = impactReal.data;
+    const model = buildRealImpact({ runs: d.runs, vehicles: d.vehicles, fuelLogs: d.fuelLogs, routes: d.routes, routeStops: impactReal.routeStops, costParameters: currentImpactAssumptions(), periodDays: impactReal.period });
+    printReport(renderImpactReport({ model, period: impactReal.period, municipalityName: REPORT_MUNICIPALITY, priceConfigured: impactCostParametersConfigured }));
+  } else { showToast('Espera a que carguen los datos para descargar el reporte.'); }
+}
 document.addEventListener('click', (event) => {
+  const dl = event.target.closest?.('[data-report-download]');
+  if (dl) { downloadReport(dl.dataset.reportDownload); return; }
   const chip = event.target.closest?.('[data-impact-period]');
   if (!chip) return;
   impactReal.period = Number(chip.dataset.impactPeriod) || 30;

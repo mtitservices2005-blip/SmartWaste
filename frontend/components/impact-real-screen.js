@@ -23,7 +23,7 @@ export function renderImpactReal({ model, period = 30, fmt, priceConfigured = fa
   const chips = PERIODS.map((p) => `<button type="button" class="sw-chip" data-impact-period="${p.days}" aria-pressed="${p.days === period}">${p.label}</button>`).join('');
   const price = model.fuelPrice;
   const priceNote = priceConfigured ? '' : '<p class="sw-metrics__notice">El precio del combustible es un valor de referencia. Configúralo en Master Admin · Parámetros de costo para que los pesos sean exactos.</p>';
-  const head = `<div class="sw-impact__top"><div><p class="eyebrow">Impacto y Ahorros</p><h2>Lo que dicen las corridas</h2></div><div class="sw-metrics__chips" role="group" aria-label="Periodo">${chips}</div></div>`;
+  const head = `<div class="sw-impact__top"><div><p class="eyebrow">Impacto y Ahorros</p><h2>Lo que dicen las corridas</h2></div><div class="sw-impact__actions"><div class="sw-metrics__chips" role="group" aria-label="Periodo">${chips}</div>${m.runs ? '<button type="button" class="sw-rutas__btn" data-report-download="impacto">Descargar reporte PDF</button>' : ''}</div></div>`;
   const basis = `<p class="sw-impact__state">Base de cálculo: ${m.runs} ${m.runs === 1 ? 'corrida' : 'corridas'} en ${m.activeDays} ${m.activeDays === 1 ? 'día' : 'días'} con actividad.</p>`;
   if (!m.runs) {
     return `${head}${basis}${pending('Aún no hay corridas completadas en este periodo.', 'Cuando un conductor termine una corrida real, aquí aparecerán la distancia, el combustible, el costo y el CO₂.', ['Corridas completadas', 'Que no estén marcadas como prueba'])}`;

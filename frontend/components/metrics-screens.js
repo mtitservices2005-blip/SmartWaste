@@ -159,7 +159,9 @@ function renderRuns({ view, selectedRunId, trace, fmt }) {
 
 export function renderMetricsPage({ view, period = 14, tab = 'camiones', filters = {}, options = { routes: [], vehicles: [], drivers: [] }, selectedRunId = null, trace = null, fmt, demo = false, municipalityName = '', weekly = null } = {}) {
   const sub = municipalityName ? `Corridas completadas en ${escapeHtml(municipalityName)}${demo ? ' · datos de ejemplo' : ''}` : 'Corridas completadas';
-  const head = `<div class="sw-rutas__head"><div><h2>Métricas</h2><p class="sw-rutas__sub">${sub}</p>${demo ? '<p class="sw-rutas__demo">Datos demo · no producción</p>' : ''}</div></div>`;
+  // SW-115: el reporte PDF solo se ofrece cuando hay corridas que reportar.
+  const download = view.isEmpty ? '' : '<button type="button" class="sw-rutas__btn" data-report-download="metricas">Descargar reporte PDF</button>';
+  const head = `<div class="sw-rutas__head"><div><h2>Métricas</h2><p class="sw-rutas__sub">${sub}</p>${demo ? '<p class="sw-rutas__demo">Datos demo · no producción</p>' : ''}</div>${download}</div>`;
   const top = `${head}${renderFilters({ period, filters, options, view })}`;
   if (view.isEmpty) {
     return `${top}${emptyState({ title: 'Todavía no hay corridas completadas', message: 'Cuando un conductor termine una ruta con el teléfono, sus kilómetros, tiempo y huella de carbono aparecen aquí.' })}`;

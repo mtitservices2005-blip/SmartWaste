@@ -105,3 +105,5 @@
 .sw-impact__table th { font-size: var(--font-size-1); color: var(--color-muted); }
 .sw-impact__src { padding: 1px 8px; border-radius: 6px; background: var(--color-background-alt); color: var(--color-muted); font-size: var(--font-size-1); }
 .sw-impact__notes { margin: 0; padding-left: 1.2rem; color: var(--color-muted); }
+
+.sw-impact__actions { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; }
