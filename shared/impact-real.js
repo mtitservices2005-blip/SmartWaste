@@ -1,4 +1,5 @@
 // SW-113: Impacto y Ahorros calculado solo con corridas reales. Puro (sin red ni DOM).
+// SW-114: el combustible sale siempre de km ÷ rendimiento configurado de cada camión (nunca de lo que el chofer anota).
 // Tres bloques que nunca se mezclan: Medido (lo ocurrido), Proyectado (promedio por día con corridas × días operativos)
 // y Potencial (orden real de paradas vs. orden óptimo). Solo cuentan corridas completadas y no marcadas como prueba.
 import { filterRunsByPeriod, summarizeMetrics, dailySeries, localDay } from './run-metrics.js';
@@ -12,23 +13,20 @@ const positive = (v) => Number.isFinite(Number(v)) && Number(v) > 0;
 function sourceOf(rows) {
   const kinds = new Set(rows.map((r) => r.source));
   if (kinds.size === 1) return [...kinds][0];
-  if (kinds.has('real') || kinds.has('estimado')) return 'mixto';
-  return 'sin_datos';
+  return 'parcial'; // algún camión de la ruta no tiene rendimiento configurado
 }
 
 export function buildRealImpact({ runs = [], vehicles = [], fuelLogs = [], routes = [], routeStops = {}, costParameters = {}, periodDays = 30, now = new Date() } = {}) {
   const fuelPrice = Number(costParameters.fuelPrice);
   const operatingDays = positive(costParameters.operatingDays) ? Number(costParameters.operatingDays) : 22;
-  const efficiency = Number(costParameters.fuelEfficiency);
   const inPeriod = filterRunsByPeriod(runs, periodDays, now);
   const summary = summarizeMetrics(inPeriod, vehicles, fuelLogs);
   const rows = summary.rows;
   const series = dailySeries(inPeriod, vehicles, fuelLogs, Math.min(periodDays, 30), now);
   const activeDays = new Set(rows.map((r) => (r.run.started_at ? localDay(r.run.started_at) : null)).filter(Boolean)).size;
 
-  const litersReal = round(rows.filter((r) => r.source === 'real').reduce((s, r) => s + r.liters, 0), 2);
-  const litersEstimated = round(rows.filter((r) => r.source === 'estimado').reduce((s, r) => s + r.liters, 0), 2);
-  const litersKnown = round(litersReal + litersEstimated, 2);
+  const litersKnown = round(rows.reduce((s, r) => s + (r.liters ?? 0), 0), 2);
+  const kmWithFuel = rows.filter((r) => r.liters !== null).reduce((s, r) => s + (r.distanceKm ?? 0), 0);
   const runsWithoutFuel = rows.filter((r) => r.source === 'sin_datos').length;
   const hasFuel = litersKnown > 0;
   const priceOk = positive(fuelPrice);
@@ -37,9 +35,8 @@ export function buildRealImpact({ runs = [], vehicles = [], fuelLogs = [], route
     activeDays,
     km: summary.totalKm,
     hours: round(summary.totalMinutes / 60, 1),
-    litersReal,
-    litersEstimated,
     liters: hasFuel ? litersKnown : null,
+    loggedLiters: summary.loggedLiters,
     runsWithoutFuel,
     fuelCost: hasFuel && priceOk ? Math.round(litersKnown * fuelPrice) : null,
     co2Kg: summary.co2Kg
@@ -81,7 +78,7 @@ export function buildRealImpact({ runs = [], vehicles = [], fuelLogs = [], route
 
   // Potencial: por ruta con corridas en el periodo y ≥3 paradas, ahorro por corrida × corridas al mes.
   let potential = null;
-  if (canProject && positive(efficiency)) {
+  if (canProject) {
     let savedKmMonth = 0; let routesCompared = 0; let manualKm = 0;
     for (const item of perRoute) {
       const cmp = compareManualVsOptimizedRoute(routeStops[item.routeId] ?? []);
@@ -91,15 +88,17 @@ export function buildRealImpact({ runs = [], vehicles = [], fuelLogs = [], route
       manualKm += (cmp.manualDistanceMeters / 1000) * item.runs * factor;
     }
     if (routesCompared > 0) {
-      const liters = savedKmMonth / efficiency;
+      // Rendimiento real de la flota en el periodo: km con rendimiento configurado ÷ litros estimados.
+      const kmPerLiter = hasFuel && kmWithFuel > 0 ? kmWithFuel / litersKnown : null;
+      const liters = kmPerLiter ? savedKmMonth / kmPerLiter : null;
       potential = {
         routesCompared,
         km: round(savedKmMonth, 1),
         percent: manualKm ? round((savedKmMonth / manualKm) * 100, 1) : 0,
-        liters: round(liters, 1),
-        fuelCost: priceOk ? Math.round(liters * fuelPrice) : null,
-        co2Kg: round(co2KgForLiters(liters, 'diesel') ?? 0, 1),
-        efficiency
+        liters: liters === null ? null : round(liters, 1),
+        fuelCost: liters !== null && priceOk ? Math.round(liters * fuelPrice) : null,
+        co2Kg: liters === null ? null : round(co2KgForLiters(liters, 'diesel') ?? 0, 1),
+        kmPerLiter: kmPerLiter === null ? null : round(kmPerLiter, 2)
       };
     }
   }

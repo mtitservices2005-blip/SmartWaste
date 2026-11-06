@@ -44,5 +44,5 @@ assert.match(renderMetricsPage({ view: empty, period: 14, tab: 'camiones', filte
 const c = renderBarChart({ values: [0, 5, 12.5], labels: ['14', '15', '16'], unit: 'km', name: 'Kilómetros por día', tips: ['14 oct · sin corridas', '15 oct · 5 km', '16 oct · 12,5 km'], color: 'var(--color-primary)' });
 assert.match(c, /role="img"/); assert.match(c, /aria-label="Kilómetros por día/); assert.match(c, /data-tip="15 oct · 5 km"/);
 assert.match(c, /<path d="M/); assert.match(c, />12,5</); // etiqueta del máximo y del último
-assert.match(sourceBadge('real'), /Real/); assert.match(sourceBadge('estimado'), /Estimado/); assert.match(sourceBadge('sin_datos'), /Sin datos/);
+assert.match(sourceBadge('estimado'), /Estimado/); assert.match(sourceBadge('sin_datos'), /Sin datos/);
 console.log('metrics-screens: ok');

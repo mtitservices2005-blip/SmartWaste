@@ -35,7 +35,7 @@ function groupRows(rows, keyOf, labelOf, extra = () => ({})) {
   }
   return [...map.values()].map((g) => {
     const withData = [...g.sources].filter((s) => s !== 'sin_datos');
-    const source = withData.length === 0 ? 'sin_datos' : withData.every((s) => s === 'real') && !g.sources.has('sin_datos') ? 'real' : 'estimado';
+    const source = withData.length === 0 ? 'sin_datos' : 'estimado';
     const r2 = (n) => (n === null ? null : Math.round(n * 100) / 100);
     return { ...g, sources: undefined, km: r2(g.km), minutes: Math.round(g.minutes * 10) / 10, liters: r2(g.liters), co2Kg: r2(g.co2Kg), source, co2PerKm: g.co2Kg !== null && g.co2Km > 0 ? r2(g.co2Kg / g.co2Km) : null, co2Km: undefined };
   }).sort((a, b) => b.km - a.km);

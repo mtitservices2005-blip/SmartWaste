@@ -11,7 +11,7 @@ const v = buildVehicleRows(trucks);
 assert.deepEqual(v[0], { id: 't1', unit: 'C-01', plate: 'L 123456', maxStops: '20', state: 'active', efficiency: null, fuelType: null, efficiencyValue: '', fuelTypeKey: 'diesel' });
 // SW-090: rendimiento y combustible del camión
 const vf2 = buildVehicleRows([{ id: 'x', unit: 'C-9', fuel_efficiency_km_per_l: 2.2, fuel_type: 'gasolina' }])[0];
-assert.equal(vf2.efficiency, '2,2 km/L'); assert.equal(vf2.fuelType, 'Gasolina'); assert.equal(vf2.efficiencyValue, '2.2'); assert.equal(vf2.fuelTypeKey, 'gasolina');
+assert.equal(vf2.efficiency, '8,3 km/gal'); assert.equal(vf2.fuelType, 'Gasolina'); assert.equal(vf2.efficiencyValue, '8.3'); assert.equal(vf2.fuelTypeKey, 'gasolina');
 assert.equal(v[1].plate, '—');
 assert.equal(v[1].maxStops, '—');
 assert.equal(buildVehicleRows(undefined).length, 0);
@@ -47,12 +47,12 @@ assert.equal(validateDriverForm({ name: ' ', phone: '', email: '' }).message, 'I
 assert.equal(validateDriverForm({ name: 'Ana', phone: '', email: 'sin-arroba' }).message, 'Escribe un correo válido o déjalo en blanco.');
 console.log('fleet-list ok');
 
-// SW-090: validación de rendimiento (km/L) y combustible
+// SW-090/SW-114: validación de rendimiento (se escribe en km/galón y se guarda en km/L) y combustible
 assert.deepEqual(validateFuelConfig({ efficiency: '', fuelType: '' }), { ok: true, values: { efficiency: null, fuelType: 'diesel' } });
-assert.deepEqual(validateFuelConfig({ efficiency: '2,2', fuelType: 'gasolina' }).values, { efficiency: 2.2, fuelType: 'gasolina' });
-assert.deepEqual(validateFuelConfig({ efficiency: ' 4.5 ', fuelType: 'diesel' }).values, { efficiency: 4.5, fuelType: 'diesel' });
-for (const bad of ['0', '-1', 'abc', '500']) assert.equal(validateFuelConfig({ efficiency: bad, fuelType: 'diesel' }).message, 'El rendimiento debe ser un número entre 0,1 y 100 km por litro.', bad);
+assert.deepEqual(validateFuelConfig({ efficiency: '8,3', fuelType: 'gasolina' }).values, { efficiency: 2.1926, fuelType: 'gasolina' });
+assert.deepEqual(validateFuelConfig({ efficiency: ' 4.5 ', fuelType: 'diesel' }).values, { efficiency: 1.1888, fuelType: 'diesel' });
+for (const bad of ['0', '-1', 'abc', '500']) assert.equal(validateFuelConfig({ efficiency: bad, fuelType: 'diesel' }).message, 'El rendimiento debe ser un número entre 0,4 y 400 km por galón.', bad);
 assert.equal(validateFuelConfig({ efficiency: '3', fuelType: 'kerosene' }).message, 'Elige diésel o gasolina.');
 assert.equal(validateVehicleForm({ unit: 'C-1', efficiency: '0' }).ok, false);
-assert.deepEqual(validateVehicleForm({ unit: 'C-1', efficiency: '2,5', fuelType: 'gasolina' }).values, { unit: 'C-1', plate: '', maxStops: 20, efficiency: 2.5, fuelType: 'gasolina' });
+assert.deepEqual(validateVehicleForm({ unit: 'C-1', efficiency: '2,5', fuelType: 'gasolina' }).values, { unit: 'C-1', plate: '', maxStops: 20, efficiency: 0.6604, fuelType: 'gasolina' });
 console.log('fleet-list sw090: ok');

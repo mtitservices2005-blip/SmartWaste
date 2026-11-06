@@ -12,6 +12,18 @@ export function parseFuelLiters(input) {
   return { ok: true, liters };
 }
 
+// SW-114: el conductor anota galones americanos; el registro se guarda en litros (como la base).
+const MAX_GALLONS = 130;
+export function parseFuelGallons(input) {
+  const text = String(input ?? '').trim();
+  if (text === '') return { ok: true, gallons: null, liters: null };
+  if (!/^\d+([.,]\d+)?$/.test(text)) return { ok: false, message: 'Escribe solo números en los galones, por ejemplo 5,5.' };
+  const gallons = Number(text.replace(',', '.'));
+  if (!(gallons > 0)) return { ok: false, message: 'Escribe los galones cargados (mayor que 0).' };
+  if (gallons > MAX_GALLONS) return { ok: false, message: `Los galones no pueden pasar de ${MAX_GALLONS}. Revisa el número.` };
+  return { ok: true, gallons, liters: Math.round(gallons * 3.785411784 * 100) / 100 };
+}
+
 // Arma el registro con el camión y la corrida de la asignación del chofer. Sin litros o sin camión: null.
 export function buildFuelEntry({ liters, assignment, municipalityId }) {
   if (liters == null || !assignment?.vehicle_id) return null;

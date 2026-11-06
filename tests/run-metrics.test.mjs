@@ -15,11 +15,15 @@ assert.equal(m.source, 'estimado');
 assert.equal(m.liters, 3);
 assert.equal(m.co2Kg, 8.04);
 
-// Real gana sobre estimado
+// SW-114: lo que anota el conductor NO cambia el consumo; queda solo como control (loggedLiters)
 m = computeRunMetrics(run(), { vehicle: veh(), fuelLogs: [{ route_run_id: 'r1', liters: 5 }, { route_run_id: 'r1', liters: 1 }, { route_run_id: 'other', liters: 99 }] });
-assert.equal(m.source, 'real');
-assert.equal(m.liters, 6);
-assert.equal(m.co2Kg, 16.08);
+assert.equal(m.source, 'estimado');
+assert.equal(m.liters, 3);
+assert.equal(m.co2Kg, 8.04);
+assert.equal(m.loggedLiters, 6);
+// Sin rendimiento del camión, la carga del conductor tampoco alcanza para calcular consumo
+m = computeRunMetrics(run(), { vehicle: veh({ fuel_efficiency_km_per_l: null }), fuelLogs: [{ route_run_id: 'r1', liters: 5 }] });
+assert.equal(m.source, 'sin_datos'); assert.equal(m.liters, null); assert.equal(m.loggedLiters, 5);
 
 // Sin datos
 m = computeRunMetrics(run(), { vehicle: veh({ fuel_efficiency_km_per_l: null }), fuelLogs: [] });
@@ -32,9 +36,9 @@ m = computeRunMetrics(run({ distance_meters: null }), { vehicle: veh(), fuelLogs
 assert.equal(m.distanceKm, null); assert.equal(m.source, 'sin_datos'); assert.equal(m.avgSpeedKmh, null);
 m = computeRunMetrics(run(), { vehicle: null, fuelLogs: [] });
 assert.equal(m.source, 'sin_datos');
-// Litros reales sin tipo de combustible: litros sí, CO2 no
+// Sin tipo de combustible: litros sí (km ÷ rendimiento), CO2 no
 m = computeRunMetrics(run(), { vehicle: veh({ fuel_type: null }), fuelLogs: [{ route_run_id: 'r1', liters: 4 }] });
-assert.equal(m.source, 'real'); assert.equal(m.liters, 4); assert.equal(m.co2Kg, null);
+assert.equal(m.source, 'estimado'); assert.equal(m.liters, 3); assert.equal(m.co2Kg, null);
 // Sin duración
 m = computeRunMetrics(run({ completed_at: null }), { vehicle: veh(), fuelLogs: [] });
 assert.equal(m.durationMin, null); assert.equal(m.avgSpeedKmh, null);

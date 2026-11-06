@@ -30,7 +30,6 @@ assert.equal(m.measured.runs, 2);
 assert.equal(m.measured.km, 30);
 assert.equal(m.measured.hours, 4);
 assert.equal(m.measured.liters, 7.5);      // 30 km ÷ 4 km/L, estimado
-assert.equal(m.measured.litersEstimated, 7.5);
 assert.equal(m.measured.fuelCost, 600);    // 7.5 L × 80
 assert.equal(m.measured.co2Kg, 20.1);      // 7.5 × 2.68
 assert.equal(m.projection, null);
@@ -43,11 +42,11 @@ assert.equal(m.measured.activeDays, 3);
 assert.equal(m.projection.km, 400);        // 60 km × 20/3
 assert.equal(m.projection.fuelCost, Math.round(m.measured.fuelCost * 20 / 3));
 
-// Litros registrados por el conductor ganan sobre el estimado.
+// SW-114: lo que anota el conductor no cambia el gasto (solo sirve de control).
 m = buildRealImpact({ runs: three, vehicles, routes, fuelLogs: [{ route_run_id: 'a', liters: 5 }], costParameters: params, periodDays: 30, now });
-assert.equal(m.measured.litersReal, 5);
-assert.equal(m.measured.litersEstimated, 12.5); // (20+30) ÷ 4
-assert.equal(m.perRoute[0].source, 'mixto');
+assert.equal(m.measured.liters, 15);        // 60 km ÷ 4 km/L, solo por rendimiento del camión
+assert.equal(m.measured.loggedLiters, 5);
+assert.equal(m.perRoute[0].source, 'estimado');
 
 // Sin rendimiento ni litros: combustible y costo quedan en null (nunca una cifra inventada).
 m = buildRealImpact({ runs: three, vehicles: [{ id: 'v1' }], routes, costParameters: params, periodDays: 30, now });
@@ -60,12 +59,13 @@ assert.equal(m.projection.fuelCost, null);
 const stops = [[18.0, -71.0], [18.02, -71.0], [18.0, -71.01], [18.02, -71.01]].map(([latitude, longitude]) => ({ latitude, longitude }));
 m = buildRealImpact({ runs: three, vehicles, routes, routeStops: { r1: stops }, costParameters: params, periodDays: 30, now });
 assert.ok(m.potential && m.potential.km > 0 && m.potential.liters > 0 && m.potential.routesCompared === 1);
+assert.equal(m.potential.kmPerLiter, 4); // rendimiento real de los camiones, no un número de referencia
 m = buildRealImpact({ runs: three, vehicles, routes, routeStops: { r1: stops.slice(0, 2) }, costParameters: params, periodDays: 30, now });
 assert.equal(m.potential, null);
 
 // La pantalla rotula cada bloque y el cableado en app.js existe.
 const html = renderImpactReal({ model: buildRealImpact({ runs: three, vehicles, routes, routeStops: { r1: stops }, costParameters: params, periodDays: 30, now }), period: 30, fmt, priceConfigured: false });
-for (const word of ['Medido', 'Proyectado', 'Potencial', 'Detalle por ruta', 'data-impact-period="30"', 'valores de referencia', 'contra el método anterior']) assert.ok(html.includes(word), word);
+for (const word of ['gal', 'Medido', 'Proyectado', 'Potencial', 'Detalle por ruta', 'data-impact-period="30"', 'precio del combustible es un valor de referencia', 'contra el método anterior']) assert.ok(html.includes(word), word);
 const src = readFileSync('frontend/app.js', 'utf8');
 assert.match(src, /if \(id === 'impacto'\) \{ if \(HIDE_DEMO\) loadImpactReal\(\)/);
 assert.match(src, /buildRealImpact\(\{ runs: d\.runs/);

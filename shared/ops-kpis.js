@@ -14,6 +14,7 @@ function decimal(value) {
 
 export const formatKm = (v) => (isNum(v) && v >= 0 ? `${decimal(v)} km` : DASH);
 export const formatLiters = (v) => (isNum(v) && v >= 0 ? `${decimal(v)} L` : DASH);
+export const formatGallons = (liters) => (isNum(liters) && liters >= 0 ? `${decimal(liters / 3.785411784)} gal` : DASH);
 export const formatPercent = (v) => (isNum(v) && v >= 0 ? `${Math.round(v)}%` : DASH);
 
 function toMillis(value) {
@@ -37,7 +38,7 @@ export function computeOpsKpis({ vehicles = [], coverageRate = null, distanceKm 
     alerts: vehicles.filter((v) => v.status === 'sin_senal').length,
     coverage: formatPercent(coverageRate),
     distance: formatKm(distanceKm),
-    fuel: formatLiters(fuelLiters),
+    fuel: formatGallons(fuelLiters),
     freshness: freshnessLabel({ lastCapturedAt: latest.length ? Math.max(...latest) : null, now })
   };
 }
