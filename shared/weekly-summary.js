@@ -19,14 +19,14 @@ export function buildWeeklySummary({ runs = [], vehicles = [], routes = [], driv
 
   const delta = cmp.periodVsPrevious.deltas;
   const headline = [`${s.runCount} ${s.runCount === 1 ? 'corrida completada' : 'corridas completadas'}, ${formatKm(s.totalKm)} medidos y ${formatDuration(s.totalMinutes)} en ruta.`];
-  headline.push(s.liters === null ? 'Consumo: sin datos (falta rendimiento del camión o litros registrados).' : `Consumo: ${formatNumber(s.liters, 2)} L en ${s.vehiclesWithData} de ${s.vehiclesTotal} camiones con dato.`);
+  headline.push(s.liters === null ? 'Consumo: sin datos (falta el rendimiento de los camiones).' : `Consumo estimado: ${formatNumber(s.liters / 3.785411784, 1)} gal en ${s.vehiclesWithData} de ${s.vehiclesTotal} camiones con dato.`);
   headline.push(s.co2Kg === null ? 'Huella de carbono: sin datos.' : `Huella de carbono estimada: ${formatNumber(s.co2Kg, 2)} kg CO₂${delta.co2Kg === null ? '' : ` (${pctText(delta.co2Kg)} contra la semana anterior)`}.`);
 
   const recs = [];
   // 1. Camiones sin rendimiento: no entran en consumo ni CO₂.
   if (view.missingConfig.length) {
     const names = view.missingConfig.map((m) => m.label).join(', ');
-    recs.push({ id: 'vehiculo-sin-rendimiento', severity: 'atencion', title: `Configura el rendimiento de ${names}`, detail: `Sin rendimiento (km por litro) ni litros registrados, ${view.missingConfig.length === 1 ? 'ese camión queda fuera' : 'esos camiones quedan fuera'} del consumo y la huella de carbono.`, action: { kind: 'flota' } });
+    recs.push({ id: 'vehiculo-sin-rendimiento', severity: 'atencion', title: `Configura el rendimiento de ${names}`, detail: `Sin rendimiento (km por galón), ${view.missingConfig.length === 1 ? 'ese camión queda fuera' : 'esos camiones quedan fuera'} del consumo y la huella de carbono.`, action: { kind: 'flota' } });
   }
   // 2. Desvíos repetidos en una misma ruta.
   const byRoute = new Map();
@@ -46,9 +46,7 @@ export function buildWeeklySummary({ runs = [], vehicles = [], routes = [], driv
   // 4. Cambio de la huella de carbono contra la semana anterior.
   if (delta.co2Kg !== null && delta.co2Kg >= T.co2ChangePct) recs.push({ id: 'co2-sube', severity: 'atencion', title: `La huella de carbono subió ${pctText(delta.co2Kg).replace('+', '')} contra la semana anterior`, detail: 'Compara kilómetros y corridas de ambas semanas en Métricas > Comparar para ver si fue más recorrido o más consumo por km.', action: { kind: 'comparar' } });
   if (delta.co2Kg !== null && delta.co2Kg <= -T.co2ChangePct) recs.push({ id: 'co2-baja', severity: 'ok', title: `La huella de carbono bajó ${pctText(delta.co2Kg).replace('−', '')} contra la semana anterior`, detail: 'Buen avance. Revisa en Comparar si se debe a menos kilómetros o a menos consumo por kilómetro.', action: { kind: 'comparar' } });
-  // 5. Mucho consumo estimado: pedir litros reales.
-  const est = s.rows.filter((r) => r.source === 'estimado').length;
-  if (s.runCount >= T.minRunsForShare && est / s.runCount >= T.estimatedShare) recs.push({ id: 'litros-no-registrados', severity: 'info', title: 'Pide a los conductores registrar los litros al terminar la ruta', detail: `${est} de ${s.runCount} corridas usan consumo estimado. Con los litros reales la huella de carbono es más exacta.` });
+
 
   if (!recs.length) recs.push({ id: 'sin-novedades', severity: 'ok', title: 'Sin novedades esta semana', detail: 'Ninguna corrida se salió de lo habitual y los datos de consumo están completos.' });
   recs.sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity));

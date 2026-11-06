@@ -33,7 +33,7 @@ assert.ok(s.headline.length >= 3);
 assert.ok(ids(s).includes('vehiculo-sin-rendimiento'));
 assert.equal(s.recommendations.find((r) => r.id === 'vehiculo-sin-rendimiento').action.kind, 'flota');
 assert.match(s.recommendations.find((r) => r.id === 'vehiculo-sin-rendimiento').title, /C-03/);
-assert.ok(ids(s).includes('litros-no-registrados'));       // todo es estimado: nadie registró litros
+assert.ok(!ids(s).includes('litros-no-registrados'));      // SW-114: el consumo siempre es estimado; ya no se pide registrar litros
 assert.ok(ids(s).includes('camion-gasta-mas'));
 const gap = s.recommendations.find((r) => r.id === 'camion-gasta-mas');
 assert.match(gap.title, /C-02/); assert.match(gap.title, /Ruta Norte/); assert.match(gap.detail, /C-01/);

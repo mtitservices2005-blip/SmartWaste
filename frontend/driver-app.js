@@ -6,7 +6,7 @@ import { selectTodayRoutes, formatTodayText } from '../shared/driver-today.js';
 import { loadDriverToday } from '../shared/driver-data.js';
 import { nextStopInfo, formatElapsed, formatDistance, markVisitedStops, haversineMeters } from '../shared/driver-nav.js';
 import { createLiveMarker } from '../shared/driver-live-marker.js';
-import { parseFuelLiters, buildFuelEntry } from '../shared/fuel-entry.js';
+import { parseFuelGallons, buildFuelEntry } from '../shared/fuel-entry.js';
 
 const firstName = (full) => String(full ?? '').trim().split(/\s+/)[0] ?? '';
 
@@ -117,7 +117,7 @@ export function createDriverController({ load, adapter, gps, municipalityId, use
     const run = currentRun();
     if (!run || state.busy) return;
     state.fuelValue = String(text ?? '');
-    const fuel = parseFuelLiters(text);
+    const fuel = parseFuelGallons(text);
     if (!fuel.ok) { state.finishError = fuel.message; render(); return; }
     state.busy = true;
     try {

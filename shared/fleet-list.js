@@ -5,9 +5,12 @@ import { FUEL_TYPES, FUEL_TYPE_LABELS } from './emission-factors.js';
 export const DEFAULT_MAX_STOPS = 20;
 
 const text = (value) => String(value ?? '').trim();
+// SW-114: la base guarda km por litro; la pantalla muestra y recibe km por galón americano.
+const KM_PER_GAL_FACTOR = 3.785411784;
+const kmPerGallon = (value) => Math.round(Number(value) * KM_PER_GAL_FACTOR * 10) / 10;
 const efficiencyLabel = (value) => {
   const n = Number(value);
-  return value !== null && value !== undefined && value !== '' && Number.isFinite(n) && n > 0 ? `${String(n).replace('.', ',')} km/L` : null;
+  return value !== null && value !== undefined && value !== '' && Number.isFinite(n) && n > 0 ? `${String(kmPerGallon(n)).replace('.', ',')} km/gal` : null;
 };
 const orDash = (value) => text(value) || '—';
 
@@ -21,7 +24,7 @@ export function buildVehicleRows(trucks) {
     // SW-090: rendimiento (km/L) y combustible que digita el ayuntamiento; sin dato no se calcula consumo.
     efficiency: efficiencyLabel(t.fuel_efficiency_km_per_l),
     fuelType: FUEL_TYPE_LABELS[t.fuel_type] ?? null,
-    efficiencyValue: efficiencyLabel(t.fuel_efficiency_km_per_l) ? String(Number(t.fuel_efficiency_km_per_l)) : '',
+    efficiencyValue: efficiencyLabel(t.fuel_efficiency_km_per_l) ? String(kmPerGallon(t.fuel_efficiency_km_per_l)) : '',
     fuelTypeKey: FUEL_TYPES.includes(t.fuel_type) ? t.fuel_type : 'diesel'
   }));
 }
@@ -50,13 +53,14 @@ export function fleetHeader({ tab, count, demo }) {
   return demo ? `${base} · datos de ejemplo` : base;
 }
 
-// SW-090: rendimiento en km por litro (opcional) y tipo de combustible (diésel por defecto).
+// SW-090: rendimiento (opcional) y tipo de combustible (diésel por defecto). SW-114: se escribe en km por galón y se guarda en km por litro.
 export function validateFuelConfig({ efficiency, fuelType } = {}) {
   const raw = text(efficiency).replace(',', '.');
   let value = null;
   if (raw !== '') {
     value = Number(raw);
-    if (!Number.isFinite(value) || value < 0.1 || value > 100) return { ok: false, message: 'El rendimiento debe ser un número entre 0,1 y 100 km por litro.' };
+    if (!Number.isFinite(value) || value < 0.4 || value > 400) return { ok: false, message: 'El rendimiento debe ser un número entre 0,4 y 400 km por galón.' };
+    value = Math.round((value / KM_PER_GAL_FACTOR) * 10000) / 10000;
   }
   const type = text(fuelType) || 'diesel';
   if (!FUEL_TYPES.includes(type)) return { ok: false, message: 'Elige diésel o gasolina.' };

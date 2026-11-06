@@ -1,5 +1,6 @@
-// SW-090: métricas por corrida. Puro (sin red ni DOM). Consumo: Real (litros del conductor) →
-// Estimado (km ÷ rendimiento del camión) → Sin datos (nunca una cifra genérica).
+// SW-090: métricas por corrida. Puro (sin red ni DOM). SW-114: el consumo es siempre estimado (km ÷ rendimiento configurado
+// de cada camión) o Sin datos (nunca una cifra genérica). Lo que el conductor dice haber cargado no entra en el cálculo:
+// se guarda como `loggedLiters`, solo para comparar contra lo estimado.
 import { co2KgForLiters } from './emission-factors.js';
 
 export const TIME_ZONE = 'America/Santo_Domingo';
@@ -28,21 +29,18 @@ export function computeRunMetrics(run, { vehicle = null, fuelLogs = [] } = {}) {
   const durationMin = Number.isFinite(start) && Number.isFinite(end) && end > start ? round((end - start) / 60000, 1) : null;
   const avgSpeedKmh = distanceKm !== null && durationMin !== null ? round(distanceKm / (durationMin / 60), 1) : null;
 
-  const realLiters = fuelLogs
+  const loggedLiters = round(fuelLogs
     .filter((f) => f.route_run_id === run?.id && Number(f.liters) > 0)
-    .reduce((sum, f) => sum + Number(f.liters), 0);
+    .reduce((sum, f) => sum + Number(f.liters), 0));
   const efficiency = Number(vehicle?.fuel_efficiency_km_per_l);
   let source = 'sin_datos';
   let liters = null;
-  if (realLiters > 0) {
-    source = 'real';
-    liters = round(realLiters);
-  } else if (distanceKm !== null && Number.isFinite(efficiency) && efficiency > 0) {
+  if (distanceKm !== null && Number.isFinite(efficiency) && efficiency > 0) {
     source = 'estimado';
     liters = round(distanceKm / efficiency);
   }
   const co2Kg = liters === null ? null : co2KgForLiters(liters, vehicle?.fuel_type);
-  return { runId: run?.id ?? null, vehicleId: run?.vehicle_id ?? null, distanceKm, durationMin, avgSpeedKmh, source, liters, co2Kg, fuelType: vehicle?.fuel_type ?? null };
+  return { runId: run?.id ?? null, vehicleId: run?.vehicle_id ?? null, distanceKm, durationMin, avgSpeedKmh, source, liters, loggedLiters: loggedLiters > 0 ? loggedLiters : null, co2Kg, fuelType: vehicle?.fuel_type ?? null };
 }
 
 const sumOrNull = (values) => {
@@ -61,6 +59,7 @@ export function summarizeMetrics(runs, vehicles, fuelLogs) {
     totalKm: round(rows.reduce((s, r) => s + (r.distanceKm ?? 0), 0)),
     totalMinutes: round(rows.reduce((s, r) => s + (r.durationMin ?? 0), 0), 1),
     liters: sumOrNull(rows.map((r) => r.liters)),
+    loggedLiters: sumOrNull(rows.map((r) => r.loggedLiters)),
     co2Kg: sumOrNull(rows.map((r) => r.co2Kg)),
     vehiclesWithData: withData.size,
     vehiclesTotal: used.size,

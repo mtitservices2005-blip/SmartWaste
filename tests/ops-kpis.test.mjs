@@ -42,7 +42,7 @@ assert.equal(freshnessLabel({ lastCapturedAt: '2026-10-14T11:59:50Z', now }), 'E
   assert.equal(k.alerts, 1, 'sin señal cuenta como alerta');
   assert.equal(k.coverage, '64%');
   assert.equal(k.distance, '41 km');
-  assert.equal(k.fuel, '72 L');
+  assert.equal(k.fuel, '19 gal');
   assert.equal(k.freshness, 'EN VIVO · 8 s', 'usa el dato más reciente de toda la flota');
 }
 {

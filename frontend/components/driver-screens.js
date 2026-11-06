@@ -63,8 +63,8 @@ export function renderDriverFinish({ routeName = '', timeText = '—', distanceT
       <h2>Terminar ${e(routeName)}</h2>
       <p class="sw-driver__sub">Revisa el resumen y anota el combustible.</p>
       <div class="sw-driver__stats">${stat('Tiempo', timeText)}${stat('Distancia', distanceText)}${stat('Paradas', stopsText)}</div>
-      <label class="sw-driver__field-label" for="driverFuelLiters">Combustible usado (litros)</label>
-      <input class="sw-driver__input" id="driverFuelLiters" name="fuelLiters" type="text" inputmode="decimal" autocomplete="off" placeholder="Ejemplo: 18,5" value="${e(fuelValue)}">
+      <label class="sw-driver__field-label" for="driverFuelLiters">Combustible cargado (galones)</label>
+      <input class="sw-driver__input" id="driverFuelLiters" name="fuelLiters" type="text" inputmode="decimal" autocomplete="off" placeholder="Ejemplo: 5,5" value="${e(fuelValue)}">
       ${err}
       <button type="button" class="sw-driver__cta" data-driver-finish-save>Guardar y terminar</button>
       <button type="button" class="sw-driver__cta sw-driver__cta--ghost" data-driver-finish-back>Volver a la ruta</button>

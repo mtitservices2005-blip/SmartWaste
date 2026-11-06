@@ -105,10 +105,10 @@ assert.ok(!s.log.some((l) => l[0] === 'completeRoute' || l[0] === 'gps.stop'));
 
 // Litros válidos: guarda combustible → apaga GPS (con flush) → completa en la base → vuelve a Hoy.
 s.setRuns(baseRuns().map((r, i) => (i === 0 ? { ...r, status: 'completed' } : r)));
-await s.c.action('finish-save', '18,5');
+await s.c.action('finish-save', '5');
 const names = s.log.map((l) => l[0]);
 assert.deepEqual(names.slice(-3), ['logFuel', 'gps.stop', 'completeRoute']);
-assert.deepEqual(s.log.find((l) => l[0] === 'logFuel')[1], { vehicle_id: 'v1', route_run_id: 'run1', liters: 18.5, municipality_id: 'm1' });
+assert.deepEqual(s.log.find((l) => l[0] === 'logFuel')[1], { vehicle_id: 'v1', route_run_id: 'run1', liters: 18.93, municipality_id: 'm1' });
 assert.deepEqual(s.log.find((l) => l[0] === 'gps.stop')[1], { flush: true });
 assert.equal(last(s).screen, 'today');
 assert.ok(last(s).html.includes('Completada'));

@@ -22,9 +22,9 @@ assert.match(lifecycle, /<label[^>]*for="driverFuelLiters"[^>]*>[^<]*combustible
 assert.match(lifecycle, /id="driverFuelLiters"/);
 assert.match(lifecycle, /inputmode="decimal"/);
 const completeBody = app.slice(app.indexOf('async function driverCompleteRoute('), app.indexOf('async function completeRouteManually('));
-assert.match(completeBody, /parseFuelLiters\(/);
+assert.match(completeBody, /parseFuelGallons\(/);
 assert.match(completeBody, /buildFuelEntry\(/);
 assert.match(completeBody, /logFuel\(/);
-assert.ok(completeBody.indexOf('parseFuelLiters(') < completeBody.indexOf('stopDriverGps('), 'valida los litros antes de apagar el GPS');
+assert.ok(completeBody.indexOf('parseFuelGallons(') < completeBody.indexOf('stopDriverGps('), 'valida los galones antes de apagar el GPS');
 assert.ok(completeBody.indexOf('logFuel(') < completeBody.indexOf('completeRouteManually('), 'registra el combustible mientras la asignación sigue vigente');
 console.log('driver-app-wiring ok');

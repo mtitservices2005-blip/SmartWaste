@@ -21,11 +21,14 @@ import { IMPACT_DEMO_NOTICE, IMPACT_SCENARIO_NOTICE, defaultImpactAssumptions, m
 import { COST_PARAMETER_KEYS, validateCostParameters, fetchCostParameters, saveCostParameters, createDemoCostParametersStore } from '../shared/cost-parameters.js';
 import { aggregateRouteSavings } from '../shared/route-savings.js';
 import { buildRealImpact } from '../shared/impact-real.js';
+import { litersToGallons, kmPerLiterToKmPerGallon, kmPerGallonToKmPerLiter, pricePerLiterToPerGallon, pricePerGallonToPerLiter } from '../shared/fuel-units.js';
 import { renderImpactReal } from './components/impact-real-screen.js';
+import { renderMetricsReport, renderImpactReport } from '../shared/report-html.js';
+import { printReport } from './report-print.js';
 import { initAuthGate, readSupabaseConfig, getAuthClient, isDriverApp } from './auth-gate.js';
 import { mountDriverApp } from './driver-app.js';
 import { createDriverTelemetrySession, createPersistentTelemetryQueue } from '../shared/driver-app-telemetry.js';
-import { parseFuelLiters, buildFuelEntry } from '../shared/fuel-entry.js';
+import { parseFuelGallons, buildFuelEntry } from '../shared/fuel-entry.js';
 import { connectionStatusText } from '../shared/driver-app-status.js';
 import { createDriverBackgroundBridge, getOrCreateDriverDeviceId } from '../shared/driver-app-background.js';
 import { demoOnly, isDemoUi } from './ui-mode.js';
@@ -546,7 +549,7 @@ function realTruckGrid(truck) {
   const live = liveFleet?.vehicles.find((v) => v.code === truck.unit) ?? null;
   const status = live ? describeVehicleStatus(live, Date.now()) : 'Sin ruta en curso';
   const signal = live && Number.isFinite(live.ageSeconds) ? (live.ageSeconds < 5 ? 'ahora' : live.ageSeconds < 60 ? `hace ${live.ageSeconds} s` : `hace ${Math.floor(live.ageSeconds / 60)} min`) : '—';
-  const efficiency = truck.fuel_efficiency_km_per_l ? `${truck.fuel_efficiency_km_per_l} km/L` : 'Sin configurar';
+  const efficiency = truck.fuel_efficiency_km_per_l ? `${String(Math.round(kmPerLiterToKmPerGallon(truck.fuel_efficiency_km_per_l) * 10) / 10).replace('.', ',')} km/gal` : 'Sin configurar';
   return `<div class="detail-grid"><p><b>Conductor</b><span>${escapeHtml(driverName(truck.driverId))}</span></p><p><b>Matrícula</b><span>${escapeHtml(truck.plate || '—')}</span></p><p><b>Ruta</b><span>${escapeHtml(routeName(truck.routeId))}</span></p><p><b>Estado</b><span>${escapeHtml(status)}</span></p><p><b>Última señal GPS</b><span>${signal}</span></p><p><b>Rendimiento</b><span>${escapeHtml(efficiency)}</span></p></div>`;
 }
 function renderTruckDetail(truck) {
@@ -642,8 +645,10 @@ function renderRouteDetail(route) {
   const distanceRow = measuredDistanceKm !== null
     ? `<p><b>Distancia</b><span>${measuredDistanceKm} km · medido</span></p>`
     : `<p><b>Distancia</b><span>${route.distanceKm != null ? `${route.distanceKm} km` : '—'} · estimado</span></p>`;
-  const estimatedFuelLiters = displayDistanceKm != null ? estimateFuelLiters(displayDistanceKm) : null;
-  const fuelRow = `<p><b>Consumo estimado</b><span>${estimatedFuelLiters != null ? `${estimatedFuelLiters} L` : '—'}</span></p>`;
+  // SW-114: consumo estimado con el rendimiento configurado del camión de esta ruta (nunca un rendimiento genérico).
+  const routeTruck = trucks.find((t) => t.routeId === route.id);
+  const estimatedFuelLiters = displayDistanceKm != null && routeTruck?.fuel_efficiency_km_per_l ? estimateFuelLiters(displayDistanceKm, Number(routeTruck.fuel_efficiency_km_per_l)) : null;
+  const fuelRow = `<p><b>Consumo estimado</b><span>${estimatedFuelLiters != null ? `${String(Math.round(litersToGallons(estimatedFuelLiters) * 10) / 10).replace('.', ',')} gal · rendimiento del camión` : 'Sin rendimiento del camión'}</span></p>`;
   const gpsEvidenceRow = route.gps_points_count != null
     ? `<p><b>Evidencia GPS</b><span>${route.gps_points_count} punto(s) reales guardados${route.gps_started_at && route.gps_ended_at ? ` · ${new Date(route.gps_started_at).toLocaleTimeString()}–${new Date(route.gps_ended_at).toLocaleTimeString()}` : ''}</span></p>`
     : '<p><b>Evidencia GPS</b><span>Sin métricas GPS cerradas</span></p>';
@@ -1154,7 +1159,7 @@ function driverRouteLifecycleControl(truck) {
   const route = truck?.routeId ? routeById(truck.routeId) : null;
   if (!route) return '';
   if (route.status === 'assigned') return `<div class="controls"><button type="button" class="btn-primary" data-driver-start-route="${route.id}">Iniciar recorrido</button></div>`;
-  if (['started', 'in_progress', 'delayed'].includes(route.status)) return `<div class="sw-field"><label class="sw-field__label" for="driverFuelLiters">Litros de combustible cargados (opcional)</label><input class="sw-field__control" id="driverFuelLiters" name="driverFuelLiters" type="text" inputmode="decimal" aria-describedby="driverFuelHint" autocomplete="off"><p class="sw-field__hint" id="driverFuelHint">Si cargaste combustible en este recorrido, escribe los litros. Ejemplo: 45,5</p></div><div class="controls"><button type="button" class="btn-primary" data-driver-complete-route="${route.id}">Finalizar recorrido</button></div>`;
+  if (['started', 'in_progress', 'delayed'].includes(route.status)) return `<div class="sw-field"><label class="sw-field__label" for="driverFuelLiters">Galones de combustible cargados (opcional)</label><input class="sw-field__control" id="driverFuelLiters" name="driverFuelLiters" type="text" inputmode="decimal" aria-describedby="driverFuelHint" autocomplete="off"><p class="sw-field__hint" id="driverFuelHint">Si cargaste combustible en este recorrido, escribe los galones. Ejemplo: 5,5</p></div><div class="controls"><button type="button" class="btn-primary" data-driver-complete-route="${route.id}">Finalizar recorrido</button></div>`;
   return '';
 }
 function renderDriverMobile() {
@@ -1648,8 +1653,8 @@ function renderUsagePanel(metrics) {
 // the shared module) since it's presentation, not domain logic. Order matches the fields' order of
 // appearance in the existing formula (shared/impact-center.js), not alphabetical.
 const COST_PARAMETER_FIELD_META = [
-  { key: 'fuelPrice', label: 'Precio combustible (RD$/L)', step: 1 },
-  { key: 'fuelEfficiency', label: 'Rendimiento (km/L)', step: 0.1 },
+  { key: 'fuelPrice', label: 'Precio combustible (RD$/galón)', step: 1, toDisplay: pricePerLiterToPerGallon, fromDisplay: pricePerGallonToPerLiter },
+  { key: 'fuelEfficiency', label: 'Rendimiento de referencia (km/galón)', step: 0.1, toDisplay: kmPerLiterToKmPerGallon, fromDisplay: kmPerGallonToKmPerLiter },
   { key: 'operatingDays', label: 'Días operativos por mes', step: 1 },
   { key: 'hourlyCost', label: 'Costo operativo por hora (RD$)', step: 1 },
   { key: 'baseDistanceKm', label: 'Distancia base antes de SmartWaste (km)', step: 0.1 },
@@ -1663,13 +1668,15 @@ const COST_PARAMETER_FIELD_META = [
 // tab, plus one per municipality in Master Admin) — an id would collide across them. Callers scope
 // reads/writes to one form's own container (see readCostParameterFields()).
 function renderCostParameterFields(values) {
-  return COST_PARAMETER_FIELD_META.map(({ key, label, step }) => `<label>${label} <input data-cost-param="${key}" type="number" step="${step}" min="0" value="${values[key]}"></label>`).join('');
+  // SW-114: precio y rendimiento se muestran por galón; se guardan por litro (como todo lo demás).
+  return COST_PARAMETER_FIELD_META.map(({ key, label, step, toDisplay }) => `<label>${label} <input data-cost-param="${key}" type="number" step="${step}" min="0" value="${toDisplay ? Math.round(toDisplay(values[key]) * 100) / 100 : values[key]}"></label>`).join('');
 }
 function readCostParameterFields(container) {
   const values = {};
-  COST_PARAMETER_FIELD_META.forEach(({ key }) => {
+  COST_PARAMETER_FIELD_META.forEach(({ key, fromDisplay }) => {
     const input = container?.querySelector(`[data-cost-param="${key}"]`);
-    values[key] = input && input.value !== '' ? Number(input.value) : undefined;
+    const raw = input && input.value !== '' ? Number(input.value) : undefined;
+    values[key] = raw !== undefined && fromDisplay ? fromDisplay(raw) : raw;
   });
   return values;
 }
@@ -1692,7 +1699,7 @@ function renderRouteSavingsComparison(m) {
   // Codex review (PR #88, P2): "guardado" en vez de "manual" — el orden comparado es el que quedó
   // persistido en listRouteStops(), no necesariamente el trazo original sin ajustes de un despachador
   // (ver docs/SW030_COST_PARAMETERS.md, sección "Fuera de alcance / pendiente").
-  return `<p>${c.routesCompared} ruta(s) real(es) comparada(s).</p><p><b>${num(c.savedKm, ' km')}</b> (${c.savedPercent}%) potencialmente evitados optimizando el orden de paradas · <b>${num(c.savedFuelLiters, ' L')}</b> / <b>${money(c.savedFuelCost)}</b> potencial.</p><p class="demo">Orden guardado: ${num(c.manualDistanceKm, ' km')} · Optimizada: ${num(c.optimizedDistanceKm, ' km')}</p>`;
+  return `<p>${c.routesCompared} ruta(s) real(es) comparada(s).</p><p><b>${num(c.savedKm, ' km')}</b> (${c.savedPercent}%) potencialmente evitados optimizando el orden de paradas · <b>${c.savedFuelLiters == null ? num(null, ' gal') : num(Math.round(c.savedFuelLiters / 3.785411784 * 100) / 100, ' gal')}</b> / <b>${money(c.savedFuelCost)}</b> potencial.</p><p class="demo">Orden guardado: ${num(c.manualDistanceKm, ' km')} · Optimizada: ${num(c.optimizedDistanceKm, ' km')}</p>`;
 }
 // SW-075: environmental estimate block. The assumptions used travel with the result and are always
 // shown next to the numbers; null means "pendiente de datos", never a fabricated 0 (rule 6/7).
@@ -1700,7 +1707,7 @@ function renderEnvironmentalImpact(environmental) {
   if (!environmental) return '<p class="demo">Pendiente de datos operativos reales — todavía no hay corridas medidas para este municipio.</p>';
   const co2 = environmental.avoidedCo2Kg === null
     ? '<p class="demo">CO2 evitado: pendiente de datos — falta comparar rutas reales (mínimo 3 paradas por ruta).</p>'
-    : `<p><b>${num(environmental.avoidedCo2Kg, ' kg')}</b> de CO2 potencialmente evitados (${num(environmental.avoidedLiters, ' L')} de combustible).</p>`;
+    : `<p><b>${num(environmental.avoidedCo2Kg, ' kg')}</b> de CO2 potencialmente evitados (${environmental.avoidedLiters == null ? num(null, ' gal') : num(Math.round(environmental.avoidedLiters / 3.785411784 * 100) / 100, ' gal')} de combustible).</p>`;
   return `<p><b>${num(environmental.estimatedKg, ' kg')}</b> de residuos recolectados (estimado).</p>${co2}<p class="demo">Supuestos: ${environmental.assumptions.kgPerStop} kg por casa · ${environmental.assumptions.co2KgPerLiter} kg de CO2 por litro. ${environmental.notice}</p>`;
 }
 function renderImpactCenter(assumptions = defaultImpactAssumptions, filters = {}) {
@@ -1755,7 +1762,7 @@ function currentImpactAssumptions() {
   return values;
 }
 function currentImpactFilters(){ return { sector: $('#impactSector')?.value || '', route: $('#impactRoute')?.value || '', vehicle: $('#impactVehicle')?.value || '', status: $('#impactStatus')?.value || '', period: $('#impactPeriod')?.value || 'Hoy' }; }
-function renderImpactEconomics(m){return `<h3>Impacto económico estimado</h3><p><b>${num(m.efficiency.fuelSavedLiters,' L')}</b> combustible potencialmente optimizado.</p><p><b>${money(m.economics.monthlyPotentialAvoided)}</b> costo mensual potencialmente evitado.</p><p><b>${money(m.economics.annualProjectionDemo)}</b> proyección anual demo.</p><p><b>${num(m.efficiency.avoidedKm,' km')}</b> kilómetros potencialmente evitados · <b>${num(m.efficiency.optimizedHours,' h')}</b> horas operativas potencialmente optimizadas.</p><p><b>${money(m.economics.incidentCostAvoided)}</b> costo potencial por incidencias evitadas con supuesto configurable válido.</p><p class="demo">Ahorro potencial estimado; no es ahorro garantizado ni resultado real.</p>`}
+function renderImpactEconomics(m){return `<h3>Impacto económico estimado</h3><p><b>${num(Math.round(m.efficiency.fuelSavedLiters / 3.785411784 * 100) / 100,' gal')}</b> combustible potencialmente optimizado.</p><p><b>${money(m.economics.monthlyPotentialAvoided)}</b> costo mensual potencialmente evitado.</p><p><b>${money(m.economics.annualProjectionDemo)}</b> proyección anual demo.</p><p><b>${num(m.efficiency.avoidedKm,' km')}</b> kilómetros potencialmente evitados · <b>${num(m.efficiency.optimizedHours,' h')}</b> horas operativas potencialmente optimizadas.</p><p><b>${money(m.economics.incidentCostAvoided)}</b> costo potencial por incidencias evitadas con supuesto configurable válido.</p><p class="demo">Ahorro potencial estimado; no es ahorro garantizado ni resultado real.</p>`}
 function renderImpactBars(m){return [...m.coverage.bySector.map((s)=>`${s.name} cobertura ${s.coverage}% ${bar(s.coverage)}`),`Cumplimiento rutas ${m.routes.complianceRate}% ${bar(m.routes.complianceRate)}`,`Estado flota activa ${m.fleet.availabilityRate}% ${bar(m.fleet.availabilityRate)}`,`Kilómetros productivos ${m.operation.productiveKm}/${m.operation.distanceKm} ${bar(m.operation.productiveKm,m.operation.distanceKm)}`,`Combustible optimizado ${m.efficiency.fuelSavedLiters} L ${bar(m.efficiency.fuelSavedLiters,3)}`,`Ahorro mensual/anual ${money(m.economics.monthlyPotentialAvoided)} / ${money(m.economics.annualProjectionDemo)} ${bar(m.economics.monthlyPotentialAvoided,m.economics.annualProjectionDemo/6)}`].map(x=>`<p>${x}</p>`).join('')}
 function renderBeforeAfter(m){return `<div class="comparison-table">${m.beforeAfter.map((r)=>`<p><b>${r.label}</b><span>Antes: ${r.before} ${r.unit} · SmartWaste: ${r.after} ${r.unit}</span><small>Diferencia: ${r.absolute} ${r.unit} · variación: ${r.variation}%${r.reduction!==null?` · reducción: ${r.reduction}%`:''}${r.points!==null?` · ${r.points} puntos porcentuales`:''}</small></p>`).join('')}</div>`}
 
@@ -2367,7 +2374,7 @@ async function driverStartRoute(routeId) {
 async function driverCompleteRoute(routeId) {
   // SW-083: el combustible se valida ANTES de apagar el GPS (un error de tecleo no debe costar el recorrido)
   // y se registra mientras la asignación del chofer sigue vigente. Es opcional: vacío = omitido.
-  const fuel = parseFuelLiters($('#driverFuelLiters')?.value);
+  const fuel = parseFuelGallons($('#driverFuelLiters')?.value);
   if (!fuel.ok) { showToast(fuel.message, { type: 'error' }); $('#driverFuelLiters')?.focus(); return; }
   let fuelEntry = null;
   if (fuel.liters != null && realAdapter && driverAuthContext) {
@@ -2377,7 +2384,7 @@ async function driverCompleteRoute(routeId) {
   if (fuelEntry) {
     const saved = await realAdapter.logFuel(fuelEntry);
     if (!saved?.ok) showToast(`No se pudo guardar el combustible: ${saved?.error?.message ?? 'error desconocido'}. Avisa a tu supervisor.`, { type: 'error' });
-    else { showToast(`Combustible guardado: ${fuel.liters} litros.`); const fuelInput = $('#driverFuelLiters'); if (fuelInput) fuelInput.value = ''; /* evita duplicar si hay que reintentar */ }
+    else { showToast(`Combustible guardado: ${fuel.gallons} galones.`); const fuelInput = $('#driverFuelLiters'); if (fuelInput) fuelInput.value = ''; /* evita duplicar si hay que reintentar */ }
   }
   // Stop producing samples, then wait for the last accepted browser event to reach Supabase before
   // completeRoute() calculates distance and stamps the final GPS metrics on route_runs.
@@ -3325,7 +3332,22 @@ async function loadImpactReal() {
   }
   renderImpactRealScreen();
 }
+// SW-115: "Descargar reporte PDF" (Métricas e Impacto y Ahorros). Abre el diálogo de impresión con el reporte; ahí se elige "Guardar como PDF".
+const REPORT_MUNICIPALITY = 'Laguna Salada';
+function downloadReport(kind) {
+  if (kind === 'metricas' && metrics.data) {
+    const d = metrics.data;
+    const view = buildMetricsView({ ...d, period: metrics.period, filters: metrics.filters });
+    printReport(renderMetricsReport({ view, period: metrics.period, municipalityName: REPORT_MUNICIPALITY, rawRuns: d.runs }));
+  } else if (kind === 'impacto' && impactReal.data) {
+    const d = impactReal.data;
+    const model = buildRealImpact({ runs: d.runs, vehicles: d.vehicles, fuelLogs: d.fuelLogs, routes: d.routes, routeStops: impactReal.routeStops, costParameters: currentImpactAssumptions(), periodDays: impactReal.period });
+    printReport(renderImpactReport({ model, period: impactReal.period, municipalityName: REPORT_MUNICIPALITY, priceConfigured: impactCostParametersConfigured }));
+  } else { showToast('Espera a que carguen los datos para descargar el reporte.'); }
+}
 document.addEventListener('click', (event) => {
+  const dl = event.target.closest?.('[data-report-download]');
+  if (dl) { downloadReport(dl.dataset.reportDownload); return; }
   const chip = event.target.closest?.('[data-impact-period]');
   if (!chip) return;
   impactReal.period = Number(chip.dataset.impactPeriod) || 30;

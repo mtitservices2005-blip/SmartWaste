@@ -64,7 +64,7 @@ const fin = renderDriverFinish({ routeName: 'Ruta Centro', timeText: '00:58', di
 assert.ok(fin.includes('Terminar Ruta Centro'));
 assert.ok(fin.includes('Revisa el resumen y anota el combustible.'));
 assert.ok(fin.includes('00:58') && fin.includes('6,4 km') && fin.includes('12/12'));
-assert.ok(fin.includes('Combustible usado (litros)'));
+assert.ok(fin.includes('Combustible cargado (galones)'));
 assert.match(fin, /<input[^>]*id="driverFuelLiters"/, 'mismo id que usa la lógica actual de combustible');
 assert.match(fin, /inputmode="decimal"/);
 assert.match(fin, /data-driver-finish-save[^>]*>Guardar y terminar</);

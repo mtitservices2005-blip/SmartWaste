@@ -8,7 +8,10 @@ import { renderWeeklySummary } from './summary-screens.js';
 const PERIODS = [{ days: 1, label: 'Hoy' }, { days: 7, label: '7 días' }, { days: 14, label: '14 días' }, { days: 30, label: '30 días' }, { days: 90, label: 'Trimestre' }];
 const TABS = [{ key: 'camiones', label: 'Por camión' }, { key: 'rutas', label: 'Por ruta' }, { key: 'conductores', label: 'Por conductor' }, { key: 'corridas', label: 'Corridas' }, { key: 'comparar', label: 'Comparar' }, { key: 'resumen', label: 'Resumen' }];
 const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
-const SOURCES = { real: ['●', 'Real', 'real'], estimado: ['≈', 'Estimado', 'est'], sin_datos: ['–', 'Sin datos', 'none'] };
+const SOURCES = { estimado: ['≈', 'Estimado', 'est'], sin_datos: ['–', 'Sin datos', 'none'] };
+// SW-114: el combustible se muestra en galones americanos (la base guarda litros).
+const GAL = 3.785411784;
+const gal = (fmt, liters) => `${fmt.number(liters / GAL, 1)} gal`;
 const muted = (t = '—') => `<span class="sw-metrics__muted">${t}</span>`;
 
 export function sourceBadge(source) {
@@ -87,7 +90,7 @@ function renderKpis(view, fmt, period) {
   const s = view.summary;
   const cover = `${s.vehiclesWithData} de ${s.vehiclesTotal} camiones con dato`;
   const periodText = period === 1 ? 'hoy' : `en ${period} días`;
-  return `<div class="sw-metrics__kpis">${kpi('Corridas completadas', String(s.runCount), periodText)}${kpi('Distancia medida', fmt.km(s.totalKm), 'GPS del teléfono')}${kpi('Tiempo en ruta', fmt.duration(s.totalMinutes), 'suma de corridas')}${kpi('Consumo', s.liters === null ? 'Sin datos' : `${fmt.number(s.liters, 2)} L`, s.liters === null ? 'falta rendimiento o litros' : cover)}${kpi('Huella de carbono', s.co2Kg === null ? 'Sin datos' : `${fmt.number(s.co2Kg, 2)} kg`, s.co2Kg === null ? 'falta rendimiento y combustible' : `CO₂ estimado · ${cover}`)}</div>`;
+  return `<div class="sw-metrics__kpis">${kpi('Corridas completadas', String(s.runCount), periodText)}${kpi('Distancia medida', fmt.km(s.totalKm), 'GPS del teléfono')}${kpi('Tiempo en ruta', fmt.duration(s.totalMinutes), 'suma de corridas')}${kpi('Consumo', s.liters === null ? 'Sin datos' : gal(fmt, s.liters), s.liters === null ? 'falta rendimiento del camión' : `${cover} · por rendimiento del camión`)}${kpi('Huella de carbono', s.co2Kg === null ? 'Sin datos' : `${fmt.number(s.co2Kg, 2)} kg`, s.co2Kg === null ? 'falta rendimiento del camión' : `CO₂ estimado · ${cover}`)}</div>`;
 }
 
 function renderNotice(view) {
@@ -118,7 +121,7 @@ function renderGroupTable(groups, label, fmt) {
   const body = groups.map((g) => {
     const none = g.source === 'sin_datos';
     const cfg = none && g.vehicleId ? ` <a class="sw-metrics__link" href="#operaciones/flota" data-metrics-config>Configurar</a>` : '';
-    return `<tr><td class="sw-routes__name">${escapeHtml(g.label)}</td><td class="sw-routes__num">${g.runs}</td><td class="sw-routes__num">${fmt.km(g.km)}</td><td class="sw-routes__num">${fmt.duration(g.minutes)}</td><td class="sw-routes__num">${none ? muted() : `${fmt.number(g.liters, 2)} L`}</td><td>${sourceBadge(g.source)}${cfg}</td><td class="sw-routes__num">${none || g.co2Kg === null ? muted() : fmt.number(g.co2Kg, 2)}</td><td class="sw-routes__num">${g.co2PerKm === null ? muted() : fmt.number(g.co2PerKm, 2)}</td></tr>`;
+    return `<tr><td class="sw-routes__name">${escapeHtml(g.label)}</td><td class="sw-routes__num">${g.runs}</td><td class="sw-routes__num">${fmt.km(g.km)}</td><td class="sw-routes__num">${fmt.duration(g.minutes)}</td><td class="sw-routes__num">${none ? muted() : gal(fmt, g.liters)}</td><td>${sourceBadge(g.source)}${cfg}</td><td class="sw-routes__num">${none || g.co2Kg === null ? muted() : fmt.number(g.co2Kg, 2)}</td><td class="sw-routes__num">${g.co2PerKm === null ? muted() : fmt.number(g.co2PerKm, 2)}</td></tr>`;
   }).join('');
   return tbl(`Métricas ${label}`, [label, 'Corridas', 'Distancia', 'Tiempo', 'Consumo', 'Fuente del dato', 'CO₂ (kg)', 'kg CO₂ / km'], body);
 }
@@ -141,9 +144,10 @@ function renderRuns({ view, selectedRunId, trace, fmt }) {
   const meta = (a, b) => `<div class="sw-metrics__meta"><span>${a}</span><b>${b}</b></div>`;
   let detail = '';
   if (sel) {
-    const fuelLine = sel.liters === null ? muted('Sin datos') : `${fmt.number(sel.liters, 2)} L ${sourceBadge(sel.source)}`;
-    const factor = sel.fuelType === 'gasolina' ? '2,31 kg por litro de gasolina' : '2,68 kg por litro de diésel';
-    const hint = sel.source === 'real' ? `Litros registrados por el conductor al terminar la ruta. CO₂ = litros × ${factor}.` : sel.source === 'estimado' ? `Litros estimados: km medidos ÷ rendimiento configurado. CO₂ = litros × ${factor}.` : 'Sin litros registrados ni rendimiento configurado: no se calcula consumo ni CO₂.';
+    const fuelLine = sel.liters === null ? muted('Sin datos') : `${gal(fmt, sel.liters)} ${sourceBadge(sel.source)}`;
+    const logged = sel.loggedLiters ? ` Control: el conductor anotó ${gal(fmt, sel.loggedLiters)} cargados.` : '';
+    const factor = sel.fuelType === 'gasolina' ? '8,74 kg por galón de gasolina' : '10,15 kg por galón de diésel';
+    const hint = sel.source === 'estimado' ? `Galones estimados: km medidos ÷ rendimiento configurado del camión. CO₂ = galones × ${factor}.${logged}` : `Sin rendimiento configurado para este camión: no se calcula consumo ni CO₂.${logged}`;
     detail = `<div class="sw-rutas__mini">${miniMap(trace)}</div><div class="sw-rutas__card"><h3>${escapeHtml(sel.routeName)} · ${dateTime(sel.startedAt)}</h3><p class="sw-rutas__sub">${escapeHtml(sel.driverName)} · ${escapeHtml(sel.vehicleLabel)}</p>
       <div class="sw-metrics__metagrid">${meta('Distancia', fmt.km(sel.distanceKm))}${meta('Duración', fmt.duration(sel.durationMin))}${meta('Puntos GPS', sel.gpsPoints ?? '—')}${meta('Combustible', fuelLine)}${meta('Huella de carbono', sel.co2Kg === null ? '—' : `${fmt.number(sel.co2Kg, 2)} kg CO₂`)}${meta('kg CO₂ / km', sel.co2PerKm === null ? '—' : fmt.number(sel.co2PerKm, 2))}</div>
       <p class="sw-routes__hint">${hint}</p>
@@ -155,7 +159,9 @@ function renderRuns({ view, selectedRunId, trace, fmt }) {
 
 export function renderMetricsPage({ view, period = 14, tab = 'camiones', filters = {}, options = { routes: [], vehicles: [], drivers: [] }, selectedRunId = null, trace = null, fmt, demo = false, municipalityName = '', weekly = null } = {}) {
   const sub = municipalityName ? `Corridas completadas en ${escapeHtml(municipalityName)}${demo ? ' · datos de ejemplo' : ''}` : 'Corridas completadas';
-  const head = `<div class="sw-rutas__head"><div><h2>Métricas</h2><p class="sw-rutas__sub">${sub}</p>${demo ? '<p class="sw-rutas__demo">Datos demo · no producción</p>' : ''}</div></div>`;
+  // SW-115: el reporte PDF solo se ofrece cuando hay corridas que reportar.
+  const download = view.isEmpty ? '' : '<button type="button" class="sw-rutas__btn" data-report-download="metricas">Descargar reporte PDF</button>';
+  const head = `<div class="sw-rutas__head"><div><h2>Métricas</h2><p class="sw-rutas__sub">${sub}</p>${demo ? '<p class="sw-rutas__demo">Datos demo · no producción</p>' : ''}</div>${download}</div>`;
   const top = `${head}${renderFilters({ period, filters, options, view })}`;
   if (view.isEmpty) {
     return `${top}${emptyState({ title: 'Todavía no hay corridas completadas', message: 'Cuando un conductor termine una ruta con el teléfono, sus kilómetros, tiempo y huella de carbono aparecen aquí.' })}`;

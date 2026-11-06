@@ -28,7 +28,7 @@ function renderPeriod(cmp, fmt) {
     ['Corridas', String(c.runCount), String(p.runCount), d.runCount, false],
     ['Distancia', fmt.km(c.km), fmt.km(p.km), d.km, false],
     ['Tiempo en ruta', fmt.duration(c.minutes), fmt.duration(p.minutes), d.minutes, true],
-    ['Consumo', num(c.liters, 2, ' L'), num(p.liters, 2, ' L'), d.liters, true],
+    ['Consumo', num(c.liters === null ? null : c.liters / 3.785411784, 1, ' gal'), num(p.liters === null ? null : p.liters / 3.785411784, 1, ' gal'), d.liters, true],
     ['Huella de carbono', num(c.co2Kg, 2, ' kg'), num(p.co2Kg, 2, ' kg'), d.co2Kg, true]
   ].map(([l, cur, prev, dl, lower]) => `<tr><td class="sw-routes__name">${l}</td><td class="sw-routes__num">${cur}</td><td class="sw-routes__num">${prev}</td><td>${delta(dl, lower)}</td></tr>`).join('');
   return `<section class="sw-rutas__card"><h3>Este periodo contra el anterior</h3><div class="sw-routes__scroll"><table class="sw-routes__table sw-fleet-table sw-metrics__table"><caption class="sw-visually-hidden">Periodo contra periodo anterior</caption><thead><tr><th scope="col">Indicador</th><th scope="col">Este periodo</th><th scope="col">Periodo anterior</th><th scope="col">Cambio</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
@@ -52,10 +52,10 @@ function renderTrucks(cmp) {
   const groups = cmp.trucksOnRoute.map((g) => {
     const rows = g.trucks.map((t) => {
       const best = t.vehicleId === g.bestVehicleId ? ' <span class="sw-compare__best">Mejor</span>' : '';
-      return `<tr><td class="sw-routes__name">${escapeHtml(t.label)}${best}</td><td class="sw-routes__num">${t.runs}</td><td class="sw-routes__num">${cell(t.minPerKm)}</td><td class="sw-routes__num">${cell(t.kmPerL)}</td><td class="sw-routes__num">${cell(t.co2PerKm)}</td></tr>`;
+      return `<tr><td class="sw-routes__name">${escapeHtml(t.label)}${best}</td><td class="sw-routes__num">${t.runs}</td><td class="sw-routes__num">${cell(t.minPerKm)}</td><td class="sw-routes__num">${cell(t.kmPerL === null || t.kmPerL === undefined ? t.kmPerL : Math.round(t.kmPerL * 3.785411784 * 10) / 10)}</td><td class="sw-routes__num">${cell(t.co2PerKm)}</td></tr>`;
     }).join('');
     const why = g.bestBy === 'co2PerKm' ? 'menor CO₂ por km' : g.bestBy === 'minPerKm' ? 'menos minutos por km' : '';
-    return `<div class="sw-compare__route"><h4>${escapeHtml(g.routeName)}${why ? ` <small>· mejor por ${why}</small>` : ''}</h4><div class="sw-routes__scroll"><table class="sw-routes__table sw-fleet-table sw-metrics__table"><caption class="sw-visually-hidden">Camiones en ${escapeHtml(g.routeName)}</caption><thead><tr><th scope="col">Camión</th><th scope="col">Corridas</th><th scope="col">min / km</th><th scope="col">km / L</th><th scope="col">kg CO₂ / km</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    return `<div class="sw-compare__route"><h4>${escapeHtml(g.routeName)}${why ? ` <small>· mejor por ${why}</small>` : ''}</h4><div class="sw-routes__scroll"><table class="sw-routes__table sw-fleet-table sw-metrics__table"><caption class="sw-visually-hidden">Camiones en ${escapeHtml(g.routeName)}</caption><thead><tr><th scope="col">Camión</th><th scope="col">Corridas</th><th scope="col">min / km</th><th scope="col">km / gal</th><th scope="col">kg CO₂ / km</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
   }).join('');
   const inner = groups || `<p class="sw-routes__hint">Todavía no hay dos camiones con al menos 2 corridas en la misma ruta.</p>`;
   return `<section class="sw-rutas__card"><h3>Camiones en la misma ruta</h3>${inner}</section>`;

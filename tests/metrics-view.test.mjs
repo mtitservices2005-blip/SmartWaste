@@ -24,7 +24,7 @@ assert.equal(v.excludedTests, 1);
 assert.equal(v.series.length, 14);
 assert.equal(v.byVehicle.length, 2);
 const c01 = v.byVehicle.find((g) => g.label === 'C-01');
-assert.equal(c01.runs, 1); assert.equal(c01.source, 'real'); assert.equal(c01.liters, 3);
+assert.equal(c01.runs, 1); assert.equal(c01.source, 'estimado'); assert.equal(c01.loggedLiters, undefined); assert.ok(c01.liters > 0 && c01.liters !== 3, 'la carga del conductor (3 L) no cambia el consumo estimado');
 const c02 = v.byVehicle.find((g) => g.label === 'C-02');
 assert.equal(c02.source, 'sin_datos'); assert.equal(c02.co2Kg, null); assert.equal(c02.vehicleId, 'v2');
 assert.deepEqual(v.byRoute.map((g) => g.label).sort(), ['Ruta Centro', 'Ruta Norte']);
