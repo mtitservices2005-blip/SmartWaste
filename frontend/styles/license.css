@@ -1,0 +1,36 @@
+/* SW-117: licencia por camión. Usa los tokens de SW-082/Mando; funciona en tema claro y oscuro. */
+.sw-license { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.sw-license h4 { margin: var(--space-3) 0 0; font-size: var(--font-size-2); }
+.sw-license__banner { display: flex; flex-direction: column; gap: 2px; border-radius: var(--radius-2); padding: var(--space-3) var(--space-4); font-weight: 500; }
+.sw-license__banner b { font-weight: 700; }
+.sw-license__banner--info { background: var(--color-info-bg); color: var(--color-info); }
+.sw-license__banner--warn { background: var(--color-warning-bg); color: var(--color-warning); }
+.sw-license__banner--bad { background: var(--color-danger-bg); color: var(--color-danger); }
+.sw-license__banner--off { background: var(--status-fuera-servicio-bg); color: var(--status-fuera-servicio); }
+.sw-license__kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-2) var(--space-4); margin: 0; }
+.sw-license__kv dt { color: var(--color-muted); }
+.sw-license__kv dd { margin: 0; text-align: right; font-weight: 600; overflow-wrap: anywhere; }
+.sw-license__mono { font-family: ui-monospace, 'IBM Plex Mono', Consolas, monospace; font-variant-numeric: tabular-nums; }
+.sw-license__badge { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 2px 10px; font-size: var(--font-size-1); font-weight: 700; white-space: nowrap; }
+.sw-license__badge::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.sw-license__badge--prueba { background: var(--color-info-bg); color: var(--color-info); }
+.sw-license__badge--activo { background: var(--color-success-bg); color: var(--color-success); }
+.sw-license__badge--por_vencer { background: var(--color-warning-bg); color: var(--color-warning); }
+.sw-license__badge--vencido { background: var(--color-danger-bg); color: var(--color-danger); }
+.sw-license__badge--suspendido { background: var(--status-fuera-servicio-bg); color: var(--status-fuera-servicio); }
+.sw-license__bar { height: 10px; border-radius: 999px; background: var(--status-fuera-servicio-bg); overflow: hidden; }
+.sw-license__bar i { display: block; height: 100%; background: var(--color-primary); }
+.sw-license__bar.is-full i { background: var(--color-warning); }
+.sw-license__panel { border: 1px solid var(--color-border); border-radius: var(--radius-2); padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); background: var(--color-background-alt); }
+.sw-license__panel input[type="number"] { width: 6rem; margin-left: var(--space-2); }
+.sw-license__quote { font-weight: 600; margin: 0; }
+.sw-license__grid { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.sw-license__grid label { display: flex; flex-direction: column; gap: var(--space-1); font-size: var(--font-size-1); color: var(--color-muted); }
+.sw-license__grid input, .sw-license__grid select { font: inherit; color: var(--color-text); background: var(--color-surface); border: 1px solid var(--color-border-input); border-radius: var(--radius-1); padding: 6px 8px; min-width: 0; }
+.sw-license__check { flex-direction: row !important; align-items: center; }
+.sw-license__log { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.sw-license__log li { display: grid; grid-template-columns: 7.5rem minmax(0, 1fr) auto; gap: var(--space-3); align-items: center; border-top: 1px solid var(--color-border); padding-top: var(--space-2); font-size: var(--font-size-2); }
+.sw-license__log li > span { min-width: 0; overflow-wrap: anywhere; }
+.sw-license__log li button { grid-column: 1 / -1; justify-self: start; }
+@media (max-width: 560px) { .sw-license__log li { grid-template-columns: minmax(0, 1fr); } }
+#licenseBanner:not(:empty) { padding: var(--space-3) var(--space-4) 0; }

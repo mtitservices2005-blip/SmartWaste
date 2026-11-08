@@ -23,6 +23,10 @@ import { aggregateRouteSavings } from '../shared/route-savings.js';
 import { buildRealImpact } from '../shared/impact-real.js';
 import { litersToGallons, kmPerLiterToKmPerGallon, kmPerGallonToKmPerLiter, pricePerLiterToPerGallon, pricePerGallonToPerLiter } from '../shared/fuel-units.js';
 import { renderImpactReal } from './components/impact-real-screen.js';
+import { fetchLicense, fetchAllLicenses, countVehicles, addTrucks, saveLicenseTerms, createLicense, registerPayment, setSuspended, markEventBilled } from '../shared/license-data.js';
+import { licenseErrorMessage, validateTruckRequest, quoteText } from '../shared/license.js';
+import { buildLicenseCardView, buildMasterLicenseView } from '../shared/license-view.js';
+import { renderLicenseCard, renderMasterLicense, renderLicenseBanner } from './components/license-screens.js';
 import { renderMetricsReport, renderImpactReport } from '../shared/report-html.js';
 import { printReport } from './report-print.js';
 import { initAuthGate, readSupabaseConfig, getAuthClient, isDriverApp } from './auth-gate.js';
@@ -913,12 +917,13 @@ async function requireRealAdapter(promise, status, failureMessage) {
   try {
     const result = await promise;
     if (!result?.ok) {
-      if (status) status.textContent = failureMessage(result?.error?.message ?? 'error desconocido');
+      const raw = result?.error?.message ?? 'error desconocido';
+      if (status) status.textContent = licenseErrorMessage(raw) ?? failureMessage(raw);
       return { ok: false };
     }
     return { ok: true, data: result.data };
   } catch (error) {
-    if (status) status.textContent = failureMessage(error.message);
+    if (status) status.textContent = licenseErrorMessage(error.message) ?? failureMessage(error.message);
     return { ok: false };
   }
 }
@@ -1767,6 +1772,106 @@ function renderImpactEconomics(m){return `<h3>Impacto económico estimado</h3><p
 function renderImpactBars(m){return [...m.coverage.bySector.map((s)=>`${s.name} cobertura ${s.coverage}% ${bar(s.coverage)}`),`Cumplimiento rutas ${m.routes.complianceRate}% ${bar(m.routes.complianceRate)}`,`Estado flota activa ${m.fleet.availabilityRate}% ${bar(m.fleet.availabilityRate)}`,`Kilómetros productivos ${m.operation.productiveKm}/${m.operation.distanceKm} ${bar(m.operation.productiveKm,m.operation.distanceKm)}`,`Combustible optimizado ${m.efficiency.fuelSavedLiters} L ${bar(m.efficiency.fuelSavedLiters,3)}`,`Ahorro mensual/anual ${money(m.economics.monthlyPotentialAvoided)} / ${money(m.economics.annualProjectionDemo)} ${bar(m.economics.monthlyPotentialAvoided,m.economics.annualProjectionDemo/6)}`].map(x=>`<p>${x}</p>`).join('')}
 function renderBeforeAfter(m){return `<div class="comparison-table">${m.beforeAfter.map((r)=>`<p><b>${r.label}</b><span>Antes: ${r.before} ${r.unit} · SmartWaste: ${r.after} ${r.unit}</span><small>Diferencia: ${r.absolute} ${r.unit} · variación: ${r.variation}%${r.reduction!==null?` · reducción: ${r.reduction}%`:''}${r.points!==null?` · ${r.points} puntos porcentuales`:''}</small></p>`).join('')}</div>`}
 
+// SW-117: licencia por camión. El administrador del ayuntamiento ve la suya en Configuración y Master Admin administra todas.
+// Las reglas viven en la base (RLS, triggers y funciones); aquí solo se muestran y se llaman. Sin fila de licencia no hay límites.
+let licenseState = { license: null, events: [], vehicles: null, panel: { open: false, trucks: 1 }, message: '' };
+let masterLicenses = {}; // municipality_id → { license, events }
+const masterLicenseMessages = {};
+function renderConfigLicense() {
+  return renderLicenseCard(buildLicenseCardView({ license: licenseState.license, vehicleCount: licenseState.vehicles ?? 0, events: licenseState.events, panel: licenseState.panel, message: licenseState.message }));
+}
+function refreshLicenseUi() {
+  const wrap = document.getElementById('configLicenseWrap');
+  if (wrap) wrap.hidden = !licenseState.license;
+  const card = document.getElementById('configLicense');
+  if (card) card.innerHTML = renderConfigLicense();
+  const bar = document.getElementById('licenseBanner');
+  if (bar) {
+    const banner = licenseState.license ? buildLicenseCardView({ license: licenseState.license, vehicleCount: 0 })?.banner : null;
+    bar.innerHTML = banner && banner.tone !== 'info' ? renderLicenseBanner(banner) : ''; // el aviso de "prueba" solo vive en Configuración
+  }
+}
+async function hydrateLicense() {
+  const client = getAuthClient();
+  if (!client || !HIDE_DEMO) return;
+  const municipalityId = currentMunicipalityId();
+  const result = await fetchLicense(client, municipalityId);
+  if (!result.ok) return;
+  licenseState.license = result.license;
+  licenseState.events = result.events;
+  licenseState.vehicles = result.license ? await countVehicles(client, municipalityId) : null;
+  refreshLicenseUi();
+}
+async function reloadMasterLicenses(municipalityId, message) {
+  const client = getAuthClient();
+  if (municipalityId) masterLicenseMessages[municipalityId] = message ?? '';
+  if (client) { const all = await fetchAllLicenses(client); if (all.ok) masterLicenses = all.byMunicipality; }
+  const el = document.getElementById('masterMunicipalities');
+  if (el) el.innerHTML = renderMasterMunicipalities();
+}
+const licenseFailText = (error, prefix) => licenseErrorMessage(error?.message) ?? `${prefix}: ${error?.message ?? 'error desconocido'}`;
+function readNamedFields(container) {
+  const out = {};
+  container?.querySelectorAll('[name]').forEach((el) => { out[el.name] = el.type === 'checkbox' ? el.checked : el.value; });
+  return out;
+}
+async function handleLicenseClick(el) {
+  const client = getAuthClient();
+  if (!client) return;
+  const ds = el.dataset;
+  // Administrador del ayuntamiento: agregar camiones
+  if ('licenseOpen' in ds) { licenseState.panel = { open: true, trucks: 1 }; licenseState.message = ''; refreshLicenseUi(); return; }
+  if ('licenseCancel' in ds) { licenseState.panel = { open: false, trucks: 1 }; refreshLicenseUi(); return; }
+  if ('licenseConfirm' in ds) {
+    const check = validateTruckRequest(licenseState.panel.trucks);
+    if (!check.ok) { licenseState.message = check.error; refreshLicenseUi(); return; }
+    el.disabled = true;
+    const result = await addTrucks(client, currentMunicipalityId(), check.trucks);
+    licenseState.panel = { open: false, trucks: 1 };
+    licenseState.message = result.ok ? `Listo: ahora tienes ${result.data.contracted_trucks} camiones contratados.${result.data.amount === null ? '' : ` Cargo proporcional: ${result.data.currency === 'DOP' ? 'RD$' : 'US$'} ${Number(result.data.amount).toLocaleString('es-DO')}.`}` : licenseFailText(result.error, 'No se pudieron agregar los camiones');
+    await hydrateLicense();
+    refreshLicenseUi();
+    return;
+  }
+  // Master Admin
+  const id = ds.licenseCreate ?? ds.licenseSave ?? ds.licensePay ?? ds.licenseSuspend ?? ds.licenseReactivate;
+  if (id && 'licenseCreate' in ds) {
+    const r = await createLicense(client, id);
+    await reloadMasterLicenses(id, r.ok ? 'Licencia creada: prueba de 60 días con 5 camiones y tarifa por definir.' : licenseFailText(r.error, 'No se pudo crear la licencia'));
+    return;
+  }
+  if (id && 'licenseSave' in ds) {
+    const prev = masterLicenses[id]?.license;
+    const fields = readNamedFields(document.querySelector(`[data-license-terms="${CSS.escape(id)}"]`));
+    const r = await saveLicenseTerms(client, id, { ...fields, notes: prev?.notes ?? '' });
+    await reloadMasterLicenses(id, r.ok ? 'Condiciones guardadas.' : licenseFailText(r.error, 'No se pudieron guardar las condiciones'));
+    return;
+  }
+  if (id && 'licensePay' in ds) {
+    const fields = readNamedFields(document.querySelector(`[data-license-pay-form="${CSS.escape(id)}"]`));
+    const r = await registerPayment(client, id, { amount: fields.amount, period: fields.period, reference: fields.reference });
+    await reloadMasterLicenses(id, r.ok ? `Pago registrado. Vigencia hasta ${r.data?.valid_until ?? '—'}.` : licenseFailText(r.error, 'No se pudo registrar el pago'));
+    return;
+  }
+  if (id && ('licenseSuspend' in ds || 'licenseReactivate' in ds)) {
+    const suspend = 'licenseSuspend' in ds;
+    const r = await setSuspended(client, id, suspend);
+    await reloadMasterLicenses(id, r.ok ? (suspend ? 'Licencia suspendida.' : 'Licencia reactivada.') : licenseFailText(r.error, 'No se pudo cambiar el estado'));
+    return;
+  }
+  if ('licenseBilled' in ds) {
+    const owner = Object.keys(masterLicenses).find((key) => masterLicenses[key].events.some((e) => e.id === ds.licenseBilled));
+    const r = await markEventBilled(client, ds.licenseBilled);
+    await reloadMasterLicenses(owner, r.ok ? 'Marcado como facturado.' : licenseFailText(r.error, 'No se pudo marcar como facturado'));
+  }
+}
+document.addEventListener('input', (event) => {
+  if (!event.target.matches?.('[data-license-trucks]') || !licenseState.license) return;
+  licenseState.panel.trucks = Number(event.target.value);
+  const quote = document.querySelector('[data-license-quote]');
+  if (quote) quote.textContent = quoteText(licenseState.license, licenseState.panel.trucks);
+});
+
 // SW-116: Master Admin (MT IT Services) ve la plataforma: municipios reales, su estado, suscripción y consumo.
 // Los datos y parámetros de cada ayuntamiento (precio del combustible, días operativos, rendimiento de sus camiones)
 // los administra cada ayuntamiento en su propia Configuración. Se lista desde la tabla real `municipalities`
@@ -1777,7 +1882,7 @@ function renderMasterMunicipalities() {
   return masterRealMunicipalities.map((m) => {
     const u = masterUsage[m.id];
     const usage = u ? `Camiones: ${u.vehicles ?? '—'} · Rutas: ${u.routes ?? '—'} · Corridas completadas (30 días): ${u.runs30 ?? '—'}` : 'Consumo: cargando…';
-    return `<article class="card" data-master-municipality="${escapeHtml(m.id)}"><h3>${escapeHtml(m.name)}</h3><p>${escapeHtml(MUNICIPALITY_STATUS[m.status] ?? m.status ?? 'Sin estado')}</p><p><b>Suscripción:</b> sin plan asignado todavía</p><p><b>Consumo:</b> ${usage}</p></article>`;
+    return `<article class="card" data-master-municipality="${escapeHtml(m.id)}"><h3>${escapeHtml(m.name)}</h3><p>${escapeHtml(MUNICIPALITY_STATUS[m.status] ?? m.status ?? 'Sin estado')}</p>${renderMasterLicense(buildMasterLicenseView({ municipalityId: m.id, entry: masterLicenses[m.id], vehicleCount: u?.vehicles ?? null, message: masterLicenseMessages[m.id] ?? '' }))}<p><b>Consumo:</b> ${usage}</p></article>`;
   }).join('');
 }
 function renderMaster() {
@@ -1803,14 +1908,14 @@ function refreshConfigCostParameters() {
   if (el) el.innerHTML = renderConfigCostParameters();
 }
 function renderConfiguracion() {
-  return `<section id="configuracion" class="section card"><h2>Configuración</h2><h3>Parámetros de costo del ayuntamiento</h3><p class="demo">Los usan Impacto y Ahorros y los reportes. El rendimiento (km por galón) de cada camión se escribe en Flota.</p><div class="cost-parameters-form" id="configCostParameters" data-cost-parameters-form="municipal">${renderConfigCostParameters()}</div><h3>Preferencias de este navegador</h3><p class="demo">${demoPrefix}Preferencias de este navegador/operador, no del municipio.</p>
+  return `<section id="configuracion" class="section card"><h2>Configuración</h2>${HIDE_DEMO ? '<div id="configLicenseWrap" hidden><h3>Tu suscripción</h3><div id="configLicense"></div></div>' : ''}<h3>Parámetros de costo del ayuntamiento</h3><p class="demo">Los usan Impacto y Ahorros y los reportes. El rendimiento (km por galón) de cada camión se escribe en Flota.</p><div class="cost-parameters-form" id="configCostParameters" data-cost-parameters-form="municipal">${renderConfigCostParameters()}</div><h3>Preferencias de este navegador</h3><p class="demo">${demoPrefix}Preferencias de este navegador/operador, no del municipio.</p>
     <div class="controls"><label><input type="checkbox" id="mapLabelsToggle"${readMapLabels(mapPrefStorage()) ? ' checked' : ''}> Mostrar etiquetas en el mapa (número de camión y situaciones)</label></div>
     <p class="demo">Desactívalas para ver el mapa más despejado. Los camiones y las alertas siguen visibles; solo se oculta el texto. Se recuerda en este navegador.</p>
     <div class="controls"><label><input type="checkbox" id="guidedAssignmentToggle"${guidedAssignmentEnabled ? ' checked' : ''}> Activar flujo guiado "Poner en marcha" en el detalle de ruta</label></div>
     <p class="demo">Con esta opción activa, el detalle de una ruta sin vehículo o sin chofer muestra un solo formulario y un solo botón para asignar todo lo que falte e iniciarla de una vez, en vez de los pasos separados (asignar vehículo, luego asignar chofer, luego iniciar).</p></section>`;
 }
 
-app.innerHTML = `${renderSummary()}${renderOperations()}${renderSupervisor()}${renderCitizen()}${renderImpactCenter()}${renderConfiguracion()}${renderMaster()}`;
+app.innerHTML = `<div id="licenseBanner"></div>${renderSummary()}${renderOperations()}${renderSupervisor()}${renderCitizen()}${renderImpactCenter()}${renderConfiguracion()}${renderMaster()}`;
 // SW-084: riel lateral Mando, selector de tema oscuro/claro y menú "Más" (frontend/shell.js).
 mountShell({ document, window, storage: (() => { try { return window.localStorage; } catch { return undefined; } })(), hideDemo: Boolean(readSupabaseConfig()?.hideDemo), onThemeChange: () => { drawMapLayers(); } });
 // SW-084: colores del tema para las capas del mapa (el CSS no llega a las polilíneas de Leaflet).
@@ -2960,6 +3065,8 @@ document.addEventListener('click', (event) => {
   if (resolveButton) { const incident = incidents.find((item) => item.code === resolveButton.dataset.resolveIncident); if (incident) { incident.status = 'Cerrada'; refreshSupervisor(); refreshResumen(); } }
   const resolveReportButton = event.target.closest('[data-resolve-citizen-report]');
   if (resolveReportButton) resolveCitizenReportManually(resolveReportButton.dataset.resolveCitizenReport);
+  const licenseButton = event.target.closest('[data-license-open], [data-license-cancel], [data-license-confirm], [data-license-create], [data-license-save], [data-license-pay], [data-license-suspend], [data-license-reactivate], [data-license-billed]');
+  if (licenseButton) handleLicenseClick(licenseButton);
   const saveCostParamsButton = event.target.closest('[data-save-cost-parameters]');
   if (saveCostParamsButton) saveCostParametersFromForm(saveCostParamsButton.dataset.saveCostParameters, saveCostParamsButton.closest('.cost-parameters-form'));
   const onboardButton = event.target.closest('[data-onboarding]');
@@ -3444,6 +3551,8 @@ async function hydrateMasterRealMunicipalities() {
   masterRealMunicipalities = result.data;
   const el = document.getElementById('masterMunicipalities');
   if (el) el.innerHTML = renderMasterMunicipalities();
+  const licenses = await fetchAllLicenses(client);
+  if (licenses.ok) masterLicenses = licenses.byMunicipality;
   await Promise.all(result.data.map(async (m) => { masterUsage[m.id] = await fetchMunicipalityUsage(client, m.id); }));
   const again = document.getElementById('masterMunicipalities');
   if (again) again.innerHTML = renderMasterMunicipalities();
@@ -3564,4 +3673,4 @@ async function bootstrapRealBackend(ctx) {
 // SW-030: hydrateCostParameters() is the same "must work with no session at all" shape —
 // currentMunicipalityId() falls back to the deployment's static config or the bundled demo
 // municipality when there's no signed-in municipal session.
-initAuthGate().then((ctx) => { if (ctx) bootstrapRealBackend(ctx); hydrateRealCitizenSectors(); hydrateCostParameters(); hydrateMasterRealMunicipalities(); });
+initAuthGate().then((ctx) => { if (ctx) bootstrapRealBackend(ctx); hydrateRealCitizenSectors(); hydrateCostParameters(); hydrateLicense(); hydrateMasterRealMunicipalities(); });

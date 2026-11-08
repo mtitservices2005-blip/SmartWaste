@@ -122,3 +122,18 @@ export function summarizeLicense(license, vehicleCount = 0, now = new Date()) {
     isTrial: Boolean(license.is_trial)
   };
 }
+
+// Texto que ve el administrador antes de confirmar cuántos camiones agrega (cargo proporcional o motivo por el que aún no hay cargo).
+export function quoteText(license, trucks, now = new Date()) {
+  const v = validateTruckRequest(trucks);
+  if (!v.ok) return v.error;
+  const total = Number(license.contracted_trucks) + v.trucks;
+  const head = `Nuevo total: ${total} camiones.`;
+  const price = Number(license.price_per_truck_year);
+  if (!(price > 0)) return `${head} La tarifa se confirma con MT IT Services.`;
+  const cur = license.currency;
+  if (license.is_trial) return `${head} Se cobra al activar la licencia (${formatMoney(v.trucks * price, cur)} al año por ${v.trucks === 1 ? 'el camión' : 'los camiones'} adicional${v.trucks === 1 ? '' : 'es'}).`;
+  const days = daysUntil(license.valid_until, now);
+  if (days === null || days <= 0) return `${head} Con la licencia vencida, el cargo se calcula al renovar.`;
+  return `${head} Cargo proporcional hoy: ${formatMoney(prorationAmount(license, v.trucks, now), cur)} (${days} día${days === 1 ? '' : 's'} restantes de vigencia; tarifa ${formatMoney(price, cur)} por camión al año).`;
+}
