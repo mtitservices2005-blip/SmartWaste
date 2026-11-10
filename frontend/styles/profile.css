@@ -1,0 +1,12 @@
+/* SW-119: Datos del ayuntamiento */
+.profile-form{display:grid;gap:10px;max-width:640px}
+.profile-form label{display:flex;flex-direction:column;gap:4px;font-size:.85rem;color:var(--muted)}
+.profile-form input[type=text],.profile-form input[type=tel],.profile-form input[type=email]{min-width:0;width:100%}
+.profile-form h4{margin:6px 0 0}
+.profile-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.profile-signer{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end}
+.profile-logo{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.profile-logo__prev{width:84px;height:84px;border:1px dashed var(--border,#d8e4df);border-radius:12px;display:grid;place-items:center;overflow:hidden;font-size:.72rem;color:var(--muted);text-align:center}
+.profile-logo__prev img{max-width:100%;max-height:100%;object-fit:contain}
+.profile-msg{margin:0;font-size:.88rem}.profile-msg--bad{color:var(--bad,#b42318)}
+@media (max-width:560px){.profile-row,.profile-signer{grid-template-columns:1fr}}

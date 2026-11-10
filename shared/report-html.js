@@ -2,6 +2,7 @@
 // que la app abre en un marco oculto y manda a imprimir ("Guardar como PDF"). Carta, con encabezado y firmas.
 // Combustible en galones americanos (el modelo trabaja en litros).
 import { formatNumber, formatKm, formatDuration } from './metrics-view.js';
+import { reportIdentity } from './municipality-profile.js';
 
 const GAL = 3.785411784;
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -53,14 +54,19 @@ tfoot td{font-weight:700;border-top:1.5px solid var(--ink);border-bottom:0}
 .callout.blue{border-color:var(--blue);background:var(--blue-bg)}
 .pend{border:1px dashed var(--line);border-radius:8px;padding:9px 12px;color:var(--muted);font-size:8.8pt;margin-top:8px;break-inside:avoid}.pend b{color:var(--ink)}
 ul{margin:4px 0 0;padding-left:16px}li{margin-bottom:3px}
-.sign{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:34px;break-inside:avoid}.sign div{border-top:1px solid var(--ink);padding-top:4px;font-size:8.2pt;color:var(--muted)}
+.sign{display:grid;grid-template-columns:repeat(auto-fit,minmax(1.6in,1fr));gap:40px;margin-top:34px;break-inside:avoid}.sign div{border-top:1px solid var(--ink);padding-top:4px;font-size:8.2pt;color:var(--muted)}.sign b{display:block;color:var(--ink);font-size:9pt}
+.logo{width:40px;height:40px;object-fit:contain}.contact{margin-top:22px;border-top:1px solid var(--line);padding-top:6px;font-size:8pt;color:var(--muted);display:flex;flex-wrap:wrap;gap:2px 14px}
 `;
 
-function frame({ title, subtitle, tag, municipality, period, now, body, name }) {
+function frame({ title, subtitle, tag, municipality, profile, period, now, body, name, defaultSigners = [] }) {
+  const id = reportIdentity(profile, municipality);
+  const mark = id.logo ? `<img class="logo" alt="" src="${esc(id.logo)}">` : '<div class="mark">SW</div>';
+  const signers = id.signers.length ? id.signers.map((s) => `<div><b>${esc(s.name)}</b>${esc(s.role)}</div>`).join('') : defaultSigners.map((l) => `<div>${esc(l)}</div>`).join('');
+  const contact = id.contact.length ? `<div class="contact">${id.contact.map((c) => `<span>${esc(c)}</span>`).join('')}</div>` : '';
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>${esc(name)}</title><style>${REPORT_CSS}</style></head><body>
-<header class="top"><div class="brand"><div class="mark">SW</div><div><small>SmartWaste · Gestión de residuos</small><b>${municipality ? `Ayuntamiento de ${esc(municipality)}` : 'Ayuntamiento'}</b></div></div>
+<header class="top"><div class="brand">${mark}<div><small>SmartWaste · Gestión de residuos</small><b>${esc(id.name)}</b></div></div>
 <div class="meta">Periodo: <b>${esc(period)}</b><br>Emitido: <b>${esc(longDate(now))}</b><br>Reporte: <b>${esc(tag)}</b></div></header>
-<h1>${esc(title)}</h1><p class="sub">${esc(subtitle)}</p>${body}</body></html>`;
+<h1>${esc(title)}</h1><p class="sub">${esc(subtitle)}</p>${body}<div class="sign">${signers}</div>${contact}</body></html>`;
 }
 const kpi = (l, v, u = '', note = '') => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}${u ? ` <small>${u}</small>` : ''}</div>${note ? `<div class="n">${note}</div>` : ''}</div>`;
 const fileName = (prefix, now) => { const p = parts(now); return `SmartWaste-${prefix}-${p.y}-${String(p.m).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`; };
@@ -75,7 +81,7 @@ function bars(series, w = 560, h = 80) {
 }
 
 // ---------------- Métricas ----------------
-export function renderMetricsReport({ view, period = 14, municipalityName = '', rawRuns = [], now = new Date() } = {}) {
+export function renderMetricsReport({ view, period = 14, municipalityName = '', profile = null, rawRuns = [], now = new Date() } = {}) {
   const s = view.summary; const hours = s.totalMinutes / 60;
   const avgSpeed = hours > 0 ? s.totalKm / hours : null;
   const cover = `${view.byVehicle.filter((g) => g.source !== 'sin_datos').length} de ${view.byVehicle.length} camiones con rendimiento`;
@@ -95,12 +101,12 @@ export function renderMetricsReport({ view, period = 14, municipalityName = '', 
   const missing = view.missingConfig.length ? `<li>Sin rendimiento configurado: ${esc(view.missingConfig.map((m) => m.label).join(', '))}. Esos camiones no suman combustible ni CO₂.</li>` : '';
   const logged = s.loggedLiters ? `<li>Control: los conductores anotaron ${gal(s.loggedLiters)} gal cargados frente a ${s.liters ? gal(s.liters) : '—'} gal estimados${s.liters ? ` (${s.loggedLiters >= s.liters ? '+' : '−'}${n(Math.abs((s.loggedLiters - s.liters) / s.liters) * 100, 0)}%)` : ''}. No entra en el cálculo.</li>` : '';
   const quality = `<h2>Calidad de los datos</h2><div class="box"><ul><li>${s.runCount} corridas completadas incluidas. Las corridas marcadas como prueba no se cuentan${view.excludedTests ? ` (${view.excludedTests} excluidas)` : ''}.</li><li>Combustible: siempre estimado con km medidos ÷ rendimiento configurado de cada camión.</li><li>Distancia: se mide en metros con el GPS del teléfono y se descarta el movimiento menor al error del GPS, para que un camión detenido no sume kilómetros.</li>${missing}${logged}</ul></div>`;
-  const body = `<h2 style="margin-top:0">Resumen del periodo</h2>${kpis}${chart}${table('Por ruta', view.byRoute, 'Ruta', false)}${table('Por camión', view.byVehicle, 'Camión', true)}${recent ? `<h2>Corridas más recientes</h2><table><thead><tr><th>Fecha</th><th>Ruta</th><th>Camión</th><th>Inicio</th><th>Duración</th><th>Km</th><th>Galones</th></tr></thead><tbody>${recent}</tbody></table>` : ''}${punctuality ? `<div style="margin-top:12px">${punctuality}</div>` : ''}${quality}<div class="sign"><div>Supervisor de operaciones</div><div>Director de higiene municipal</div></div>`;
-  return frame({ title: 'Reporte de Métricas operativas', subtitle: 'Qué pasó en la calle: cada corrida, camión y ruta, medido con el GPS del teléfono. Sirve para supervisar la operación y corregirla.', tag: 'Métricas', municipality: municipalityName, period: periodText(period, now), now, body, name: fileName('Reporte-Metricas', now) });
+  const body = `<h2 style="margin-top:0">Resumen del periodo</h2>${kpis}${chart}${table('Por ruta', view.byRoute, 'Ruta', false)}${table('Por camión', view.byVehicle, 'Camión', true)}${recent ? `<h2>Corridas más recientes</h2><table><thead><tr><th>Fecha</th><th>Ruta</th><th>Camión</th><th>Inicio</th><th>Duración</th><th>Km</th><th>Galones</th></tr></thead><tbody>${recent}</tbody></table>` : ''}${punctuality ? `<div style="margin-top:12px">${punctuality}</div>` : ''}${quality}`;
+  return frame({ title: 'Reporte de Métricas operativas', subtitle: 'Qué pasó en la calle: cada corrida, camión y ruta, medido con el GPS del teléfono. Sirve para supervisar la operación y corregirla.', tag: 'Métricas', municipality: municipalityName, profile, period: periodText(period, now), now, body, name: fileName('Reporte-Metricas', now), defaultSigners: ['Supervisor de operaciones', 'Director de higiene municipal'] });
 }
 
 // ---------------- Impacto y Ahorros ----------------
-export function renderImpactReport({ model, period = 30, municipalityName = '', priceConfigured = false, now = new Date() } = {}) {
+export function renderImpactReport({ model, period = 30, municipalityName = '', profile = null, priceConfigured = false, now = new Date() } = {}) {
   const m = model.measured; const p = model.projection; const q = model.potential; const price = model.fuelPrice;
   const money = (v) => (v === null || v === undefined ? '—' : `RD$ ${formatNumber(v, 0)}`);
   const perGal = price ? `RD$ ${formatNumber(price * GAL, 0)} por galón` : '';
@@ -114,6 +120,6 @@ export function renderImpactReport({ model, period = 30, municipalityName = '', 
   const routes = model.perRoute.length ? `<h2>Costo por ruta</h2><table><thead><tr><th>Ruta</th><th>Corridas</th><th>Km</th><th>Galones</th><th>Costo RD$</th><th>RD$ por km</th></tr></thead><tbody>${routeRows}</tbody><tfoot><tr><td>Total</td><td>${m.runs}</td><td>${n(m.km, 1)}</td><td>${m.liters === null ? '—' : gal(m.liters)}</td><td>${m.fuelCost === null ? '—' : formatNumber(m.fuelCost, 0)}</td><td>${totalPerKm}</td></tr></tfoot></table>` : '';
   const compare = p ? `<h2>Del periodo a la proyección</h2><table><thead><tr><th>Concepto</th><th>Medido (${period} días)</th><th>Proyectado (mes)</th><th>Potencial (ahorro al mes)</th></tr></thead><tbody><tr><td>Distancia</td><td>${n(m.km, 0)} km</td><td>${n(p.km, 0)} km</td><td>${q ? `${n(q.km, 1)} km` : '—'}</td></tr><tr><td>Combustible</td><td>${m.liters === null ? '—' : `${gal(m.liters)} gal`}</td><td>${p.liters === null ? '—' : `${gal(p.liters, 0)} gal`}</td><td>${q && q.liters !== null ? `${gal(q.liters)} gal` : '—'}</td></tr><tr><td>Costo</td><td>${money(m.fuelCost)}</td><td>${money(p.fuelCost)}</td><td>${money(q?.fuelCost ?? null)}</td></tr><tr><td>CO₂</td><td>${m.co2Kg === null ? '—' : `${n(m.co2Kg, 0)} kg`}</td><td>${p.co2Kg === null ? '—' : `${n(p.co2Kg, 0)} kg`}</td><td>${q && q.co2Kg !== null ? `${n(q.co2Kg, 1)} kg` : '—'}</td></tr></tbody></table>` : '';
   const how = `<h2>Cómo leer este reporte</h2><div class="cols"><div class="box"><h3>Qué es cada bloque</h3><ul><li><b>Medido:</b> lo que ya ocurrió, corrida por corrida.</li><li><b>Proyectado:</b> lo que ocurrirá en un mes típico si se mantiene el ritmo.</li><li><b>Potencial:</b> lo que se podría ahorrar con rutas mejor ordenadas.</li></ul></div><div class="box"><h3>Qué cuenta y qué no</h3><ul><li>Solo corridas completadas y reales; las de prueba no cuentan.</li><li>Lo que no se puede calcular se muestra como pendiente, nunca como un número inventado.</li><li>El combustible se estima con el rendimiento de cada camión (km por galón); el precio por galón se configura en Parámetros de costo.</li></ul></div></div>${priceConfigured ? '' : '<div class="callout">El precio del combustible usado es un valor de referencia. Configúralo en Parámetros de costo para que los pesos sean exactos.</div>'}`;
-  const body = `${hero}${measured}${projected}${potential}${routes}${compare}${how}<div class="sign"><div>Alcalde o administrador municipal</div><div>Director financiero</div></div>`;
-  return frame({ title: 'Reporte de Impacto y Ahorros', subtitle: 'Cuánto cuesta, cuánto contamina y cuánto se puede ahorrar. Convierte las corridas en cifras para decidir presupuesto, combustible y cambios de ruta.', tag: 'Impacto y Ahorros', municipality: municipalityName, period: periodText(period, now), now, body, name: fileName('Reporte-Impacto-y-Ahorros', now) });
+  const body = `${hero}${measured}${projected}${potential}${routes}${compare}${how}`;
+  return frame({ title: 'Reporte de Impacto y Ahorros', subtitle: 'Cuánto cuesta, cuánto contamina y cuánto se puede ahorrar. Convierte las corridas en cifras para decidir presupuesto, combustible y cambios de ruta.', tag: 'Impacto y Ahorros', municipality: municipalityName, profile, period: periodText(period, now), now, body, name: fileName('Reporte-Impacto-y-Ahorros', now), defaultSigners: ['Alcalde o administrador municipal', 'Director financiero'] });
 }
