@@ -27,3 +27,14 @@
 .steps-text p{margin:2px 0 0;color:var(--muted);font-size:.85rem}.steps-state{color:var(--muted);font-size:.85rem}
 .is-done .steps-text b{color:var(--muted)}
 @media (max-width:560px){.steps-item{grid-template-columns:auto 1fr}.steps-item a{grid-column:2}}
+
+/* SW-126: Configuración por categorías */
+.config-panel{display:grid;gap:16px;margin-top:14px}
+.config-group{padding:16px;border:1px solid var(--border,#d8e4df);border-radius:14px;background:var(--surface,transparent);display:grid;gap:10px}
+.config-group[hidden],.config-panel[hidden]{display:none}
+.config-group h3{margin:0}
+.config-group>.demo{margin:0}
+.config-group .controls{margin:0}
+.config-group .cost-parameters-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;align-items:end}
+.config-group .cost-parameters-form label{display:flex;flex-direction:column;gap:4px}
+.config-group .cost-parameters-form>.controls,.config-group .cost-parameters-form>.demo{grid-column:1/-1}

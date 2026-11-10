@@ -40,6 +40,8 @@ import { initAuthGate, readSupabaseConfig, getAuthClient, isDriverApp } from './
 import { mountDriverApp } from './driver-app.js';
 import { fetchInspectionSettings, saveInspectionSettings, fetchVehicleInspectionState, submitInspection } from '../shared/inspection-data.js';
 import { normalizeInspectionSettings } from '../shared/inspection.js';
+import { fetchDefectsBoard, setDefectStatus, summarizeDefects } from '../shared/vehicle-defects.js';
+import { renderDefectsPanel } from './components/defects-screens.js';
 import { createDriverTelemetrySession, createPersistentTelemetryQueue } from '../shared/driver-app-telemetry.js';
 import { parseFuelGallons, buildFuelEntry } from '../shared/fuel-entry.js';
 import { connectionStatusText } from '../shared/driver-app-status.js';
@@ -459,9 +461,14 @@ function renderSummary() {
     { label: 'Rutas por verificar', value: pendingVerification.length, href: '#supervisor', tone: pendingVerification.length ? 'attention' : '' },
     { label: 'Vehículos fuera de servicio', value: outOfServiceTrucks.length, href: '#operaciones/flota', scrollTo: 'fleetManagement', tone: outOfServiceTrucks.length ? 'attention' : '' }
   ];
+  const defectSummary = defectsBoard.loaded && !defectsBoard.error ? summarizeDefects(defectsBoard.defects) : null;
+  if (defectSummary) summaryCards.push({ label: 'Fallas de camiones abiertas', value: defectSummary.open, href: '#operaciones/flota', scrollTo: 'fleetDefects', tone: defectSummary.critical ? 'alert' : defectSummary.open ? 'attention' : '' });
+  const cmp = defectSummary ? defectsBoard.compliance : null;
   const attentionItems = [
     ...delayedRoutes.map((route) => `<button class="row selectable" data-route="${route.id}"><span>🚨 Ruta retrasada: ${route.name}<br>${route.sectors.join(' · ')}</span>${pill('delayed')}</button>`),
-    ...openIncidents.map((incident) => `<button class="row selectable" data-incident="${incident.code}"><span>⚠️ ${incident.type}<br>${incident.sector} · ${incident.priority}</span>${pill('open')}</button>`)
+    ...openIncidents.map((incident) => `<button class="row selectable" data-incident="${incident.code}"><span>⚠️ ${incident.type}<br>${incident.sector} · ${incident.priority}</span>${pill('open')}</button>`),
+    ...(defectSummary?.critical ? [`<a class="row selectable" href="#operaciones/flota" data-scroll-to="fleetDefects"><span>🛠️ ${defectSummary.critical} falla${defectSummary.critical === 1 ? '' : 's'} crítica${defectSummary.critical === 1 ? '' : 's'} sin cerrar<br>Revisa la bandeja de fallas en Flotilla</span></a>`] : []),
+    ...(cmp?.leftWithout?.length ? [`<a class="row selectable" href="#operaciones/flota" data-scroll-to="fleetDefects"><span>📋 Salieron sin chequeo: ${cmp.leftWithout.map(escapeHtmlText).join(', ')}<br>${cmp.checked} de ${cmp.total} camiones con chequeo hoy</span></a>`] : [])
   ];
   return `<section id="resumen" class="section card">
     <p class="eyebrow">${HIDE_DEMO ? 'SmartWaste' : pilotMunicipality.branding.label}</p>
@@ -719,8 +726,33 @@ function fleetHeaderLine() {
 function renderFleetTable() {
   return fleetTab === 'conductores' ? renderDriversTable({ rows: buildDriverRows(drivers, trucks) }) : renderVehiclesTable({ rows: buildVehicleRows(trucks), selectedId: fleetSelectedVehicleId });
 }
+// SW-124: bandeja de fallas de los camiones (solo con backend real; la demo no tiene choferes con app).
+let defectsBoard = { loaded: false, defects: [], vehicles: [], compliance: null, error: '', status: '', busyId: null };
+function renderFleetDefects() { return renderDefectsPanel({ ...defectsBoard, now: new Date() }); }
+function refreshDefectsViews() {
+  const box = document.getElementById('fleetDefects'); if (box) { box.innerHTML = renderFleetDefects(); box.hidden = !defectsBoard.loaded; }
+  if (document.getElementById('resumen')) refreshResumen();
+}
+async function hydrateDefectsBoard() {
+  const client = getAuthClient(); if (!client || document.body.classList.contains('sw-driver-mode')) return;
+  if (document.activeElement?.matches?.('[data-defect-note]')) return; // no borrar la nota que se está escribiendo
+  const r = await fetchDefectsBoard(client);
+  if (r.ok) defectsBoard = { ...defectsBoard, loaded: true, defects: r.defects, vehicles: r.vehicles, compliance: r.compliance, error: '' };
+  else defectsBoard = { ...defectsBoard, loaded: true, error: r.message };
+  refreshDefectsViews();
+}
+async function changeDefectStatus(button) {
+  const client = getAuthClient(); if (!client) return;
+  const id = button.dataset.defectId;
+  const note = [...document.querySelectorAll('[data-defect-note]')].find((el) => el.dataset.defectNote === id)?.value ?? '';
+  defectsBoard = { ...defectsBoard, busyId: id, status: '', error: '' }; refreshDefectsViews();
+  const r = await setDefectStatus(client, { defectId: id, status: button.dataset.defectTo, note });
+  defectsBoard = { ...defectsBoard, busyId: null, status: r.ok ? 'Falla actualizada.' : '', error: r.ok ? '' : r.message };
+  if (r.ok) await hydrateDefectsBoard(); else refreshDefectsViews();
+}
 function renderFlotaPanel() {
   return `<div class="sw-rutas__head"><div><h2>Flotilla</h2><p class="sw-rutas__sub" id="fleetHeaderText">${escapeHtmlText(fleetHeaderLine())}</p><p class="demo sw-rutas__demo">${demoNotice}</p></div></div>
+    <div id="fleetDefects" hidden>${renderFleetDefects()}</div>
     <div id="fleetTabs">${renderFleetTabs({ tab: fleetTab })}</div>
     <div class="sw-rutas__body">
       <div class="sw-rutas__main" id="fleetTable">${renderFleetTable()}</div>
@@ -2033,7 +2065,7 @@ function refreshConfigInspection() { const el = document.getElementById('configI
 async function hydrateInspectionSettings() {
   const client = getAuthClient(); if (!client) return;
   const r = await fetchInspectionSettings(client, currentMunicipalityId());
-  if (r.ok) { inspectionSettings = r.settings; refreshConfigInspection(); }
+  if (r.ok) { inspectionSettings = r.settings; refreshConfigInspection(); const wrap = document.getElementById('configInspectionWrap'); if (wrap) wrap.hidden = false; }
 }
 async function toggleInspectionSetting(key, value) {
   const client = getAuthClient(); if (!client) return;
@@ -2042,12 +2074,32 @@ async function toggleInspectionSetting(key, value) {
   if (!r.ok) { inspectionUi = { status: '', error: `No se pudo guardar: ${r.message}` }; refreshConfigInspection(); return; }
   inspectionSettings = r.settings; inspectionUi = { status: 'Guardado.', error: '' }; refreshConfigInspection();
 }
+// SW-126: Configuración ordenada por categorías (pestañas) en vez de una sola lista larga.
+let configTab = 'ayuntamiento';
+const CONFIG_TABS = [{ key: 'ayuntamiento', label: 'Ayuntamiento' }, { key: 'operacion', label: 'Operación' }, { key: 'costos', label: 'Costos' }, { key: 'navegador', label: 'Este navegador' }];
+function renderConfigTabs() {
+  return `<div class="sw-fleet-tabs" role="group" aria-label="Categorías de configuración">${CONFIG_TABS.map((t) => `<button type="button" class="sw-fleet-tab" data-config-tab="${t.key}" aria-pressed="${t.key === configTab}">${t.label}</button>`).join('')}</div>`;
+}
+function showConfigTab(tab) {
+  if (!CONFIG_TABS.some((t) => t.key === tab)) return;
+  configTab = tab;
+  const tabs = document.getElementById('configTabs'); if (tabs) tabs.innerHTML = renderConfigTabs();
+  document.querySelectorAll('[data-config-panel]').forEach((el) => { el.hidden = el.dataset.configPanel !== tab; });
+}
 function renderConfiguracion() {
-  return `<section id="configuracion" class="section card"><h2>Configuración</h2>${HIDE_DEMO ? '<div id="configLicenseWrap" hidden><h3>Tu suscripción</h3><div id="configLicense"></div></div>' : ''}<h3>Datos del ayuntamiento</h3><p class="demo">Aparecen en el encabezado, las firmas y el pie de los reportes PDF.</p><div id="configProfile">${renderConfigProfile()}</div>${HIDE_DEMO ? '<h3>Chequeo del camión antes de salir</h3><div id="configInspection">' + renderConfigInspection() + '</div>' : ''}<h3>Parámetros de costo del ayuntamiento</h3><p class="demo">Los usan Impacto y Ahorros y los reportes. El rendimiento (km por galón) de cada camión se escribe en Flota.</p><div class="cost-parameters-form" id="configCostParameters" data-cost-parameters-form="municipal">${renderConfigCostParameters()}</div><h3>Preferencias de este navegador</h3><p class="demo">${demoPrefix}Preferencias de este navegador/operador, no del municipio.</p>
-    <div class="controls"><label><input type="checkbox" id="mapLabelsToggle"${readMapLabels(mapPrefStorage()) ? ' checked' : ''}> Mostrar etiquetas en el mapa (número de camión y situaciones)</label></div>
-    <p class="demo">Desactívalas para ver el mapa más despejado. Los camiones y las alertas siguen visibles; solo se oculta el texto. Se recuerda en este navegador.</p>
-    <div class="controls"><label><input type="checkbox" id="guidedAssignmentToggle"${guidedAssignmentEnabled ? ' checked' : ''}> Activar flujo guiado "Poner en marcha" en el detalle de ruta</label></div>
-    <p class="demo">Con esta opción activa, el detalle de una ruta sin vehículo o sin chofer muestra un solo formulario y un solo botón para asignar todo lo que falte e iniciarla de una vez, en vez de los pasos separados (asignar vehículo, luego asignar chofer, luego iniciar).</p></section>`;
+  const group = (title, hint, body, attrs = '') => `<section class="config-group"${attrs}><h3>${title}</h3>${hint ? `<p class="demo">${hint}</p>` : ''}${body}</section>`;
+  const panel = (key, body) => `<div class="config-panel" data-config-panel="${key}"${key === configTab ? '' : ' hidden'}>${body}</div>`;
+  return `<section id="configuracion" class="section card"><h2>Configuración</h2><div id="configTabs">${renderConfigTabs()}</div>
+    ${panel('ayuntamiento',
+      (HIDE_DEMO ? group('Tu suscripción', '', '<div id="configLicense"></div>', ' id="configLicenseWrap" hidden') : '')
+      + group('Datos del ayuntamiento', 'Aparecen en el encabezado, las firmas y el pie de los reportes PDF.', `<div id="configProfile">${renderConfigProfile()}</div>`))}
+    ${panel('operacion', group('Chequeo del camión antes de salir', 'El chofer revisa su camión antes de iniciar la ruta. Tú decides si se pide y si puede salir con una falla crítica.', `<div id="configInspection">${renderConfigInspection()}</div>`, ' id="configInspectionWrap" hidden'))}
+    ${panel('costos', group('Parámetros de costo del ayuntamiento', 'Los usan Impacto y Ahorros y los reportes. El rendimiento (km por galón) de cada camión se escribe en Flota.', `<div class="cost-parameters-form" id="configCostParameters" data-cost-parameters-form="municipal">${renderConfigCostParameters()}</div>`))}
+    ${panel('navegador', group('Preferencias de este navegador', `${demoPrefix}Solo afectan a este navegador y a quien lo usa, no al municipio.`, `<div class="controls"><label><input type="checkbox" id="mapLabelsToggle"${readMapLabels(mapPrefStorage()) ? ' checked' : ''}> Mostrar etiquetas en el mapa (número de camión y situaciones)</label></div>
+      <p class="demo">Desactívalas para ver el mapa más despejado. Los camiones y las alertas siguen visibles; solo se oculta el texto.</p>
+      <div class="controls"><label><input type="checkbox" id="guidedAssignmentToggle"${guidedAssignmentEnabled ? ' checked' : ''}> Activar flujo guiado "Poner en marcha" en el detalle de ruta</label></div>
+      <p class="demo">Con esta opción activa, el detalle de una ruta sin vehículo o sin chofer muestra un solo formulario y un solo botón para asignar todo lo que falte e iniciarla de una vez, en vez de los pasos separados (asignar vehículo, luego asignar chofer, luego iniciar).</p>`))}
+  </section>`;
 }
 
 app.innerHTML = `<div id="licenseBanner"></div>${renderSummary()}${renderOperations()}${renderSupervisor()}${renderCitizen()}${renderImpactCenter()}${renderConfiguracion()}${renderMaster()}`;
@@ -3204,6 +3256,10 @@ document.addEventListener('click', (event) => {
   const licenseButton = event.target.closest('[data-license-open], [data-license-cancel], [data-license-confirm], [data-license-create], [data-license-save], [data-license-pay], [data-license-suspend], [data-license-reactivate], [data-license-billed]');
   if (licenseButton) handleLicenseClick(licenseButton);
   if (event.target.closest('[data-onboard-open], [data-onboard-cancel], [data-onboard-done], [data-onboard-copy]')) handleMasterNewClick(event.target);
+  const cfgTab = event.target.closest('[data-config-tab]');
+  if (cfgTab) showConfigTab(cfgTab.dataset.configTab);
+  const defectBtn = event.target.closest('[data-defect-to]');
+  if (defectBtn) changeDefectStatus(defectBtn);
   if (event.target.closest('[data-profile-save], [data-profile-add-signer], [data-profile-del-signer], [data-profile-logo-clear]')) handleProfileClick(event.target);
   const saveCostParamsButton = event.target.closest('[data-save-cost-parameters]');
   if (saveCostParamsButton) saveCostParametersFromForm(saveCostParamsButton.dataset.saveCostParameters, saveCostParamsButton.closest('.cost-parameters-form'));
@@ -3821,4 +3877,4 @@ async function bootstrapRealBackend(ctx) {
 // SW-030: hydrateCostParameters() is the same "must work with no session at all" shape —
 // currentMunicipalityId() falls back to the deployment's static config or the bundled demo
 // municipality when there's no signed-in municipal session.
-initAuthGate().then((ctx) => { if (ctx) bootstrapRealBackend(ctx); hydrateRealCitizenSectors(); hydrateCostParameters(); hydrateMunicipalityProfile(); hydrateInspectionSettings(); hydrateLicense(); hydrateMasterRealMunicipalities(); });
+initAuthGate().then((ctx) => { if (ctx) bootstrapRealBackend(ctx); hydrateRealCitizenSectors(); hydrateCostParameters(); hydrateMunicipalityProfile(); hydrateInspectionSettings(); hydrateDefectsBoard(); setInterval(hydrateDefectsBoard, 60000); hydrateLicense(); hydrateMasterRealMunicipalities(); });
