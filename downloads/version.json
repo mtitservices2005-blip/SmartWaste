@@ -1,9 +1,9 @@
 {
-  "versionName": "1.0.2",
-  "versionCode": 2026110610,
+  "versionName": "1.0.3",
+  "versionCode": 2026111011,
   "apkUrl": "SmartWaste-Conductor.apk",
-  "sha256": "64e5148b1b082cb127bd25548717468ad4be87a37f20ed6ff737f3cf299430da",
-  "sizeBytes": 4059917,
-  "notes": "Combustible en galones y gasto estimado por rendimiento del camión",
-  "publishedAt": "2026-11-06T10:32:10.284Z"
+  "sha256": "52f138fa43a8e4d4cc11eb289f0bf19255b07860d6da76df7c5d663e80bafb9c",
+  "sizeBytes": 4093602,
+  "notes": "Chequeo mecánico del camión antes de salir",
+  "publishedAt": "2026-11-10T22:54:48.614Z"
 }
