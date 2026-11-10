@@ -1,36 +1,36 @@
 /* SW-119: Datos del ayuntamiento */
 .profile-form{display:grid;gap:10px;max-width:640px}
-.profile-form label{display:flex;flex-direction:column;gap:4px;font-size:.85rem;color:var(--muted)}
+.profile-form label{display:flex;flex-direction:column;gap:4px;font-size:.85rem;color:var(--color-muted)}
 .profile-form input[type=text],.profile-form input[type=tel],.profile-form input[type=email]{min-width:0;width:100%}
 .profile-form h4{margin:6px 0 0}
 .profile-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .profile-signer{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end}
 .profile-logo{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
-.profile-logo__prev{width:84px;height:84px;border:1px dashed var(--border,#d8e4df);border-radius:12px;display:grid;place-items:center;overflow:hidden;font-size:.72rem;color:var(--muted);text-align:center}
+.profile-logo__prev{width:84px;height:84px;border:1px dashed var(--color-border);border-radius:12px;display:grid;place-items:center;overflow:hidden;font-size:.72rem;color:var(--color-muted);text-align:center}
 .profile-logo__prev img{max-width:100%;max-height:100%;object-fit:contain}
-.profile-msg{margin:0;font-size:.88rem}.profile-msg--bad{color:var(--bad,#b42318)}
+.profile-msg{margin:0;font-size:.88rem}.profile-msg--bad{color:var(--color-danger)}
 @media (max-width:560px){.profile-row,.profile-signer{grid-template-columns:1fr}}
 /* SW-120: alta de ayuntamiento */
-.onboard-card{display:grid;gap:10px;max-width:560px;border:1px solid var(--border,#d8e4df);border-radius:12px;padding:14px;margin:8px 0}
-.onboard-card label{display:flex;flex-direction:column;gap:4px;font-size:.85rem;color:var(--muted)}
+.onboard-card{display:grid;gap:10px;max-width:560px;border:1px solid var(--color-border);border-radius:12px;padding:14px;margin:8px 0}
+.onboard-card label{display:flex;flex-direction:column;gap:4px;font-size:.85rem;color:var(--color-muted)}
 .onboard-card h4{margin:0}
-.onboard-creds{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0}.onboard-creds dt{color:var(--muted)}.onboard-creds dd{margin:0;overflow-wrap:anywhere}
+.onboard-creds{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0}.onboard-creds dt{color:var(--color-muted)}.onboard-creds dd{margin:0;overflow-wrap:anywhere}
 .onboard-creds code{font-size:1.1rem;font-weight:600;user-select:all}
 /* SW-121: primeros pasos */
-.steps-card{border:1px solid var(--border,#d8e4df);border-radius:12px;padding:14px;margin:10px 0}
+.steps-card{border:1px solid var(--color-border);border-radius:12px;padding:14px;margin:10px 0}
 .steps-head{display:flex;justify-content:space-between;align-items:baseline;gap:10px}.steps-head h2{margin:0;font-size:1.1rem}
-.steps-bar{height:6px;border-radius:99px;background:var(--border,#d8e4df);margin:8px 0 10px;overflow:hidden}.steps-bar i{display:block;height:100%;background:var(--primary,#3d7a00)}
+.steps-bar{height:6px;border-radius:99px;background:var(--color-border);margin:8px 0 10px;overflow:hidden}.steps-bar i{display:block;height:100%;background:var(--color-primary)}
 .steps-list{list-style:none;margin:0;padding:0;display:grid;gap:8px}
 .steps-item{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center}
-.steps-mark{width:22px;height:22px;border-radius:50%;border:2px solid var(--border,#d8e4df);display:grid;place-items:center;font-size:.8rem}
-.is-done .steps-mark{background:var(--primary,#3d7a00);border-color:var(--primary,#3d7a00);color:var(--primary-fg,#fff)}
-.steps-text p{margin:2px 0 0;color:var(--muted);font-size:.85rem}.steps-state{color:var(--muted);font-size:.85rem}
-.is-done .steps-text b{color:var(--muted)}
+.steps-mark{width:22px;height:22px;border-radius:50%;border:2px solid var(--color-border);display:grid;place-items:center;font-size:.8rem}
+.is-done .steps-mark{background:var(--color-primary);border-color:var(--color-primary);color:var(--primary-fg,#fff)}
+.steps-text p{margin:2px 0 0;color:var(--color-muted);font-size:.85rem}.steps-state{color:var(--color-muted);font-size:.85rem}
+.is-done .steps-text b{color:var(--color-muted)}
 @media (max-width:560px){.steps-item{grid-template-columns:auto 1fr}.steps-item a{grid-column:2}}
 
 /* SW-126: Configuración por categorías */
 .config-panel{display:grid;gap:16px;margin-top:14px}
-.config-group{padding:16px;border:1px solid var(--border,#d8e4df);border-radius:14px;background:var(--surface,transparent);display:grid;gap:10px}
+.config-group{padding:16px;border:1px solid var(--color-border);border-radius:14px;background:var(--color-surface);display:grid;gap:10px}
 .config-group[hidden],.config-panel[hidden]{display:none}
 .config-group h3{margin:0}
 .config-group>.demo{margin:0}
