@@ -36,6 +36,8 @@ import { renderMetricsReport, renderImpactReport } from '../shared/report-html.j
 import { printReport } from './report-print.js';
 import { initAuthGate, readSupabaseConfig, getAuthClient, isDriverApp } from './auth-gate.js';
 import { mountDriverApp } from './driver-app.js';
+import { fetchInspectionSettings, saveInspectionSettings, fetchVehicleInspectionState, submitInspection } from '../shared/inspection-data.js';
+import { normalizeInspectionSettings } from '../shared/inspection.js';
 import { createDriverTelemetrySession, createPersistentTelemetryQueue } from '../shared/driver-app-telemetry.js';
 import { parseFuelGallons, buildFuelEntry } from '../shared/fuel-entry.js';
 import { connectionStatusText } from '../shared/driver-app-status.js';
@@ -2006,8 +2008,31 @@ function handleProfileClick(target) {
   else profileUi = { ...profileUi, status: '', error: '' };
   refreshConfigProfile();
 }
+// SW-123: el administrador decide si se pide el chequeo antes de salir y si un camión con falla crítica puede salir.
+let inspectionSettings = normalizeInspectionSettings(null);
+let inspectionUi = { status: '', error: '' };
+function renderConfigInspection() {
+  const st = inspectionSettings;
+  return `<div class="controls"><label><input type="checkbox" data-inspection-toggle="required"${st.required ? ' checked' : ''}> Pedir el chequeo del camión antes de iniciar la ruta</label></div>
+    <div class="controls"><label><input type="checkbox" data-inspection-toggle="allowCritical"${st.allowCritical ? ' checked' : ''}${st.required ? '' : ' disabled'}> Permitir salir con fallas críticas (se avisa al administrador y queda registrado)</label></div>
+    <p class="demo">Con la segunda opción apagada, un camión con una falla crítica no puede iniciar la ruta. Se guarda al marcar. El chofer necesita conexión para hacer el chequeo.</p>
+    ${inspectionUi.status ? `<p class="demo" role="status">${inspectionUi.status}</p>` : ''}${inspectionUi.error ? `<p class="demo" role="alert">${inspectionUi.error}</p>` : ''}`;
+}
+function refreshConfigInspection() { const el = document.getElementById('configInspection'); if (el) el.innerHTML = renderConfigInspection(); }
+async function hydrateInspectionSettings() {
+  const client = getAuthClient(); if (!client) return;
+  const r = await fetchInspectionSettings(client, currentMunicipalityId());
+  if (r.ok) { inspectionSettings = r.settings; refreshConfigInspection(); }
+}
+async function toggleInspectionSetting(key, value) {
+  const client = getAuthClient(); if (!client) return;
+  const next = normalizeInspectionSettings({ ...inspectionSettings, [key]: value });
+  const r = await saveInspectionSettings(client, currentMunicipalityId(), next);
+  if (!r.ok) { inspectionUi = { status: '', error: `No se pudo guardar: ${r.message}` }; refreshConfigInspection(); return; }
+  inspectionSettings = r.settings; inspectionUi = { status: 'Guardado.', error: '' }; refreshConfigInspection();
+}
 function renderConfiguracion() {
-  return `<section id="configuracion" class="section card"><h2>Configuración</h2>${HIDE_DEMO ? '<div id="configLicenseWrap" hidden><h3>Tu suscripción</h3><div id="configLicense"></div></div>' : ''}<h3>Datos del ayuntamiento</h3><p class="demo">Aparecen en el encabezado, las firmas y el pie de los reportes PDF.</p><div id="configProfile">${renderConfigProfile()}</div><h3>Parámetros de costo del ayuntamiento</h3><p class="demo">Los usan Impacto y Ahorros y los reportes. El rendimiento (km por galón) de cada camión se escribe en Flota.</p><div class="cost-parameters-form" id="configCostParameters" data-cost-parameters-form="municipal">${renderConfigCostParameters()}</div><h3>Preferencias de este navegador</h3><p class="demo">${demoPrefix}Preferencias de este navegador/operador, no del municipio.</p>
+  return `<section id="configuracion" class="section card"><h2>Configuración</h2>${HIDE_DEMO ? '<div id="configLicenseWrap" hidden><h3>Tu suscripción</h3><div id="configLicense"></div></div>' : ''}<h3>Datos del ayuntamiento</h3><p class="demo">Aparecen en el encabezado, las firmas y el pie de los reportes PDF.</p><div id="configProfile">${renderConfigProfile()}</div>${HIDE_DEMO ? '<h3>Chequeo del camión antes de salir</h3><div id="configInspection">' + renderConfigInspection() + '</div>' : ''}<h3>Parámetros de costo del ayuntamiento</h3><p class="demo">Los usan Impacto y Ahorros y los reportes. El rendimiento (km por galón) de cada camión se escribe en Flota.</p><div class="cost-parameters-form" id="configCostParameters" data-cost-parameters-form="municipal">${renderConfigCostParameters()}</div><h3>Preferencias de este navegador</h3><p class="demo">${demoPrefix}Preferencias de este navegador/operador, no del municipio.</p>
     <div class="controls"><label><input type="checkbox" id="mapLabelsToggle"${readMapLabels(mapPrefStorage()) ? ' checked' : ''}> Mostrar etiquetas en el mapa (número de camión y situaciones)</label></div>
     <p class="demo">Desactívalas para ver el mapa más despejado. Los camiones y las alertas siguen visibles; solo se oculta el texto. Se recuerda en este navegador.</p>
     <div class="controls"><label><input type="checkbox" id="guidedAssignmentToggle"${guidedAssignmentEnabled ? ' checked' : ''}> Activar flujo guiado "Poner en marcha" en el detalle de ruta</label></div>
@@ -3189,7 +3214,7 @@ document.addEventListener('change', (event) => { if (event.target.closest('#impa
 document.addEventListener('change', (event) => { if (event.target.id === 'simVehicle' && event.target.value) { selectRoute(event.target.value); goToMapTab(); } });
 // SW-049: no re-render needed here beyond the checkbox itself — the next time a route detail is
 // opened/re-rendered, renderRouteDetail() reads the module-level guidedAssignmentEnabled fresh.
-document.addEventListener('change', (event) => { if (event.target.matches?.('[data-profile-logo-file]') && event.target.files?.[0]) handleProfileLogo(event.target.files[0]); });
+document.addEventListener('change', (event) => { const tg = event.target.closest?.('[data-inspection-toggle]'); if (tg) toggleInspectionSetting(tg.dataset.inspectionToggle, tg.checked); if (event.target.matches?.('[data-profile-logo-file]') && event.target.files?.[0]) handleProfileLogo(event.target.files[0]); });
 document.addEventListener('change', (event) => { if (event.target.id === 'mapLabelsToggle') { saveMapLabels(mapPrefStorage(), event.target.checked); applyMapLabels(document, event.target.checked); } });
 applyMapLabels(document, readMapLabels(mapPrefStorage()));
 document.addEventListener('change', (event) => { if (event.target.id === 'guidedAssignmentToggle') setGuidedAssignmentPreference(event.target.checked); });
@@ -3696,7 +3721,15 @@ async function startDriverExperience(ctx) {
     gps: { start: () => startDriverGps(), stop: (opts) => stopDriverGps(opts) },
     toast: showToast, logout,
     disclosure: createLocationDisclosure(),
-    update: createAppUpdater()
+    update: createAppUpdater(),
+    // SW-123: chequeo mecánico antes de iniciar la ruta (requiere conexión).
+    inspection: {
+      load: async (vehicleId) => {
+        const [cfg, st] = await Promise.all([fetchInspectionSettings(client, ctx.municipality_id), fetchVehicleInspectionState(client, { vehicleId })]);
+        return cfg.ok && st.ok ? { ok: true, settings: cfg.settings, inspections: st.inspections, openDefects: st.openDefects } : { ok: false };
+      },
+      submit: (args) => submitInspection(client, args)
+    }
   });
 }
 async function bootstrapRealBackend(ctx) {
@@ -3774,4 +3807,4 @@ async function bootstrapRealBackend(ctx) {
 // SW-030: hydrateCostParameters() is the same "must work with no session at all" shape —
 // currentMunicipalityId() falls back to the deployment's static config or the bundled demo
 // municipality when there's no signed-in municipal session.
-initAuthGate().then((ctx) => { if (ctx) bootstrapRealBackend(ctx); hydrateRealCitizenSectors(); hydrateCostParameters(); hydrateMunicipalityProfile(); hydrateLicense(); hydrateMasterRealMunicipalities(); });
+initAuthGate().then((ctx) => { if (ctx) bootstrapRealBackend(ctx); hydrateRealCitizenSectors(); hydrateCostParameters(); hydrateMunicipalityProfile(); hydrateInspectionSettings(); hydrateLicense(); hydrateMasterRealMunicipalities(); });
