@@ -154,3 +154,6 @@ revoke all on function set_license_suspended(uuid, boolean) from public, anon;
 grant execute on function add_licensed_trucks(uuid, integer) to authenticated;
 grant execute on function register_license_payment(uuid, numeric, text, text) to authenticated;
 grant execute on function set_license_suspended(uuid, boolean) to authenticated;
+
+-- La función del trigger no debe poder llamarse como RPC desde la API (los triggers siguen funcionando sin este permiso).
+revoke all on function enforce_license() from public, anon, authenticated;

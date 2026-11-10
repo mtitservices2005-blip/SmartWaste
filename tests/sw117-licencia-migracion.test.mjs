@@ -35,6 +35,7 @@ has(/has_municipality_role\(p_municipality_id, array\['municipal_admin'\]\)/, 's
 assert.equal((sql.match(/if not has_platform_role\('mt_superadmin'\) then raise exception 'license_forbidden'/g) ?? []).length, 2, 'pagos y suspensión: solo Master Admin');
 has(new RegExp(`p_trucks < 1 or p_trucks > ${MAX_TRUCKS_PER_CHANGE}`));
 
+assert.ok(sql.includes('revoke all on function enforce_license() from public, anon, authenticated'), 'el trigger no se llama como RPC');
 // Bloqueos en vehículos, rutas y conductores; nunca en la app del chofer (corridas, posiciones)
 for (const t of ['vehicles', 'routes', 'drivers']) has(new RegExp(`create trigger sw117_license_${t} before insert on ${t} for each row execute function enforce_license\\(\\)`));
 assert.ok(!/trigger[^;]*on (route_runs|vehicle_positions|fuel_logs)/.test(sql), 'la licencia no bloquea corridas ni GPS');
