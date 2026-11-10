@@ -30,6 +30,8 @@ import { renderLicenseCard, renderMasterLicense, renderLicenseBanner } from './c
 import { normalizeProfile, validateProfile, displayName, fetchMunicipalityProfile, saveMunicipalityProfile, createDemoProfileStore, MAX_SIGNERS } from '../shared/municipality-profile.js';
 import { resizeLogoFile, browserLogoDeps } from '../shared/logo-resize.js';
 import { renderProfileForm } from './components/municipality-profile-screen.js';
+import { buildChecklist } from '../shared/onboarding-checklist.js';
+import { renderChecklist } from './components/onboarding-checklist-screen.js';
 import { createMunicipalityAccount, credentialsMessage } from '../shared/municipality-onboarding.js';
 import { renderNewMunicipality } from './components/municipality-onboarding-screen.js';
 import { renderMetricsReport, renderImpactReport } from '../shared/report-html.js';
@@ -436,6 +438,12 @@ async function refreshResumenSemana() {
   const box = document.getElementById('resumenSemana');
   if (box) box.innerHTML = homeWeeklyHtml();
 }
+// SW-121: primeros pasos del ayuntamiento nuevo (solo en producción; se marca solo con los datos reales).
+function renderOnboardingSteps() {
+  if (!HIDE_DEMO) return '';
+  return renderChecklist(buildChecklist({ profileConfigured: Boolean(municipalityProfile.officialName), costConfigured: impactCostParametersConfigured, trucks, drivers, routes }));
+}
+function refreshOnboardingSteps() { const el = document.getElementById('onboardingSteps'); if (el) el.innerHTML = renderOnboardingSteps(); }
 function renderSummary() {
   const activeRoutes = routes.filter((route) => route.status === 'in_progress' || route.status === 'delayed');
   const delayedRoutes = routes.filter((route) => route.status === 'delayed');
@@ -456,7 +464,8 @@ function renderSummary() {
   return `<section id="resumen" class="section card">
     <p class="eyebrow">${HIDE_DEMO ? 'SmartWaste' : pilotMunicipality.branding.label}</p>
     <h1>Resumen del día</h1>
-    <p class="demo">${HIDE_DEMO ? `${pilotMunicipality.name}, ${pilotMunicipality.country}` : `${demoPrefix}Municipio piloto: ${pilotMunicipality.name}, ${pilotMunicipality.country}`}</p>
+    ${HIDE_DEMO ? `<div id="onboardingSteps">${renderOnboardingSteps()}</div>` : ''}
+    <p class="demo">${HIDE_DEMO ? `${displayName(municipalityProfile, reportMunicipalityName())}, ${pilotMunicipality.country}` : `${demoPrefix}Municipio piloto: ${pilotMunicipality.name}, ${pilotMunicipality.country}`}</p>
     <div class="kpis summary-grid">${summaryCards.map((card) => `<a class="kpi${card.tone ? ` ${card.tone}` : ''}" href="${card.href}"${card.scrollTo ? ` data-scroll-to="${card.scrollTo}"` : ''}><strong>${card.value}</strong><br>${card.label}</a>`).join('')}</div>
     ${attentionItems.length
       ? `<div><h3>Necesita tu atención</h3><div class="list">${attentionItems.join('')}</div></div>`
@@ -1975,6 +1984,7 @@ async function hydrateMunicipalityProfile() {
   }
   profileUi = { status: '', logoNote: '', error: '' };
   refreshConfigProfile();
+  refreshResumen();
 }
 async function saveProfileFromForm() {
   readProfileDraftFromDom();
@@ -1987,6 +1997,7 @@ async function saveProfileFromForm() {
   municipalityProfile = result.profile; profileDraft = normalizeProfile(result.profile);
   profileUi = { status: 'Datos guardados. Los próximos reportes ya los usan.', logoNote: '', error: '' };
   refreshConfigProfile();
+  refreshResumen();
 }
 async function handleProfileLogo(file) {
   readProfileDraftFromDom();
@@ -2795,6 +2806,7 @@ function showSection(id) {
   // refreshCitizenReportsBlock() only patches its own div, never calls showSection() itself, so this
   // can't loop back into showSection('supervisor').
   if (id === 'supervisor') refreshCitizenReportsBlock();
+  if (id === 'resumen') refreshOnboardingSteps();
   if (id === 'resumen' && realAdapter) refreshResumenSemana(); // SW-093: datos frescos al volver a Inicio
   // SW-030: same "refetch on tab entry" precedent as the Supervisor line above — a corrida real
   // recién medida, o una parada recién guardada, no debería requerir un reload completo para
@@ -3505,6 +3517,7 @@ async function hydrateCostParameters() {
   if (result.ok) { impactCostParameters = result.values; impactCostParametersConfigured = result.configured; }
   refreshImpactCenter(impactCostParameters);
   refreshConfigCostParameters();
+  refreshOnboardingSteps();
 }
 // SW-030: "antes vs. después" (3a) and "ruta optimizada vs. manual" (3b) with real data — only ever
 // runs for a real, signed-in municipal session (realAdapter). Never fabricates a number: an empty/
@@ -3717,6 +3730,7 @@ async function bootstrapRealBackend(ctx) {
   const vehiclesAndDriversHydrated = await hydrateVehiclesAndDrivers();
   const routesHydrated = await hydrateRoutes();
   await hydrateCitizenReports();
+  refreshOnboardingSteps();
   refreshSupervisor();
   // Onboarding en vacío: si la hidratación de arriba resolvió bien y no trajo NINGÚN vehículo/
   // chofer/ruta real, este municipio nunca operó en Supabase — mostrarle los 5 datos demo
