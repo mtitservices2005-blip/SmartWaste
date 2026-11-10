@@ -12,7 +12,7 @@ assert.match(fn('refreshLicenseUi'), /wrap\.hidden = !licenseState\.license/);
 assert.match(fn('refreshLicenseUi'), /banner\.tone !== 'info'/, 'el aviso de prueba no ocupa la parte superior');
 assert.match(src, /app\.innerHTML = `<div id="licenseBanner"><\/div>\$\{renderSummary\(\)\}/);
 // Arranque
-assert.match(src, /hydrateCostParameters\(\); hydrateMunicipalityProfile\(\); hydrateInspectionSettings\(\); hydrateLicense\(\); hydrateMasterRealMunicipalities\(\);/);
+assert.match(src, /hydrateCostParameters\(\); hydrateMunicipalityProfile\(\); hydrateInspectionSettings\(\); hydrateDefectsBoard\(\); setInterval\(hydrateDefectsBoard, 60000\); hydrateLicense\(\); hydrateMasterRealMunicipalities\(\);/);
 assert.match(fn('hydrateLicense'), /if \(!client \|\| !HIDE_DEMO\) return;/);
 assert.match(fn('hydrateLicense'), /fetchLicense\(client, municipalityId\)/); assert.match(fn('hydrateLicense'), /countVehicles\(client, municipalityId\)/);
 // Master Admin: carga todas las licencias y las pinta por ayuntamiento

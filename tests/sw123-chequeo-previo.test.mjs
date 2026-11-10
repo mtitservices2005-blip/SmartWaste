@@ -174,7 +174,7 @@ assert.equal(lastDraw(s).screen, 'run', 'si no se puede consultar, no se bloquea
 const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
 assert.match(app, /inspection: \{\s*load:/);
 assert.match(app, /data-inspection-toggle="required"/);
-assert.match(app, /hydrateInspectionSettings\(\); hydrateLicense\(\)/);
+assert.match(app, /hydrateInspectionSettings\(\); hydrateDefectsBoard\(\)/);
 const drv = readFileSync(new URL('../frontend/driver-app.js', import.meta.url), 'utf8');
 for (const a of ['driverInspectOk', 'driverInspectFail', 'driverInspectGroup', 'driverInspectSev', 'driverInspectSaveFail', 'driverInspectSubmit', 'driverInspectBack', 'driverInspectCancelFail']) assert.ok(drv.includes(a), a);
 console.log('sw123 ok');
