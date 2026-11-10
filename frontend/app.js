@@ -27,6 +27,9 @@ import { fetchLicense, fetchAllLicenses, countVehicles, addTrucks, saveLicenseTe
 import { licenseErrorMessage, validateTruckRequest, quoteText } from '../shared/license.js';
 import { buildLicenseCardView, buildMasterLicenseView } from '../shared/license-view.js';
 import { renderLicenseCard, renderMasterLicense, renderLicenseBanner } from './components/license-screens.js';
+import { normalizeProfile, validateProfile, displayName, fetchMunicipalityProfile, saveMunicipalityProfile, createDemoProfileStore, MAX_SIGNERS } from '../shared/municipality-profile.js';
+import { resizeLogoFile, browserLogoDeps } from '../shared/logo-resize.js';
+import { renderProfileForm } from './components/municipality-profile-screen.js';
 import { renderMetricsReport, renderImpactReport } from '../shared/report-html.js';
 import { printReport } from './report-print.js';
 import { initAuthGate, readSupabaseConfig, getAuthClient, isDriverApp } from './auth-gate.js';
@@ -737,7 +740,7 @@ function renderMetrics() {
   const options = { routes: d.routes, vehicles: d.vehicles.map((v) => ({ id: v.id, label: v.code ?? v.unit ?? '—' })), drivers: d.drivers.map((x) => ({ id: x.id, name: x.display_name ?? x.name ?? '—' })) };
   const weekly = buildWeeklySummary(d);
   metrics.weeklyText = weekly.text;
-  root.innerHTML = renderMetricsPage({ weekly, view, period: metrics.period, tab: metrics.tab, filters: metrics.filters, options, selectedRunId: metrics.selectedRunId, trace: metrics.traceFor === (metrics.selectedRunId ?? view.runRows[0]?.id) ? metrics.trace : null, fmt: metricsFmt, demo: Boolean(demoNotice), municipalityName: 'Laguna Salada' });
+  root.innerHTML = renderMetricsPage({ weekly, view, period: metrics.period, tab: metrics.tab, filters: metrics.filters, options, selectedRunId: metrics.selectedRunId, trace: metrics.traceFor === (metrics.selectedRunId ?? view.runRows[0]?.id) ? metrics.trace : null, fmt: metricsFmt, demo: Boolean(demoNotice), municipalityName: displayName(municipalityProfile, reportMunicipalityName()) });
   if (metrics.tab === 'corridas') loadRunTrace(metrics.selectedRunId ?? view.runRows[0]?.id);
 }
 async function loadRunTrace(runId) {
@@ -1907,8 +1910,66 @@ function refreshConfigCostParameters() {
   const el = document.getElementById('configCostParameters');
   if (el) el.innerHTML = renderConfigCostParameters();
 }
+// SW-119: datos del ayuntamiento (nombre oficial, logo, contacto, firmantes). Se guardan en municipality_settings.settings.profile.
+const profileStore = createDemoProfileStore();
+let municipalityProfile = normalizeProfile(null);
+let realMunicipalityName = '';
+let profileDraft = normalizeProfile(null);
+let profileUi = { status: '', logoNote: '', error: '' };
+function reportMunicipalityName() { return realMunicipalityName || pilotMunicipality.name; }
+function renderConfigProfile() { return renderProfileForm({ draft: profileDraft, status: profileUi.status, logoNote: profileUi.logoNote, error: profileUi.error, maxSigners: MAX_SIGNERS }); }
+function refreshConfigProfile() { const el = document.getElementById('configProfile'); if (el) el.innerHTML = renderConfigProfile(); }
+// Lo escrito en pantalla pasa al borrador antes de volver a pintar (agregar/quitar firmante, logo), para no perder texto.
+function readProfileDraftFromDom() {
+  const root = document.getElementById('configProfile'); if (!root) return;
+  const val = (sel) => root.querySelector(sel)?.value ?? '';
+  const signers = [...root.querySelectorAll('[data-profile-signer-name]')].map((el) => ({ name: el.value, role: root.querySelector(`[data-profile-signer-role="${el.dataset.profileSignerName}"]`)?.value ?? '' }));
+  profileDraft = { ...profileDraft, officialName: val('[data-profile-field="officialName"]'), address: val('[data-profile-field="address"]'), phone: val('[data-profile-field="phone"]'), email: val('[data-profile-field="email"]'), signers };
+}
+async function hydrateMunicipalityProfile() {
+  const municipalityId = currentMunicipalityId();
+  const client = getAuthClient();
+  const result = client ? await fetchMunicipalityProfile(client, municipalityId) : profileStore.get(municipalityId);
+  if (result.ok) { municipalityProfile = result.profile; profileDraft = normalizeProfile(result.profile); }
+  if (client) {
+    const row = await client.from('municipalities').select('name').eq('id', municipalityId).maybeSingle();
+    if (!row.error && row.data?.name) realMunicipalityName = row.data.name;
+  }
+  profileUi = { status: '', logoNote: '', error: '' };
+  refreshConfigProfile();
+}
+async function saveProfileFromForm() {
+  readProfileDraftFromDom();
+  const check = validateProfile(profileDraft);
+  if (!check.valid) { profileUi = { ...profileUi, status: '', error: check.errors.join(' ') }; refreshConfigProfile(); return; }
+  const municipalityId = currentMunicipalityId();
+  const client = getAuthClient();
+  const result = client ? await saveMunicipalityProfile(client, municipalityId, profileDraft) : profileStore.save(municipalityId, profileDraft);
+  if (!result.ok) { profileUi = { ...profileUi, status: '', error: `No se pudo guardar: ${result.error.message}` }; refreshConfigProfile(); return; }
+  municipalityProfile = result.profile; profileDraft = normalizeProfile(result.profile);
+  profileUi = { status: 'Datos guardados. Los próximos reportes ya los usan.', logoNote: '', error: '' };
+  refreshConfigProfile();
+}
+async function handleProfileLogo(file) {
+  readProfileDraftFromDom();
+  const result = await resizeLogoFile(file, browserLogoDeps);
+  if (!result.ok) { profileUi = { status: '', logoNote: '', error: result.message }; refreshConfigProfile(); return; }
+  profileDraft = { ...profileDraft, logo: result.logo };
+  profileUi = { status: '', logoNote: `Logo reducido a ${result.width}×${result.height} px (${result.kb} KB). Pulsa Guardar datos para aplicarlo.`, error: '' };
+  refreshConfigProfile();
+}
+function handleProfileClick(target) {
+  if (target.closest('[data-profile-save]')) { saveProfileFromForm(); return; }
+  readProfileDraftFromDom();
+  if (target.closest('[data-profile-add-signer]') && profileDraft.signers.length < MAX_SIGNERS) profileDraft = { ...profileDraft, signers: [...profileDraft.signers, { name: '', role: '' }] };
+  const del = target.closest('[data-profile-del-signer]');
+  if (del) profileDraft = { ...profileDraft, signers: profileDraft.signers.filter((_, i) => i !== Number(del.dataset.profileDelSigner)) };
+  if (target.closest('[data-profile-logo-clear]')) { profileDraft = { ...profileDraft, logo: '' }; profileUi = { status: '', logoNote: 'Logo quitado. Pulsa Guardar datos para aplicarlo.', error: '' }; }
+  else profileUi = { ...profileUi, status: '', error: '' };
+  refreshConfigProfile();
+}
 function renderConfiguracion() {
-  return `<section id="configuracion" class="section card"><h2>Configuración</h2>${HIDE_DEMO ? '<div id="configLicenseWrap" hidden><h3>Tu suscripción</h3><div id="configLicense"></div></div>' : ''}<h3>Parámetros de costo del ayuntamiento</h3><p class="demo">Los usan Impacto y Ahorros y los reportes. El rendimiento (km por galón) de cada camión se escribe en Flota.</p><div class="cost-parameters-form" id="configCostParameters" data-cost-parameters-form="municipal">${renderConfigCostParameters()}</div><h3>Preferencias de este navegador</h3><p class="demo">${demoPrefix}Preferencias de este navegador/operador, no del municipio.</p>
+  return `<section id="configuracion" class="section card"><h2>Configuración</h2>${HIDE_DEMO ? '<div id="configLicenseWrap" hidden><h3>Tu suscripción</h3><div id="configLicense"></div></div>' : ''}<h3>Datos del ayuntamiento</h3><p class="demo">Aparecen en el encabezado, las firmas y el pie de los reportes PDF.</p><div id="configProfile">${renderConfigProfile()}</div><h3>Parámetros de costo del ayuntamiento</h3><p class="demo">Los usan Impacto y Ahorros y los reportes. El rendimiento (km por galón) de cada camión se escribe en Flota.</p><div class="cost-parameters-form" id="configCostParameters" data-cost-parameters-form="municipal">${renderConfigCostParameters()}</div><h3>Preferencias de este navegador</h3><p class="demo">${demoPrefix}Preferencias de este navegador/operador, no del municipio.</p>
     <div class="controls"><label><input type="checkbox" id="mapLabelsToggle"${readMapLabels(mapPrefStorage()) ? ' checked' : ''}> Mostrar etiquetas en el mapa (número de camión y situaciones)</label></div>
     <p class="demo">Desactívalas para ver el mapa más despejado. Los camiones y las alertas siguen visibles; solo se oculta el texto. Se recuerda en este navegador.</p>
     <div class="controls"><label><input type="checkbox" id="guidedAssignmentToggle"${guidedAssignmentEnabled ? ' checked' : ''}> Activar flujo guiado "Poner en marcha" en el detalle de ruta</label></div>
@@ -3067,6 +3128,7 @@ document.addEventListener('click', (event) => {
   if (resolveReportButton) resolveCitizenReportManually(resolveReportButton.dataset.resolveCitizenReport);
   const licenseButton = event.target.closest('[data-license-open], [data-license-cancel], [data-license-confirm], [data-license-create], [data-license-save], [data-license-pay], [data-license-suspend], [data-license-reactivate], [data-license-billed]');
   if (licenseButton) handleLicenseClick(licenseButton);
+  if (event.target.closest('[data-profile-save], [data-profile-add-signer], [data-profile-del-signer], [data-profile-logo-clear]')) handleProfileClick(event.target);
   const saveCostParamsButton = event.target.closest('[data-save-cost-parameters]');
   if (saveCostParamsButton) saveCostParametersFromForm(saveCostParamsButton.dataset.saveCostParameters, saveCostParamsButton.closest('.cost-parameters-form'));
   const onboardButton = event.target.closest('[data-onboarding]');
@@ -3088,6 +3150,7 @@ document.addEventListener('change', (event) => { if (event.target.closest('#impa
 document.addEventListener('change', (event) => { if (event.target.id === 'simVehicle' && event.target.value) { selectRoute(event.target.value); goToMapTab(); } });
 // SW-049: no re-render needed here beyond the checkbox itself — the next time a route detail is
 // opened/re-rendered, renderRouteDetail() reads the module-level guidedAssignmentEnabled fresh.
+document.addEventListener('change', (event) => { if (event.target.matches?.('[data-profile-logo-file]') && event.target.files?.[0]) handleProfileLogo(event.target.files[0]); });
 document.addEventListener('change', (event) => { if (event.target.id === 'mapLabelsToggle') { saveMapLabels(mapPrefStorage(), event.target.checked); applyMapLabels(document, event.target.checked); } });
 applyMapLabels(document, readMapLabels(mapPrefStorage()));
 document.addEventListener('change', (event) => { if (event.target.id === 'guidedAssignmentToggle') setGuidedAssignmentPreference(event.target.checked); });
@@ -3439,16 +3502,15 @@ async function loadImpactReal() {
   renderImpactRealScreen();
 }
 // SW-115: "Descargar reporte PDF" (Métricas e Impacto y Ahorros). Abre el diálogo de impresión con el reporte; ahí se elige "Guardar como PDF".
-const REPORT_MUNICIPALITY = 'Laguna Salada';
 function downloadReport(kind) {
   if (kind === 'metricas' && metrics.data) {
     const d = metrics.data;
     const view = buildMetricsView({ ...d, period: metrics.period, filters: metrics.filters });
-    printReport(renderMetricsReport({ view, period: metrics.period, municipalityName: REPORT_MUNICIPALITY, rawRuns: d.runs }));
+    printReport(renderMetricsReport({ view, period: metrics.period, municipalityName: reportMunicipalityName(), profile: municipalityProfile, rawRuns: d.runs }));
   } else if (kind === 'impacto' && impactReal.data) {
     const d = impactReal.data;
     const model = buildRealImpact({ runs: d.runs, vehicles: d.vehicles, fuelLogs: d.fuelLogs, routes: d.routes, routeStops: impactReal.routeStops, costParameters: currentImpactAssumptions(), periodDays: impactReal.period });
-    printReport(renderImpactReport({ model, period: impactReal.period, municipalityName: REPORT_MUNICIPALITY, priceConfigured: impactCostParametersConfigured }));
+    printReport(renderImpactReport({ model, period: impactReal.period, municipalityName: reportMunicipalityName(), profile: municipalityProfile, priceConfigured: impactCostParametersConfigured }));
   } else { showToast('Espera a que carguen los datos para descargar el reporte.'); }
 }
 document.addEventListener('click', (event) => {
@@ -3673,4 +3735,4 @@ async function bootstrapRealBackend(ctx) {
 // SW-030: hydrateCostParameters() is the same "must work with no session at all" shape —
 // currentMunicipalityId() falls back to the deployment's static config or the bundled demo
 // municipality when there's no signed-in municipal session.
-initAuthGate().then((ctx) => { if (ctx) bootstrapRealBackend(ctx); hydrateRealCitizenSectors(); hydrateCostParameters(); hydrateLicense(); hydrateMasterRealMunicipalities(); });
+initAuthGate().then((ctx) => { if (ctx) bootstrapRealBackend(ctx); hydrateRealCitizenSectors(); hydrateCostParameters(); hydrateMunicipalityProfile(); hydrateLicense(); hydrateMasterRealMunicipalities(); });
