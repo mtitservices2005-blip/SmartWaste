@@ -56,6 +56,7 @@ function fakeClients({ authorized = true, failAt = null } = {}) {
           if (table === 'profiles') return terminal(failAt === 'profile'
             ? { data: null, error: { message: 'profile failed' } }
             : { data: payload, error: null });
+          if (table === 'municipality_licenses') return terminal(failAt === 'license' ? { data: null, error: { message: 'license failed' } } : { data: { id: 'lic-1', ...payload }, error: null });
           return terminal(failAt === 'membership'
             ? { data: null, error: { message: 'membership failed' } }
             : { data: { id: 'membership-1', ...payload }, error: null });
@@ -118,4 +119,39 @@ test('rolls back completed steps in reverse order when membership creation fails
     'deleteUser:admin-1',
     'delete:municipalities:id:municipality-1'
   ]);
+});
+
+// SW-120: el alta crea también la licencia de prueba y la deshace si algo falla después.
+test('creates the trial license (60 days, 5 trucks, no price) and its alta event', async () => {
+  const fake = fakeClients();
+  const response = await createMunicipalityAccountHandler({ createClient: fake.createClient, env })(
+    request({ municipality_name: 'Municipio Nuevo', admin_email: 'admin@example.com' })
+  );
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  const lic = fake.events.find((e) => Array.isArray(e) && e[0] === 'insert:municipality_licenses')[1];
+  assert.equal(lic.municipality_id, 'municipality-1');
+  assert.equal(lic.is_trial, true); assert.equal(lic.contracted_trucks, 5); assert.equal(lic.price_per_truck_year, 0);
+  const days = Math.round((new Date(`${lic.valid_until}T00:00:00Z`) - Date.now()) / 86400000);
+  assert.ok(days >= 59 && days <= 60, `vence en ${days} días`);
+  const ev = fake.events.find((e) => Array.isArray(e) && e[0] === 'insert:license_events')[1];
+  assert.equal(ev.type, 'alta'); assert.equal(ev.trucks_delta, 5); assert.equal(ev.created_by, 'superadmin-1');
+  assert.equal(body.license.contracted_trucks, 5);
+});
+
+test('trucks and trial days are bounded; nonsense falls back to defaults', async () => {
+  for (const [input, expected] of [[{ trucks: 12 }, 12], [{ trucks: 0 }, 5], [{ trucks: 999 }, 5], [{ trucks: 'x' }, 5], [{ trucks: 2.5 }, 5]]) {
+    const fake = fakeClients();
+    await createMunicipalityAccountHandler({ createClient: fake.createClient, env })(request({ municipality_name: 'M', admin_email: 'a@b.do', ...input }));
+    assert.equal(fake.events.find((e) => Array.isArray(e) && e[0] === 'insert:municipality_licenses')[1].contracted_trucks, expected);
+  }
+});
+
+test('a license failure rolls everything back, membership included', async () => {
+  const fake = fakeClients({ failAt: 'license' });
+  const response = await createMunicipalityAccountHandler({ createClient: fake.createClient, env })(
+    request({ municipality_name: 'Municipio Nuevo', admin_email: 'admin@example.com' })
+  );
+  assert.equal(response.status, 500);
+  assert.deepEqual(fake.events.slice(-4), ['delete:memberships:id:membership-1', 'delete:profiles:id:admin-1', 'deleteUser:admin-1', 'delete:municipalities:id:municipality-1']);
 });

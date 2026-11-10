@@ -10,3 +10,9 @@
 .profile-logo__prev img{max-width:100%;max-height:100%;object-fit:contain}
 .profile-msg{margin:0;font-size:.88rem}.profile-msg--bad{color:var(--bad,#b42318)}
 @media (max-width:560px){.profile-row,.profile-signer{grid-template-columns:1fr}}
+/* SW-120: alta de ayuntamiento */
+.onboard-card{display:grid;gap:10px;max-width:560px;border:1px solid var(--border,#d8e4df);border-radius:12px;padding:14px;margin:8px 0}
+.onboard-card label{display:flex;flex-direction:column;gap:4px;font-size:.85rem;color:var(--muted)}
+.onboard-card h4{margin:0}
+.onboard-creds{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0}.onboard-creds dt{color:var(--muted)}.onboard-creds dd{margin:0;overflow-wrap:anywhere}
+.onboard-creds code{font-size:1.1rem;font-weight:600;user-select:all}

@@ -22,6 +22,11 @@ export function municipalitySlug(name) {
   return `${base}-${suffix}`;
 }
 
+function boundedInt(value, fallback, min, max) {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= min && n <= max ? n : fallback;
+}
+
 async function rollback(serviceClient, steps) {
   for (const step of [...steps].reverse()) {
     try { await step(); } catch { /* best effort: preserve the original provisioning error */ }
@@ -111,11 +116,35 @@ export function createMunicipalityAccountHandler({ createClient, env }) {
       await rollback(serviceClient, completed);
       return json({ error: membershipInsert.error.message }, 500);
     }
+    completed.push(() => serviceClient.from('memberships').delete().eq('id', membershipInsert.data.id));
+
+    // SW-120: el ayuntamiento nace con su licencia de prueba (sin precio, sin cobro) para que quede dentro del control de camiones.
+    const trucks = boundedInt(body?.trucks, 5, 1, 50);
+    const trialDays = boundedInt(body?.trial_days, 60, 1, 180);
+    const validUntil = new Date(Date.now() + trialDays * 86400000).toISOString().slice(0, 10);
+    const licenseInsert = await serviceClient.from('municipality_licenses').insert({
+      municipality_id: municipality.id, is_trial: true, valid_until: validUntil, contracted_trucks: trucks,
+      price_per_truck_year: 0, currency: 'USD', billing_mode: 'manual', grace_days: 15, suspended: false
+    }).select('*').single();
+    if (licenseInsert.error) {
+      await rollback(serviceClient, completed);
+      return json({ error: licenseInsert.error.message }, 500);
+    }
+    completed.push(() => serviceClient.from('municipality_licenses').delete().eq('municipality_id', municipality.id));
+    const eventInsert = await serviceClient.from('license_events').insert({
+      municipality_id: municipality.id, type: 'alta', trucks_delta: trucks, billed: true, created_by: userData.user.id,
+      detail: `Alta en periodo de prueba de ${trialDays} días con ${trucks} camiones`
+    }).select('*').single();
+    if (eventInsert.error) {
+      await rollback(serviceClient, completed);
+      return json({ error: eventInsert.error.message }, 500);
+    }
 
     return json({
       ok: true,
       municipality,
       profile_id: newUserId,
+      license: licenseInsert.data,
       temporary_password: temporaryPassword
     }, 200);
   };

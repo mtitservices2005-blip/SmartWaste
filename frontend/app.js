@@ -30,6 +30,8 @@ import { renderLicenseCard, renderMasterLicense, renderLicenseBanner } from './c
 import { normalizeProfile, validateProfile, displayName, fetchMunicipalityProfile, saveMunicipalityProfile, createDemoProfileStore, MAX_SIGNERS } from '../shared/municipality-profile.js';
 import { resizeLogoFile, browserLogoDeps } from '../shared/logo-resize.js';
 import { renderProfileForm } from './components/municipality-profile-screen.js';
+import { createMunicipalityAccount, credentialsMessage } from '../shared/municipality-onboarding.js';
+import { renderNewMunicipality } from './components/municipality-onboarding-screen.js';
 import { renderMetricsReport, renderImpactReport } from '../shared/report-html.js';
 import { printReport } from './report-print.js';
 import { initAuthGate, readSupabaseConfig, getAuthClient, isDriverApp } from './auth-gate.js';
@@ -1880,6 +1882,42 @@ document.addEventListener('input', (event) => {
 // los administra cada ayuntamiento en su propia Configuración. Se lista desde la tabla real `municipalities`
 // (mt_superadmin ya tiene política de lectura) y nunca con los slugs de la demo.
 const MUNICIPALITY_STATUS = { onboarding: 'En instalación', active: 'Activo' };
+// SW-120: alta de un ayuntamiento nuevo (ayuntamiento + administrador con contraseña temporal + licencia de prueba).
+let masterNew = { open: false, busy: false, error: '', created: null, values: {} };
+function renderMasterNewMunicipality() { return renderNewMunicipality(masterNew); }
+function refreshMasterNewMunicipality() { const el = document.getElementById('masterNewMunicipality'); if (el) el.innerHTML = renderMasterNewMunicipality(); }
+async function reloadMasterMunicipalities() {
+  const client = getAuthClient();
+  const result = await fetchRealMunicipalities(client);
+  if (result.ok) masterRealMunicipalities = result.data;
+  const licenses = client ? await fetchAllLicenses(client) : null;
+  if (licenses?.ok) masterLicenses = licenses.byMunicipality;
+  const el = document.getElementById('masterMunicipalities');
+  if (el) el.innerHTML = renderMasterMunicipalities();
+}
+async function submitNewMunicipality(form) {
+  const data = Object.fromEntries(new FormData(form).entries());
+  masterNew = { ...masterNew, values: data, error: '', busy: true };
+  refreshMasterNewMunicipality();
+  const result = await createMunicipalityAccount(getAuthClient(), data);
+  if (!result.ok) { masterNew = { ...masterNew, busy: false, error: result.message }; refreshMasterNewMunicipality(); return; }
+  masterNew = { open: false, busy: false, error: '', values: {}, created: result };
+  refreshMasterNewMunicipality();
+  reloadMasterMunicipalities();
+}
+async function handleMasterNewClick(target) {
+  if (target.closest('[data-onboard-open]')) masterNew = { ...masterNew, open: true, error: '' };
+  else if (target.closest('[data-onboard-cancel]')) masterNew = { open: false, busy: false, error: '', created: null, values: {} };
+  else if (target.closest('[data-onboard-done]')) masterNew = { open: false, busy: false, error: '', created: null, values: {} };
+  else if (target.closest('[data-onboard-copy]')) {
+    const status = document.querySelector('[data-onboard-copy-status]');
+    try { await navigator.clipboard.writeText(credentialsMessage({ ...masterNew.created, appUrl: window.location.origin })); if (status) status.textContent = 'Mensaje copiado.'; }
+    catch { if (status) status.textContent = 'No se pudo copiar. Selecciona y copia la contraseña de arriba.'; }
+    return;
+  }
+  refreshMasterNewMunicipality();
+}
+document.addEventListener('submit', (event) => { const form = event.target.closest?.('[data-onboard-form]'); if (form) { event.preventDefault(); submitNewMunicipality(form); } });
 function renderMasterMunicipalities() {
   if (!masterRealMunicipalities.length) return '<p class="demo" id="masterMunicipalitiesEmpty">Sin municipios reales todavía. Aparecerán aquí cuando se instale el primero.</p>';
   return masterRealMunicipalities.map((m) => {
@@ -1890,7 +1928,7 @@ function renderMasterMunicipalities() {
 }
 function renderMaster() {
   // SW-112: en producción solo se listan los municipios reales (parámetros de costo); sin tarjetas de demostración ni "arquitectura futura".
-  if (HIDE_DEMO) return `<section id="master" class="section card"><h2>Master Admin MT IT Services</h2><p class="demo">Plataforma: municipios, suscripción y consumo. Los datos y parámetros de cada ayuntamiento los administra cada ayuntamiento en su Configuración.</p><h3>Municipios</h3><div class="panel-grid" id="masterMunicipalities">${renderMasterMunicipalities()}</div></section>`;
+  if (HIDE_DEMO) return `<section id="master" class="section card"><h2>Master Admin MT IT Services</h2><p class="demo">Plataforma: municipios, suscripción y consumo. Los datos y parámetros de cada ayuntamiento los administra cada ayuntamiento en su Configuración.</p><h3>Nuevo ayuntamiento</h3><div id="masterNewMunicipality">${renderMasterNewMunicipality()}</div><h3>Municipios</h3><div class="panel-grid" id="masterMunicipalities">${renderMasterMunicipalities()}</div></section>`;
   return `<section id="master" class="section card"><h2>Master Admin MT IT Services</h2><p class="demo">${demoNotice}</p><div class="panel-grid">${municipalities.map((m) => `<article class="card"><h3>${m.name}</h3><p>Plan: ${m.plan}</p><p>Camiones: ${m.trucks} · Rutas: ${m.routes} · Usuarios: ${m.users}</p>${pill(m.status.toLowerCase().includes('operativo') ? 'active' : 'assigned')}<button class="btn-primary" data-onboarding="${m.id}">Onboarding demo</button><p class="demo" data-onboarding-status="${m.id}"></p></article>`).join('')}</div><h3>Municipios reales</h3><div class="panel-grid" id="masterMunicipalities">${renderMasterMunicipalities()}</div><h3>Arquitectura futura</h3><p>${pilotMunicipality.integrationsReady.join(' · ')}</p></section>`;
 }
 
@@ -3128,6 +3166,7 @@ document.addEventListener('click', (event) => {
   if (resolveReportButton) resolveCitizenReportManually(resolveReportButton.dataset.resolveCitizenReport);
   const licenseButton = event.target.closest('[data-license-open], [data-license-cancel], [data-license-confirm], [data-license-create], [data-license-save], [data-license-pay], [data-license-suspend], [data-license-reactivate], [data-license-billed]');
   if (licenseButton) handleLicenseClick(licenseButton);
+  if (event.target.closest('[data-onboard-open], [data-onboard-cancel], [data-onboard-done], [data-onboard-copy]')) handleMasterNewClick(event.target);
   if (event.target.closest('[data-profile-save], [data-profile-add-signer], [data-profile-del-signer], [data-profile-logo-clear]')) handleProfileClick(event.target);
   const saveCostParamsButton = event.target.closest('[data-save-cost-parameters]');
   if (saveCostParamsButton) saveCostParametersFromForm(saveCostParamsButton.dataset.saveCostParameters, saveCostParamsButton.closest('.cost-parameters-form'));
