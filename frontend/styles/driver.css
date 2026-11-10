@@ -78,3 +78,36 @@ body.sw-driver-mode #driverApp { display: block; }
 .sw-driver__update-note { color: var(--color-muted); font-size: var(--font-size-1); }
 .sw-driver__update-actions { display: flex; gap: var(--space-2); }
 .sw-driver__update-actions .sw-driver__cta { min-height: 44px; }
+
+/* SW-123: chequeo del camión antes de salir */
+.sw-insp__prog { display: flex; align-items: center; gap: var(--space-3); color: var(--color-muted); font-size: var(--font-size-2); }
+.sw-insp__bar { flex: 1; height: 8px; border-radius: 999px; background: var(--color-border); overflow: hidden; }
+.sw-insp__bar i { display: block; height: 100%; background: var(--color-primary); }
+.sw-insp__open { padding: var(--space-3); border: 1px solid var(--color-warning); border-radius: var(--radius-2); background: var(--color-surface); font-size: var(--font-size-2); }
+.sw-insp__open ul { margin: var(--space-2) 0 0; padding-left: 18px; }
+.sw-insp__open--crit { border-color: var(--color-danger); }
+.sw-insp__group { display: flex; flex-direction: column; gap: var(--space-2); }
+.sw-insp__ghead { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); margin-top: var(--space-2); }
+.sw-insp__ghead h3 { margin: 0; font-size: var(--font-size-2); letter-spacing: .04em; text-transform: uppercase; color: var(--color-muted); }
+.sw-insp__all { min-height: 40px; padding: 0 var(--space-3); border: 1px solid var(--color-border); border-radius: 999px; background: var(--color-surface); color: var(--color-text); font: inherit; font-weight: 600; font-size: var(--font-size-1); cursor: pointer; }
+.sw-insp__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.sw-insp__row { display: grid; grid-template-columns: 1fr auto; gap: var(--space-2); align-items: center; padding: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-2); background: var(--color-surface); }
+.sw-insp__row--ok { border-color: var(--color-primary); }
+.sw-insp__row--minor { border-color: var(--color-warning); }
+.sw-insp__row--crit { border-color: var(--color-danger); }
+.sw-insp__name { display: flex; flex-direction: column; font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.sw-insp__name small { font-weight: 400; color: var(--color-muted); }
+.sw-insp__btns { display: flex; gap: var(--space-2); }
+.sw-insp__b { min-width: 64px; min-height: 44px; padding: 0 var(--space-3); border: 2px solid var(--color-border); border-radius: var(--radius-2); background: var(--color-surface); color: var(--color-text); font: inherit; font-weight: 700; cursor: pointer; }
+.sw-insp__b--ok[aria-pressed="true"] { background: var(--color-primary); border-color: var(--color-primary); color: var(--color-primary-contrast); }
+.sw-insp__b--fail[aria-pressed="true"] { background: var(--color-danger); border-color: var(--color-danger); color: var(--color-primary-contrast); }
+.sw-insp__sheet { position: fixed; inset: auto 0 0 0; max-width: 480px; margin: 0 auto; padding: var(--space-4) var(--space-4) calc(var(--space-4) + env(safe-area-inset-bottom, 0px)); background: var(--color-background); border-top: 1px solid var(--color-border); border-radius: var(--radius-3) var(--radius-3) 0 0; box-shadow: 0 -10px 30px rgba(0,0,0,.25); display: flex; flex-direction: column; gap: var(--space-2); z-index: 20; }
+.sw-insp__sheet h3 { margin: 0; }
+.sw-insp__sev { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); }
+.sw-insp__sev button { display: flex; flex-direction: column; gap: 2px; min-height: 64px; padding: var(--space-2); border: 2px solid var(--color-border); border-radius: var(--radius-2); background: var(--color-surface); color: var(--color-text); font: inherit; cursor: pointer; }
+.sw-insp__sev span { font-size: var(--font-size-1); color: var(--color-muted); font-weight: 400; }
+.sw-insp__sev button[aria-pressed="true"] { border-color: var(--color-primary); box-shadow: inset 0 0 0 1px var(--color-primary); }
+.sw-insp__sev button[data-driver-inspect-sev="critical"][aria-pressed="true"] { border-color: var(--color-danger); box-shadow: inset 0 0 0 1px var(--color-danger); }
+.sw-insp__note { min-height: 72px; padding: var(--space-3); resize: none; font-size: 1rem; }
+.sw-driver__cta[disabled] { opacity: .5; cursor: default; }
+.sw-insp__b:focus-visible, .sw-insp__all:focus-visible, .sw-insp__sev button:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 2px; }

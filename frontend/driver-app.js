@@ -7,11 +7,13 @@ import { loadDriverToday } from '../shared/driver-data.js';
 import { nextStopInfo, formatElapsed, formatDistance, markVisitedStops, haversineMeters } from '../shared/driver-nav.js';
 import { createLiveMarker } from '../shared/driver-live-marker.js';
 import { parseFuelGallons, buildFuelEntry } from '../shared/fuel-entry.js';
+import { renderDriverInspection, renderDriverInspectionBlocked } from './components/driver-inspection-screen.js';
+import { INSPECTION_GROUPS, INSPECTION_ITEMS, summarizeInspection, needsInspection } from '../shared/inspection.js';
 
 const firstName = (full) => String(full ?? '').trim().split(/\s+/)[0] ?? '';
 
-export function createDriverController({ load, adapter, gps, municipalityId, userId, toast = () => {}, draw, now = () => new Date(), logout = async () => {}, disclosure = { isAccepted: () => true, accept: () => {}, privacyUrl: '' }, update = { check: async () => null, dismiss: () => {}, open: async () => {} } }) {
-  const state = { screen: 'today', data: null, error: '', runId: null, startedAt: {}, visited: {}, position: null, finishError: '', fuelValue: '', fuelSaved: {}, busy: false, pendingDisclosure: null, update: null };
+export function createDriverController({ load, adapter, gps, municipalityId, userId, toast = () => {}, draw, now = () => new Date(), logout = async () => {}, disclosure = { isAccepted: () => true, accept: () => {}, privacyUrl: '' }, update = { check: async () => null, dismiss: () => {}, open: async () => {} }, inspection = null }) {
+  const state = { screen: 'today', data: null, error: '', runId: null, startedAt: {}, visited: {}, position: null, finishError: '', fuelValue: '', fuelSaved: {}, busy: false, pendingDisclosure: null, update: null, insp: null };
   const c = { state, onField: null, onPosition: null };
 
   const runs = () => state.data?.runs ?? [];
@@ -31,6 +33,12 @@ export function createDriverController({ load, adapter, gps, municipalityId, use
   function render() {
     if (state.error) { draw('error', renderDriverLoadError({ message: state.error })); return; }
     if (state.screen === 'disclosure') { draw('disclosure', renderDriverDisclosure({ privacyUrl: disclosure.privacyUrl ?? '' })); return; }
+    if (state.screen === 'inspect' && state.insp) {
+      const i = state.insp; const sum = summarizeInspection(i.results);
+      if (i.blocked) { draw('inspect-blocked', renderDriverInspectionBlocked({ unit: state.data?.unit, critical: i.blocked.critical, message: i.blocked.message })); return; }
+      draw('inspect', renderDriverInspection({ unit: state.data?.unit, groups: INSPECTION_GROUPS, results: i.results, done: sum.done, total: sum.total, openDefects: i.openDefects, sheet: i.sheet, errorMessage: i.error, busy: state.busy }));
+      return;
+    }
     if (state.screen === 'run' || state.screen === 'finish') {
       const run = currentRun();
       if (run) {
@@ -96,21 +104,78 @@ export function createDriverController({ load, adapter, gps, municipalityId, use
 
   c.tick = () => { const run = currentRun(); if (run && state.screen === 'run') emit('time', runView(run).timeText); };
 
-  async function start(id) {
-    const run = runs().find((r) => r.id === id);
-    if (!run || state.busy) return;
-    // SW-107: antes de iniciar (y de pedir la ubicación en segundo plano) Play exige la divulgación destacada.
-    if (!disclosure.isAccepted()) { state.pendingDisclosure = { type: 'start', id }; state.screen = 'disclosure'; return render(); }
+  // SW-123: ¿hay que pedir el chequeo antes de iniciar? Si no se puede saber, no se bloquea la ruta.
+  async function gate(run) {
+    if (!inspection || !run.vehicleId) return null;
+    const cfg = await inspection.load(run.vehicleId);
+    if (!cfg?.ok) return null;
+    if (!needsInspection({ settings: cfg.settings, inspections: cfg.inspections, vehicleId: run.vehicleId, driverId: state.data?.driver?.id ?? null, now: now() })) return null;
+    return cfg;
+  }
+
+  async function begin(run) {
     state.busy = true;
     try {
       const res = await adapter.startRoute(run.routeId);
       if (!res?.ok) { toast(`No se pudo iniciar "${run.routeName}": ${res?.error?.message ?? 'error desconocido'}`, { type: 'error' }); return; }
       state.startedAt[run.id] = res.data?.started_at ?? now().toISOString();
       await gps.start();
-      state.runId = run.id; state.screen = 'run'; state.finishError = ''; state.fuelValue = '';
+      state.runId = run.id; state.screen = 'run'; state.finishError = ''; state.fuelValue = ''; state.insp = null;
       render();
       await c.refresh();
     } finally { state.busy = false; }
+  }
+
+  async function start(id) {
+    const run = runs().find((r) => r.id === id);
+    if (!run || state.busy) return;
+    // SW-107: antes de iniciar (y de pedir la ubicación en segundo plano) Play exige la divulgación destacada.
+    if (!disclosure.isAccepted()) { state.pendingDisclosure = { type: 'start', id }; state.screen = 'disclosure'; return render(); }
+    state.busy = true;
+    let cfg = null;
+    try { cfg = await gate(run); } finally { state.busy = false; }
+    if (cfg) {
+      state.insp = { runId: run.id, results: {}, openDefects: cfg.openDefects ?? [], sheet: null, error: '', blocked: null };
+      state.screen = 'inspect';
+      return render();
+    }
+    return begin(run);
+  }
+
+  async function submitInspectionFlow() {
+    const i = state.insp; const run = runs().find((r) => r.id === i?.runId);
+    if (!i || !run || state.busy) return;
+    if (!summarizeInspection(i.results).complete) return;
+    state.busy = true; i.error = ''; render();
+    let res;
+    try {
+      res = await inspection.submit({ vehicleId: run.vehicleId, runId: run.id, results: i.results, note: '' });
+    } finally { state.busy = false; }
+    if (!res?.ok) { i.error = res?.message ?? 'No se pudo guardar el chequeo.'; return render(); }
+    if (res.departed) {
+      if (res.defectsCreated) toast('Chequeo guardado. El administrador fue avisado de las fallas.');
+      return begin(run);
+    }
+    const critical = INSPECTION_ITEMS.filter((it) => i.results[it.key]?.status === 'fail' && i.results[it.key].severity === 'critical').map((it) => it.label);
+    i.blocked = { critical, message: 'Hay una falla crítica y este ayuntamiento no permite salir.' };
+    return render();
+  }
+
+  function inspectAction(name, payload) {
+    const i = state.insp; if (!i) return undefined;
+    const label = (key) => INSPECTION_ITEMS.find((it) => it.key === key)?.label ?? key;
+    if (name === 'inspect-ok') { i.results[payload] = { status: 'ok' }; i.sheet = null; }
+    else if (name === 'inspect-group-ok') { INSPECTION_GROUPS.find((g) => g.id === payload)?.items.forEach((it) => { if (i.results[it.key]?.status !== 'fail') i.results[it.key] = { status: 'ok' }; }); }
+    else if (name === 'inspect-fail-open') { const prev = i.results[payload]; i.sheet = { key: payload, label: label(payload), severity: prev?.status === 'fail' ? prev.severity : null, note: prev?.note ?? '' }; }
+    else if (name === 'inspect-sev') { if (i.sheet) i.sheet.severity = payload.severity; if (i.sheet && payload.note != null) i.sheet.note = payload.note; }
+    else if (name === 'inspect-fail-save') {
+      if (!i.sheet?.severity) return render();
+      i.results[i.sheet.key] = { status: 'fail', severity: i.sheet.severity, note: String(payload ?? i.sheet.note ?? '').slice(0, 300) };
+      i.sheet = null;
+    }
+    else if (name === 'inspect-fail-cancel') i.sheet = null;
+    else if (name === 'inspect-cancel') { state.insp = null; state.screen = 'today'; }
+    return render();
   }
 
   async function finish(text) {
@@ -141,6 +206,8 @@ export function createDriverController({ load, adapter, gps, municipalityId, use
 
   c.action = async (name, payload) => {
     if (name === 'start') return start(payload);
+    if (name === 'inspect-submit') return submitInspectionFlow();
+    if (name.startsWith('inspect-')) return inspectAction(name, payload);
     if (name === 'disclosure-accept') {
       const pending = state.pendingDisclosure; state.pendingDisclosure = null;
       disclosure.accept();
@@ -165,14 +232,14 @@ export function createDriverController({ load, adapter, gps, municipalityId, use
 }
 
 // ---- Conexión con el navegador / WebView ----
-export async function mountDriverApp({ root, client, ctx, adapter, gps, toast, logout, disclosure, update, win = globalThis.window, nav = globalThis.navigator }) {
+export async function mountDriverApp({ root, client, ctx, adapter, gps, toast, logout, disclosure, update, inspection, win = globalThis.window, nav = globalThis.navigator }) {
   const userResult = await client.auth.getUser();
   const email = userResult?.data?.user?.email ?? '';
   let map = null; let live = null;
 
   const controller = createDriverController({
     load: () => loadDriverToday(client, { userId: ctx.user_id, municipalityId: ctx.municipality_id, email }),
-    adapter, gps, toast, logout, disclosure, update, municipalityId: ctx.municipality_id, userId: ctx.user_id,
+    adapter, gps, toast, logout, disclosure, update, inspection, municipalityId: ctx.municipality_id, userId: ctx.user_id,
     draw: (screen, html) => {
       if (map) { map.remove(); map = null; live = null; }
       root.innerHTML = html;
@@ -198,7 +265,7 @@ export async function mountDriverApp({ root, client, ctx, adapter, gps, toast, l
   controller.onPosition = (position) => { live?.update(position); };
 
   root.addEventListener('click', (event) => {
-    const t = event.target.closest?.('[data-driver-start-route],[data-driver-disclosure-accept],[data-driver-disclosure-decline],[data-driver-open-run],[data-driver-finish-open],[data-driver-finish-back],[data-driver-finish-save],[data-driver-retry],[data-driver-logout],[data-driver-recenter],[data-driver-update-open],[data-driver-update-dismiss]');
+    const t = event.target.closest?.('[data-driver-start-route],[data-driver-disclosure-accept],[data-driver-disclosure-decline],[data-driver-open-run],[data-driver-finish-open],[data-driver-finish-back],[data-driver-finish-save],[data-driver-retry],[data-driver-logout],[data-driver-recenter],[data-driver-update-open],[data-driver-update-dismiss],[data-driver-inspect-ok],[data-driver-inspect-fail],[data-driver-inspect-group],[data-driver-inspect-sev],[data-driver-inspect-save-fail],[data-driver-inspect-cancel-fail],[data-driver-inspect-submit],[data-driver-inspect-back]');
     if (!t) return;
     const d = t.dataset;
     if ('driverStartRoute' in d) controller.action('start', d.driverStartRoute);
@@ -210,6 +277,14 @@ export async function mountDriverApp({ root, client, ctx, adapter, gps, toast, l
     else if ('driverFinishSave' in d) controller.action('finish-save', root.querySelector('#driverFuelLiters')?.value ?? '');
     else if ('driverUpdateOpen' in d) controller.action('update-open');
     else if ('driverUpdateDismiss' in d) controller.action('update-dismiss');
+    else if ('driverInspectOk' in d) controller.action('inspect-ok', d.driverInspectOk);
+    else if ('driverInspectFail' in d) controller.action('inspect-fail-open', d.driverInspectFail);
+    else if ('driverInspectGroup' in d) controller.action('inspect-group-ok', d.driverInspectGroup);
+    else if ('driverInspectSev' in d) controller.action('inspect-sev', { severity: d.driverInspectSev, note: root.querySelector('#driverInspectNote')?.value });
+    else if ('driverInspectSaveFail' in d) controller.action('inspect-fail-save', root.querySelector('#driverInspectNote')?.value ?? '');
+    else if ('driverInspectCancelFail' in d) controller.action('inspect-fail-cancel');
+    else if ('driverInspectSubmit' in d) controller.action('inspect-submit');
+    else if ('driverInspectBack' in d) controller.action('inspect-cancel');
     else if ('driverRetry' in d) controller.action('retry');
     else if ('driverLogout' in d) controller.action('logout');
     else if ('driverRecenter' in d) live?.recenter();
