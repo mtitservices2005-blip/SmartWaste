@@ -18,7 +18,7 @@ assert.match(fn('hydrateCostParameters'), /refreshConfigCostParameters\(\)/);
 // Master Admin: sin parámetros de costo; con municipios reales, suscripción y consumo
 const master = fn('renderMaster') + fn('renderMasterMunicipalities');
 assert.ok(!/cost-parameters|Parámetros de costo por municipio/.test(master), 'Master Admin no edita parámetros de los ayuntamientos');
-assert.match(fn('renderMasterMunicipalities'), /Suscripción/);
+assert.match(fn('renderMasterMunicipalities'), /renderMasterLicense\(buildMasterLicenseView/); // SW-117: la suscripción vive en el bloque de licencia
 assert.match(fn('renderMasterMunicipalities'), /Corridas completadas \(30 días\)/);
 assert.ok(!src.includes('loadMasterCostParameters(municipalityId)'), 'se quitó la carga de parámetros por municipio en Master');
 assert.ok(!src.includes('data-cost-parameters-toggle'));
