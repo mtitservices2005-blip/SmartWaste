@@ -128,7 +128,8 @@ assert.match(renderSaibotIntegration({ newKey: KEY, configured: true }), new Reg
 const sql = readFileSync(new URL('../supabase/migrations/202611110001_sw127_basura_saibot.sql', import.meta.url), 'utf8');
 assert.match(sql, /alter table[^;]*saibot_integrations[^;]*enable row level security/i);
 assert.match(sql, /alter table[^;]*waste_reports[^;]*enable row level security/i);
-assert.equal(/create policy[^;]*on[^;]*saibot_integrations/i.test(sql), false, 'sin políticas: solo funciones del servidor');
+assert.match(sql, /create policy saibot_integrations_no_client_access on saibot_integrations for all using \(false\) with check \(false\)/i, 'niega todo a los clientes');
+assert.equal(/create policy[^;]*on[^;]*saibot_integrations[^;]*using \((?!false)/i.test(sql), false, 'ninguna política que permita acceso');
 assert.equal(/create policy[^;]*on[^;]*waste_reports[^;]*for (insert|update|delete|all)/i.test(sql), false, 'sin escritura directa');
 for (const fn of ['update_waste_report_status', 'generate_saibot_key', 'get_saibot_integration', 'set_saibot_integration']) assert.match(sql, new RegExp(`function[^(]*${fn}`, 'i'));
 

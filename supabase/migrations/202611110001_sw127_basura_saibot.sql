@@ -15,7 +15,10 @@ create table if not exists saibot_integrations (
 );
 create unique index if not exists saibot_integrations_key_hash_idx on saibot_integrations (key_hash);
 alter table saibot_integrations enable row level security;
-revoke all on saibot_integrations from anon, authenticated; -- sin políticas: solo funciones del servidor
+revoke all on saibot_integrations from anon, authenticated;
+-- Política que niega todo a los clientes: la clave solo la tocan las funciones del servidor (tests/rls-coverage.test.mjs exige al menos una política por tabla con RLS).
+drop policy if exists saibot_integrations_no_client_access on saibot_integrations;
+create policy saibot_integrations_no_client_access on saibot_integrations for all using (false) with check (false);
 
 create table if not exists waste_reports (
   id uuid primary key default gen_random_uuid(),
