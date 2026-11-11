@@ -135,7 +135,7 @@ for (const fn of ['update_waste_report_status', 'generate_saibot_key', 'get_saib
 
 // --- cableado en la app ---
 const app = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf8');
-assert.match(app, /OPS_VIEWS = \['mapa', 'rutas', 'flota', 'incidencias', 'basura', 'estadisticas'\]/);
+assert.match(app, /OPS_VIEWS = \['mapa', 'rutas', 'flota', 'incidencias', 'basura', 'descargas', 'estadisticas'\]/);
 assert.match(app, /data-ops-view="basura"/); assert.match(app, /key: 'integraciones'/);
 assert.match(app, /hydrateWasteBoard\(\); setInterval\(hydrateWasteBoard, 60000\); hydrateSaibotIntegration\(\);/);
 assert.match(readFileSync(new URL('../frontend/index.html', import.meta.url), 'utf8'), /styles\/waste\.css/);
