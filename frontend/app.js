@@ -42,6 +42,9 @@ import { fetchInspectionSettings, saveInspectionSettings, fetchVehicleInspection
 import { normalizeInspectionSettings } from '../shared/inspection.js';
 import { fetchDefectsBoard, setDefectStatus, summarizeDefects } from '../shared/vehicle-defects.js';
 import { renderDefectsPanel } from './components/defects-screens.js';
+import { fetchWasteReports, setWasteReportStatus, summarizeReports, projectPins, ageText } from '../shared/waste-reports.js';
+import { fetchSaibotIntegration, generateSaibotKey, saveSaibotSettings, ingestEndpoint } from '../shared/saibot-integration.js';
+import { renderWasteBoard, renderSaibotIntegration } from './components/waste-screens.js';
 import { createDriverTelemetrySession, createPersistentTelemetryQueue } from '../shared/driver-app-telemetry.js';
 import { parseFuelGallons, buildFuelEntry } from '../shared/fuel-entry.js';
 import { connectionStatusText } from '../shared/driver-app-status.js';
@@ -464,10 +467,13 @@ function renderSummary() {
   const defectSummary = defectsBoard.loaded && !defectsBoard.error ? summarizeDefects(defectsBoard.defects) : null;
   if (defectSummary) summaryCards.push({ label: 'Fallas de camiones abiertas', value: defectSummary.open, href: '#operaciones/flota', scrollTo: 'fleetDefects', tone: defectSummary.critical ? 'alert' : defectSummary.open ? 'attention' : '' });
   const cmp = defectSummary ? defectsBoard.compliance : null;
+  const wasteOpen = wasteBoard.loaded && !wasteBoard.error ? summarizeReports(wasteBoard.reports).open : null;
+  if (wasteOpen !== null) summaryCards.push({ label: 'Basura acumulada por atender', value: wasteOpen, href: '#operaciones/basura', tone: wasteOpen ? 'attention' : '' });
   const attentionItems = [
     ...delayedRoutes.map((route) => `<button class="row selectable" data-route="${route.id}"><span>🚨 Ruta retrasada: ${route.name}<br>${route.sectors.join(' · ')}</span>${pill('delayed')}</button>`),
     ...openIncidents.map((incident) => `<button class="row selectable" data-incident="${incident.code}"><span>⚠️ ${incident.type}<br>${incident.sector} · ${incident.priority}</span>${pill('open')}</button>`),
     ...(defectSummary?.critical ? [`<a class="row selectable" href="#operaciones/flota" data-scroll-to="fleetDefects"><span>🛠️ ${defectSummary.critical} falla${defectSummary.critical === 1 ? '' : 's'} crítica${defectSummary.critical === 1 ? '' : 's'} sin cerrar<br>Revisa la bandeja de fallas en Flotilla</span></a>`] : []),
+    ...(wasteOpen ? [`<a class="row selectable" href="#operaciones/basura"><span>🗑️ ${wasteOpen} reporte${wasteOpen === 1 ? '' : 's'} de basura acumulada por atender<br>Llegan desde Saibot</span></a>`] : []),
     ...(cmp?.leftWithout?.length ? [`<a class="row selectable" href="#operaciones/flota" data-scroll-to="fleetDefects"><span>📋 Salieron sin chequeo: ${cmp.leftWithout.map(escapeHtmlText).join(', ')}<br>${cmp.checked} de ${cmp.total} camiones con chequeo hoy</span></a>`] : [])
   ];
   return `<section id="resumen" class="section card">
@@ -750,6 +756,84 @@ async function changeDefectStatus(button) {
   defectsBoard = { ...defectsBoard, busyId: null, status: r.ok ? 'Falla actualizada.' : '', error: r.ok ? '' : r.message };
   if (r.ok) await hydrateDefectsBoard(); else refreshDefectsViews();
 }
+// SW-127: reportes de basura acumulada que llegan desde Saibot (solo con backend real) y ajustes de esa integración.
+let wasteBoard = { loaded: false, reports: [], filter: 'open', selectedId: null, error: '', status: '', busyId: null };
+function renderWastePanel() {
+  if (!getAuthClient()) return '<h2>Basura acumulada</h2><p class="demo">Disponible cuando el ayuntamiento inicia sesión con su cuenta. Aquí llegan los reportes de basura acumulada que los ciudadanos hacen por Saibot.</p>';
+  const reports = wasteBoard.reports;
+  return renderWasteBoard({ ...wasteBoard, pins: projectPins(reports), counts: summarizeReports(reports), now: new Date() });
+}
+function refreshWasteViews() {
+  const box = document.getElementById('wasteBoardRoot'); if (box) box.innerHTML = renderWastePanel();
+  if (document.getElementById('resumen')) refreshResumen();
+}
+async function hydrateWasteBoard() {
+  const client = getAuthClient(); if (!client || document.body.classList.contains('sw-driver-mode')) return;
+  if (document.activeElement?.id === 'wasteNote') return; // no borrar la nota que se está escribiendo
+  const r = await fetchWasteReports(client);
+  if (r.ok) wasteBoard = { ...wasteBoard, loaded: true, reports: r.reports, error: '' };
+  else wasteBoard = { ...wasteBoard, loaded: true, error: r.message };
+  refreshWasteViews();
+}
+async function changeWasteStatus(button) {
+  const client = getAuthClient(); if (!client) return;
+  const id = button.dataset.wasteId;
+  const note = document.getElementById('wasteNote')?.value ?? '';
+  wasteBoard = { ...wasteBoard, busyId: id, status: '', error: '' }; refreshWasteViews();
+  const r = await setWasteReportStatus(client, { reportId: id, status: button.dataset.wasteAct, note });
+  wasteBoard = { ...wasteBoard, busyId: null, status: r.ok ? 'Reporte actualizado.' : '', error: r.ok ? '' : r.message };
+  if (r.ok) await hydrateWasteBoard(); else refreshWasteViews();
+}
+function handleWasteClick(event) {
+  const sel = event.target.closest('[data-waste-select]');
+  if (sel) { wasteBoard = { ...wasteBoard, selectedId: sel.dataset.wasteSelect }; refreshWasteViews(); return; }
+  const flt = event.target.closest('[data-waste-filter]');
+  if (flt) { wasteBoard = { ...wasteBoard, filter: flt.dataset.wasteFilter, selectedId: null }; refreshWasteViews(); return; }
+  const act = event.target.closest('[data-waste-act]');
+  if (act) changeWasteStatus(act);
+}
+let saibotUi = { loading: true, configured: false, enabled: true, last4: '', lastUsedAt: null, callbackUrl: '', newKey: '', confirmRegen: false, error: '', status: '', busy: false };
+function renderSaibotPanel() {
+  if (!getAuthClient()) return '<p class="demo">Disponible cuando el ayuntamiento inicia sesión con su cuenta.</p>';
+  const u = saibotUi;
+  return renderSaibotIntegration({ ...u, endpoint: ingestEndpoint(readSupabaseConfig()?.url), lastUsedText: u.lastUsedAt ? ageText(u.lastUsedAt) : '' });
+}
+function refreshSaibotPanel() { const el = document.getElementById('configSaibot'); if (el) el.innerHTML = renderSaibotPanel(); }
+async function hydrateSaibotIntegration() {
+  const client = getAuthClient(); if (!client || document.body.classList.contains('sw-driver-mode')) return;
+  const r = await fetchSaibotIntegration(client, currentMunicipalityId());
+  if (r.ok) saibotUi = { ...saibotUi, loading: false, configured: r.configured, enabled: r.enabled, last4: r.last4, lastUsedAt: r.lastUsedAt, callbackUrl: r.callbackUrl, error: '' };
+  else saibotUi = { ...saibotUi, loading: false, error: r.message };
+  const tabs = document.getElementById('configTabs'); if (tabs) tabs.innerHTML = renderConfigTabs();
+  refreshSaibotPanel();
+}
+async function handleSaibotClick(event) {
+  const client = getAuthClient(); if (!client) return;
+  const gen = event.target.closest('[data-saibot-gen]');
+  if (gen) {
+    const mode = gen.dataset.saibotGen;
+    if (mode === 'ask') { saibotUi = { ...saibotUi, confirmRegen: true, error: '', status: '' }; refreshSaibotPanel(); return; }
+    if (mode === 'cancel') { saibotUi = { ...saibotUi, confirmRegen: false }; refreshSaibotPanel(); return; }
+    saibotUi = { ...saibotUi, busy: true, error: '', status: '' }; refreshSaibotPanel();
+    const r = await generateSaibotKey(client, currentMunicipalityId());
+    saibotUi = r.ok ? { ...saibotUi, busy: false, confirmRegen: false, configured: true, enabled: true, last4: r.last4, newKey: r.key, status: 'Clave generada.' } : { ...saibotUi, busy: false, confirmRegen: false, error: r.message };
+    refreshSaibotPanel(); return;
+  }
+  const copy = event.target.closest('[data-saibot-copy]');
+  if (copy) {
+    const text = copy.dataset.saibotCopy === 'key' ? saibotUi.newKey : ingestEndpoint(readSupabaseConfig()?.url);
+    try { await navigator.clipboard.writeText(text); saibotUi = { ...saibotUi, status: 'Copiado.', error: '' }; }
+    catch { saibotUi = { ...saibotUi, status: '', error: 'Tu navegador no permitió copiar. Selecciona el texto y cópialo a mano.' }; }
+    refreshSaibotPanel();
+  }
+}
+async function toggleSaibotEnabled(checked) {
+  const client = getAuthClient(); if (!client) return;
+  saibotUi = { ...saibotUi, busy: true, error: '', status: '' }; refreshSaibotPanel();
+  const r = await saveSaibotSettings(client, currentMunicipalityId(), { enabled: checked, callbackUrl: saibotUi.callbackUrl ?? '' });
+  saibotUi = r.ok ? { ...saibotUi, busy: false, enabled: r.enabled, status: r.enabled ? 'Recepción activada.' : 'Recepción desactivada.' } : { ...saibotUi, busy: false, error: r.message };
+  refreshSaibotPanel();
+}
 function renderFlotaPanel() {
   return `<div class="sw-rutas__head"><div><h2>Flotilla</h2><p class="sw-rutas__sub" id="fleetHeaderText">${escapeHtmlText(fleetHeaderLine())}</p><p class="demo sw-rutas__demo">${demoNotice}</p></div></div>
     <div id="fleetDefects" hidden>${renderFleetDefects()}</div>
@@ -870,8 +954,8 @@ document.addEventListener('mousemove', (event) => {
 // con sub-vistas locales (hash propio #operaciones/<vista>, no rompe deep-links existentes) —
 // mismas funciones/estado que antes (renderRoutes(), renderVehicleList(), renderFleetManagement(),
 // renderCreateRoute() sin cambios), solo reorganizado en paneles separados.
-const OPS_VIEWS = ['mapa', 'rutas', 'flota', 'incidencias', 'estadisticas'];
-const OPS_VIEW_LABELS = { mapa: 'Mapa', rutas: 'Rutas', flota: 'Flotilla', incidencias: 'Incidencias', estadisticas: 'Métricas' };
+const OPS_VIEWS = ['mapa', 'rutas', 'flota', 'incidencias', 'basura', 'estadisticas'];
+const OPS_VIEW_LABELS = { mapa: 'Mapa', rutas: 'Rutas', flota: 'Flotilla', incidencias: 'Incidencias', basura: 'Basura acumulada', estadisticas: 'Métricas' };
 function renderOperations() {
   return `<section id="operaciones" class="section">
     <div class="ops-nav" role="tablist" aria-label="Vistas de Operaciones">${OPS_VIEWS.map((view) => `<button type="button" class="ops-tab" data-ops-nav="${view}" role="tab">${OPS_VIEW_LABELS[view]}</button>`).join('')}</div>
@@ -879,6 +963,7 @@ function renderOperations() {
     <div class="ops-panel card" data-ops-view="rutas">${renderRutasPanel()}</div>
     <div class="ops-panel card" data-ops-view="flota">${renderFlotaPanel()}</div>
     <div class="ops-panel card" data-ops-view="incidencias">${renderIncidenciasPanel()}</div>
+    <div class="ops-panel card" data-ops-view="basura"><div id="wasteBoardRoot">${renderWastePanel()}</div></div>
     <div class="ops-panel card" data-ops-view="estadisticas">${renderEstadisticasPanel()}</div>
   </section>`;
 }
@@ -2076,9 +2161,9 @@ async function toggleInspectionSetting(key, value) {
 }
 // SW-126: Configuración ordenada por categorías (pestañas) en vez de una sola lista larga.
 let configTab = 'ayuntamiento';
-const CONFIG_TABS = [{ key: 'ayuntamiento', label: 'Ayuntamiento' }, { key: 'operacion', label: 'Operación' }, { key: 'costos', label: 'Costos' }, { key: 'navegador', label: 'Este navegador' }];
+const CONFIG_TABS = [{ key: 'ayuntamiento', label: 'Ayuntamiento' }, { key: 'operacion', label: 'Operación' }, { key: 'costos', label: 'Costos' }, { key: 'integraciones', label: 'Integraciones' }, { key: 'navegador', label: 'Este navegador' }];
 function renderConfigTabs() {
-  return `<div class="sw-fleet-tabs" role="group" aria-label="Categorías de configuración">${CONFIG_TABS.map((t) => `<button type="button" class="sw-fleet-tab" data-config-tab="${t.key}" aria-pressed="${t.key === configTab}">${t.label}</button>`).join('')}</div>`;
+  return `<div class="sw-fleet-tabs" role="group" aria-label="Categorías de configuración">${CONFIG_TABS.filter((t) => t.key !== 'integraciones' || getAuthClient()).map((t) => `<button type="button" class="sw-fleet-tab" data-config-tab="${t.key}" aria-pressed="${t.key === configTab}">${t.label}</button>`).join('')}</div>`;
 }
 function showConfigTab(tab) {
   if (!CONFIG_TABS.some((t) => t.key === tab)) return;
@@ -2095,6 +2180,7 @@ function renderConfiguracion() {
       + group('Datos del ayuntamiento', 'Aparecen en el encabezado, las firmas y el pie de los reportes PDF.', `<div id="configProfile">${renderConfigProfile()}</div>`))}
     ${panel('operacion', group('Chequeo del camión antes de salir', 'El chofer revisa su camión antes de iniciar la ruta. Tú decides si se pide y si puede salir con una falla crítica.', `<div id="configInspection">${renderConfigInspection()}</div>`, ' id="configInspectionWrap" hidden'))}
     ${panel('costos', group('Parámetros de costo del ayuntamiento', 'Los usan Impacto y Ahorros y los reportes. El rendimiento (km por galón) de cada camión se escribe en Flota.', `<div class="cost-parameters-form" id="configCostParameters" data-cost-parameters-form="municipal">${renderConfigCostParameters()}</div>`))}
+    ${panel('integraciones', group('Saibot: reportes de basura acumulada', 'Saibot envía a SmartWaste los reportes de los ciudadanos. Solo el administrador del ayuntamiento puede generar la clave.', `<div id="configSaibot">${renderSaibotPanel()}</div>`))}
     ${panel('navegador', group('Preferencias de este navegador', `${demoPrefix}Solo afectan a este navegador y a quien lo usa, no al municipio.`, `<div class="controls"><label><input type="checkbox" id="mapLabelsToggle"${readMapLabels(mapPrefStorage()) ? ' checked' : ''}> Mostrar etiquetas en el mapa (número de camión y situaciones)</label></div>
       <p class="demo">Desactívalas para ver el mapa más despejado. Los camiones y las alertas siguen visibles; solo se oculta el texto.</p>
       <div class="controls"><label><input type="checkbox" id="guidedAssignmentToggle"${guidedAssignmentEnabled ? ' checked' : ''}> Activar flujo guiado "Poner en marcha" en el detalle de ruta</label></div>
@@ -3260,6 +3346,8 @@ document.addEventListener('click', (event) => {
   if (cfgTab) showConfigTab(cfgTab.dataset.configTab);
   const defectBtn = event.target.closest('[data-defect-to]');
   if (defectBtn) changeDefectStatus(defectBtn);
+  if (event.target.closest('[data-waste-select], [data-waste-filter], [data-waste-act]')) handleWasteClick(event);
+  if (event.target.closest('[data-saibot-gen], [data-saibot-copy]')) handleSaibotClick(event);
   if (event.target.closest('[data-profile-save], [data-profile-add-signer], [data-profile-del-signer], [data-profile-logo-clear]')) handleProfileClick(event.target);
   const saveCostParamsButton = event.target.closest('[data-save-cost-parameters]');
   if (saveCostParamsButton) saveCostParametersFromForm(saveCostParamsButton.dataset.saveCostParameters, saveCostParamsButton.closest('.cost-parameters-form'));
@@ -3282,6 +3370,7 @@ document.addEventListener('change', (event) => { if (event.target.closest('#impa
 document.addEventListener('change', (event) => { if (event.target.id === 'simVehicle' && event.target.value) { selectRoute(event.target.value); goToMapTab(); } });
 // SW-049: no re-render needed here beyond the checkbox itself — the next time a route detail is
 // opened/re-rendered, renderRouteDetail() reads the module-level guidedAssignmentEnabled fresh.
+document.addEventListener('change', (event) => { if (event.target.matches?.('[data-saibot-toggle]')) toggleSaibotEnabled(event.target.checked); });
 document.addEventListener('change', (event) => { const tg = event.target.closest?.('[data-inspection-toggle]'); if (tg) toggleInspectionSetting(tg.dataset.inspectionToggle, tg.checked); if (event.target.matches?.('[data-profile-logo-file]') && event.target.files?.[0]) handleProfileLogo(event.target.files[0]); });
 document.addEventListener('change', (event) => { if (event.target.id === 'mapLabelsToggle') { saveMapLabels(mapPrefStorage(), event.target.checked); applyMapLabels(document, event.target.checked); } });
 applyMapLabels(document, readMapLabels(mapPrefStorage()));
@@ -3877,4 +3966,4 @@ async function bootstrapRealBackend(ctx) {
 // SW-030: hydrateCostParameters() is the same "must work with no session at all" shape —
 // currentMunicipalityId() falls back to the deployment's static config or the bundled demo
 // municipality when there's no signed-in municipal session.
-initAuthGate().then((ctx) => { if (ctx) bootstrapRealBackend(ctx); hydrateRealCitizenSectors(); hydrateCostParameters(); hydrateMunicipalityProfile(); hydrateInspectionSettings(); hydrateDefectsBoard(); setInterval(hydrateDefectsBoard, 60000); hydrateLicense(); hydrateMasterRealMunicipalities(); });
+initAuthGate().then((ctx) => { if (ctx) bootstrapRealBackend(ctx); hydrateRealCitizenSectors(); hydrateCostParameters(); hydrateMunicipalityProfile(); hydrateInspectionSettings(); hydrateDefectsBoard(); setInterval(hydrateDefectsBoard, 60000); hydrateWasteBoard(); setInterval(hydrateWasteBoard, 60000); hydrateSaibotIntegration(); hydrateLicense(); hydrateMasterRealMunicipalities(); });
