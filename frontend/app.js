@@ -45,6 +45,9 @@ import { renderDefectsPanel } from './components/defects-screens.js';
 import { fetchWasteReports, setWasteReportStatus, summarizeReports, projectPins, ageText } from '../shared/waste-reports.js';
 import { fetchSaibotIntegration, generateSaibotKey, saveSaibotSettings, ingestEndpoint } from '../shared/saibot-integration.js';
 import { renderWasteBoard, renderSaibotIntegration } from './components/waste-screens.js';
+import { DISPOSAL_UI, normalizeWasteSettings, isEnabled as wasteDisposalEnabled, summarizeDisposals, fetchWasteSettings, saveWasteSettings, fetchDisposalBoard, saveDisposalSite, recordDisposal, voidDisposal } from '../shared/waste-disposal.js';
+import { renderDisposalSettings, renderDisposalBoard } from './components/disposal-screens.js';
+import { formatKg as formatDisposalKg } from '../shared/waste-disposal.js';
 import { createDriverTelemetrySession, createPersistentTelemetryQueue } from '../shared/driver-app-telemetry.js';
 import { parseFuelGallons, buildFuelEntry } from '../shared/fuel-entry.js';
 import { connectionStatusText } from '../shared/driver-app-status.js';
@@ -468,6 +471,8 @@ function renderSummary() {
   if (defectSummary) summaryCards.push({ label: 'Fallas de camiones abiertas', value: defectSummary.open, href: '#operaciones/flota', scrollTo: 'fleetDefects', tone: defectSummary.critical ? 'alert' : defectSummary.open ? 'attention' : '' });
   const cmp = defectSummary ? defectsBoard.compliance : null;
   const wasteOpen = wasteBoard.loaded && !wasteBoard.error ? summarizeReports(wasteBoard.reports).open : null;
+  const disp7 = wasteDisposalEnabled(disposalSettings) && disposalUi.loaded && !disposalUi.error ? summarizeDisposals(disposalUi.disposals, { sinceMs: 7 * 86400000 }) : null;
+  if (disp7) summaryCards.push({ label: 'Recogido en 7 días', value: disp7.count ? formatDisposalKg(disp7.totalKg) : '—', href: '#operaciones/descargas' });
   if (wasteOpen !== null) summaryCards.push({ label: 'Basura acumulada por atender', value: wasteOpen, href: '#operaciones/basura', tone: wasteOpen ? 'attention' : '' });
   const attentionItems = [
     ...delayedRoutes.map((route) => `<button class="row selectable" data-route="${route.id}"><span>🚨 Ruta retrasada: ${route.name}<br>${route.sectors.join(' · ')}</span>${pill('delayed')}</button>`),
@@ -834,6 +839,87 @@ async function toggleSaibotEnabled(checked) {
   saibotUi = r.ok ? { ...saibotUi, busy: false, enabled: r.enabled, status: r.enabled ? 'Recepción activada.' : 'Recepción desactivada.' } : { ...saibotUi, busy: false, error: r.message };
   refreshSaibotPanel();
 }
+// SW-130: peso y destino de lo que se recoge (opcional por ayuntamiento; solo con backend real).
+let disposalSettings = normalizeWasteSettings(null);
+let disposalUi = { loaded: false, sites: [], disposals: [], voidingId: null, error: '', status: '', busy: false };
+function disposalVehicles() { return trucks.filter((t) => t.real_id).map((t) => ({ id: t.real_id, label: t.plate ? `${t.unit} · ${t.plate}` : String(t.unit) })); }
+function renderDisposalBoardPanel() {
+  if (!getAuthClient()) return '<h2>Peso y destino</h2><p class="demo">Disponible cuando el ayuntamiento inicia sesión con su cuenta.</p>';
+  const now = new Date();
+  const opts = { now, sites: disposalUi.sites };
+  return renderDisposalBoard({ ui: DISPOSAL_UI, ...disposalUi, enabled: wasteDisposalEnabled(disposalSettings), mode: disposalSettings.mode, settings: disposalSettings, vehicles: disposalVehicles(),
+    week: summarizeDisposals(disposalUi.disposals, { ...opts, sinceMs: 7 * 86400000 }), month: summarizeDisposals(disposalUi.disposals, { ...opts, sinceMs: 30 * 86400000 }) });
+}
+function refreshDisposalViews() {
+  const box = document.getElementById('disposalBoardRoot'); if (box) box.innerHTML = renderDisposalBoardPanel();
+  const cfg = document.getElementById('configDisposal'); if (cfg) cfg.innerHTML = renderDisposalSettings({ ui: DISPOSAL_UI, ...disposalUi, settings: disposalSettings });
+  const wrap = document.getElementById('configDisposalWrap'); if (wrap) wrap.hidden = !getAuthClient();
+  const tab = document.querySelector('[data-ops-nav="descargas"]'); if (tab) tab.hidden = !getAuthClient() || !wasteDisposalEnabled(disposalSettings);
+  if (document.getElementById('resumen')) refreshResumen();
+}
+async function hydrateDisposals() {
+  const client = getAuthClient(); if (!client || document.body.classList.contains('sw-driver-mode')) return;
+  if (document.activeElement?.closest?.('#dispForm, #configDisposal')) return; // no borrar lo que se está escribiendo
+  const s = await fetchWasteSettings(client, currentMunicipalityId());
+  if (!s.ok) { disposalUi = { ...disposalUi, loaded: true, error: s.message }; refreshDisposalViews(); return; }
+  disposalSettings = s.settings;
+  if (!wasteDisposalEnabled(disposalSettings)) { disposalUi = { ...disposalUi, loaded: true, error: '' }; refreshDisposalViews(); return; }
+  const r = await fetchDisposalBoard(client);
+  disposalUi = r.ok ? { ...disposalUi, loaded: true, sites: r.sites, disposals: r.disposals, error: '' } : { ...disposalUi, loaded: true, error: r.message };
+  refreshDisposalViews();
+}
+async function changeDisposalSettings(next) {
+  const client = getAuthClient(); if (!client) return;
+  disposalUi = { ...disposalUi, busy: true, error: '', status: '' }; refreshDisposalViews();
+  const r = await saveWasteSettings(client, currentMunicipalityId(), next);
+  if (r.ok) disposalSettings = r.settings;
+  disposalUi = { ...disposalUi, busy: false, status: r.ok ? 'Guardado.' : '', error: r.ok ? '' : r.message };
+  refreshDisposalViews();
+  if (r.ok && wasteDisposalEnabled(disposalSettings)) { const b = await fetchDisposalBoard(client); if (b.ok) { disposalUi = { ...disposalUi, sites: b.sites, disposals: b.disposals }; refreshDisposalViews(); } }
+}
+async function handleDisposalClick(event) {
+  const client = getAuthClient(); if (!client) return;
+  const cap = event.target.closest('[data-waste-capacity-save]');
+  if (cap) { changeDisposalSettings({ ...disposalSettings, defaultCapacityKg: document.getElementById('wasteCapacity')?.value }); return; }
+  const add = event.target.closest('[data-site-add]');
+  const toggle = event.target.closest('[data-site-toggle]');
+  if (add || toggle) {
+    const site = toggle ? disposalUi.sites.find((x) => x.id === toggle.dataset.siteToggle) : null;
+    disposalUi = { ...disposalUi, busy: true, error: '', status: '' }; refreshDisposalViews();
+    const r = add
+      ? await saveDisposalSite(client, currentMunicipalityId(), { name: document.getElementById('siteName')?.value, kind: document.getElementById('siteKind')?.value })
+      : site ? await saveDisposalSite(client, currentMunicipalityId(), { id: site.id, name: site.name, kind: site.kind, active: toggle.dataset.siteActive !== '1' }) : { ok: false, message: 'Actualiza la lista.' };
+    disposalUi = { ...disposalUi, busy: false, status: r.ok ? 'Guardado.' : '', error: r.ok ? '' : r.message };
+    if (r.ok) { const b = await fetchDisposalBoard(client); if (b.ok) disposalUi = { ...disposalUi, sites: b.sites, disposals: b.disposals }; }
+    refreshDisposalViews(); return;
+  }
+  const save = event.target.closest('[data-disp-save]');
+  if (save) {
+    const val = (id) => document.getElementById(id)?.value ?? '';
+    disposalUi = { ...disposalUi, busy: true, error: '', status: '' }; refreshDisposalViews();
+    const r = await recordDisposal(client, currentMunicipalityId(), { vehicleId: val('dispVehicle'), siteId: val('dispSite'), source: val('dispSource'), weightKg: val('dispWeight'), ticket: val('dispTicket'), fillLevel: val('dispFill'), note: val('dispNote') }, { mode: disposalSettings.mode, settings: disposalSettings });
+    disposalUi = { ...disposalUi, busy: false, status: r.ok ? 'Descarga registrada.' : '', error: r.ok ? '' : r.message };
+    if (r.ok) { const b = await fetchDisposalBoard(client); if (b.ok) disposalUi = { ...disposalUi, sites: b.sites, disposals: b.disposals }; }
+    refreshDisposalViews(); return;
+  }
+  const ask = event.target.closest('[data-disp-void]');
+  if (ask) { disposalUi = { ...disposalUi, voidingId: ask.dataset.dispVoid, error: '', status: '' }; refreshDisposalViews(); return; }
+  if (event.target.closest('[data-disp-void-cancel]')) { disposalUi = { ...disposalUi, voidingId: null }; refreshDisposalViews(); return; }
+  const confirmVoid = event.target.closest('[data-disp-void-confirm]');
+  if (confirmVoid) {
+    const reason = document.getElementById('dispVoidReason')?.value ?? '';
+    disposalUi = { ...disposalUi, busy: true, error: '', status: '' }; refreshDisposalViews();
+    const r = await voidDisposal(client, { disposalId: confirmVoid.dataset.dispVoidConfirm, reason });
+    disposalUi = { ...disposalUi, busy: false, voidingId: r.ok ? null : disposalUi.voidingId, status: r.ok ? 'Descarga anulada.' : '', error: r.ok ? '' : r.message };
+    if (r.ok) { const b = await fetchDisposalBoard(client); if (b.ok) disposalUi = { ...disposalUi, sites: b.sites, disposals: b.disposals }; }
+    refreshDisposalViews();
+  }
+}
+function syncDisposalSource() {
+  const src = document.getElementById('dispSource')?.value;
+  const w = document.getElementById('dispWeightBox'); if (w) w.hidden = src !== 'scale';
+  const f = document.getElementById('dispFillBox'); if (f) f.hidden = src !== 'estimated';
+}
 function renderFlotaPanel() {
   return `<div class="sw-rutas__head"><div><h2>Flotilla</h2><p class="sw-rutas__sub" id="fleetHeaderText">${escapeHtmlText(fleetHeaderLine())}</p><p class="demo sw-rutas__demo">${demoNotice}</p></div></div>
     <div id="fleetDefects" hidden>${renderFleetDefects()}</div>
@@ -954,8 +1040,8 @@ document.addEventListener('mousemove', (event) => {
 // con sub-vistas locales (hash propio #operaciones/<vista>, no rompe deep-links existentes) —
 // mismas funciones/estado que antes (renderRoutes(), renderVehicleList(), renderFleetManagement(),
 // renderCreateRoute() sin cambios), solo reorganizado en paneles separados.
-const OPS_VIEWS = ['mapa', 'rutas', 'flota', 'incidencias', 'basura', 'estadisticas'];
-const OPS_VIEW_LABELS = { mapa: 'Mapa', rutas: 'Rutas', flota: 'Flotilla', incidencias: 'Incidencias', basura: 'Basura acumulada', estadisticas: 'Métricas' };
+const OPS_VIEWS = ['mapa', 'rutas', 'flota', 'incidencias', 'basura', 'descargas', 'estadisticas'];
+const OPS_VIEW_LABELS = { mapa: 'Mapa', rutas: 'Rutas', flota: 'Flotilla', incidencias: 'Incidencias', basura: 'Basura acumulada', descargas: 'Peso y destino', estadisticas: 'Métricas' };
 function renderOperations() {
   return `<section id="operaciones" class="section">
     <div class="ops-nav" role="tablist" aria-label="Vistas de Operaciones">${OPS_VIEWS.map((view) => `<button type="button" class="ops-tab" data-ops-nav="${view}" role="tab">${OPS_VIEW_LABELS[view]}</button>`).join('')}</div>
@@ -964,6 +1050,7 @@ function renderOperations() {
     <div class="ops-panel card" data-ops-view="flota">${renderFlotaPanel()}</div>
     <div class="ops-panel card" data-ops-view="incidencias">${renderIncidenciasPanel()}</div>
     <div class="ops-panel card" data-ops-view="basura"><div id="wasteBoardRoot">${renderWastePanel()}</div></div>
+    <div class="ops-panel card" data-ops-view="descargas"><div id="disposalBoardRoot">${renderDisposalBoardPanel()}</div></div>
     <div class="ops-panel card" data-ops-view="estadisticas">${renderEstadisticasPanel()}</div>
   </section>`;
 }
@@ -2178,7 +2265,7 @@ function renderConfiguracion() {
     ${panel('ayuntamiento',
       (HIDE_DEMO ? group('Tu suscripción', '', '<div id="configLicense"></div>', ' id="configLicenseWrap" hidden') : '')
       + group('Datos del ayuntamiento', 'Aparecen en el encabezado, las firmas y el pie de los reportes PDF.', `<div id="configProfile">${renderConfigProfile()}</div>`))}
-    ${panel('operacion', group('Chequeo del camión antes de salir', 'El chofer revisa su camión antes de iniciar la ruta. Tú decides si se pide y si puede salir con una falla crítica.', `<div id="configInspection">${renderConfigInspection()}</div>`, ' id="configInspectionWrap" hidden'))}
+    ${panel('operacion', group('Peso y destino de lo que se recoge', 'Opcional. Elige cómo registra tu ayuntamiento lo que se descarga: con báscula, estimado o solo el viaje. Puedes dejarlo apagado.', '<div id="configDisposal">' + renderDisposalSettings({ ui: DISPOSAL_UI, ...disposalUi, settings: disposalSettings }) + '</div>', ' id="configDisposalWrap" hidden') + group('Chequeo del camión antes de salir', 'El chofer revisa su camión antes de iniciar la ruta. Tú decides si se pide y si puede salir con una falla crítica.', `<div id="configInspection">${renderConfigInspection()}</div>`, ' id="configInspectionWrap" hidden'))}
     ${panel('costos', group('Parámetros de costo del ayuntamiento', 'Los usan Impacto y Ahorros y los reportes. El rendimiento (km por galón) de cada camión se escribe en Flota.', `<div class="cost-parameters-form" id="configCostParameters" data-cost-parameters-form="municipal">${renderConfigCostParameters()}</div>`))}
     ${panel('integraciones', group('Saibot: reportes de basura acumulada', 'Saibot envía a SmartWaste los reportes de los ciudadanos. Solo el administrador del ayuntamiento puede generar la clave.', `<div id="configSaibot">${renderSaibotPanel()}</div>`))}
     ${panel('navegador', group('Preferencias de este navegador', `${demoPrefix}Solo afectan a este navegador y a quien lo usa, no al municipio.`, `<div class="controls"><label><input type="checkbox" id="mapLabelsToggle"${readMapLabels(mapPrefStorage()) ? ' checked' : ''}> Mostrar etiquetas en el mapa (número de camión y situaciones)</label></div>
@@ -3348,6 +3435,7 @@ document.addEventListener('click', (event) => {
   if (defectBtn) changeDefectStatus(defectBtn);
   if (event.target.closest('[data-waste-select], [data-waste-filter], [data-waste-act]')) handleWasteClick(event);
   if (event.target.closest('[data-saibot-gen], [data-saibot-copy]')) handleSaibotClick(event);
+  if (event.target.closest('[data-waste-capacity-save], [data-site-add], [data-site-toggle], [data-disp-save], [data-disp-void], [data-disp-void-cancel], [data-disp-void-confirm]')) handleDisposalClick(event);
   if (event.target.closest('[data-profile-save], [data-profile-add-signer], [data-profile-del-signer], [data-profile-logo-clear]')) handleProfileClick(event.target);
   const saveCostParamsButton = event.target.closest('[data-save-cost-parameters]');
   if (saveCostParamsButton) saveCostParametersFromForm(saveCostParamsButton.dataset.saveCostParameters, saveCostParamsButton.closest('.cost-parameters-form'));
@@ -3370,7 +3458,7 @@ document.addEventListener('change', (event) => { if (event.target.closest('#impa
 document.addEventListener('change', (event) => { if (event.target.id === 'simVehicle' && event.target.value) { selectRoute(event.target.value); goToMapTab(); } });
 // SW-049: no re-render needed here beyond the checkbox itself — the next time a route detail is
 // opened/re-rendered, renderRouteDetail() reads the module-level guidedAssignmentEnabled fresh.
-document.addEventListener('change', (event) => { if (event.target.matches?.('[data-saibot-toggle]')) toggleSaibotEnabled(event.target.checked); });
+document.addEventListener('change', (event) => { if (event.target.matches?.('[data-saibot-toggle]')) toggleSaibotEnabled(event.target.checked); if (event.target.matches?.('[data-waste-mode]')) changeDisposalSettings({ ...disposalSettings, mode: event.target.value }); if (event.target.id === 'dispSource') syncDisposalSource(); });
 document.addEventListener('change', (event) => { const tg = event.target.closest?.('[data-inspection-toggle]'); if (tg) toggleInspectionSetting(tg.dataset.inspectionToggle, tg.checked); if (event.target.matches?.('[data-profile-logo-file]') && event.target.files?.[0]) handleProfileLogo(event.target.files[0]); });
 document.addEventListener('change', (event) => { if (event.target.id === 'mapLabelsToggle') { saveMapLabels(mapPrefStorage(), event.target.checked); applyMapLabels(document, event.target.checked); } });
 applyMapLabels(document, readMapLabels(mapPrefStorage()));
@@ -3966,4 +4054,4 @@ async function bootstrapRealBackend(ctx) {
 // SW-030: hydrateCostParameters() is the same "must work with no session at all" shape —
 // currentMunicipalityId() falls back to the deployment's static config or the bundled demo
 // municipality when there's no signed-in municipal session.
-initAuthGate().then((ctx) => { if (ctx) bootstrapRealBackend(ctx); hydrateRealCitizenSectors(); hydrateCostParameters(); hydrateMunicipalityProfile(); hydrateInspectionSettings(); hydrateDefectsBoard(); setInterval(hydrateDefectsBoard, 60000); hydrateWasteBoard(); setInterval(hydrateWasteBoard, 60000); hydrateSaibotIntegration(); hydrateLicense(); hydrateMasterRealMunicipalities(); });
+initAuthGate().then((ctx) => { if (ctx) bootstrapRealBackend(ctx); hydrateRealCitizenSectors(); hydrateCostParameters(); hydrateMunicipalityProfile(); hydrateInspectionSettings(); hydrateDefectsBoard(); setInterval(hydrateDefectsBoard, 60000); hydrateWasteBoard(); setInterval(hydrateWasteBoard, 60000); hydrateSaibotIntegration(); hydrateDisposals(); setInterval(hydrateDisposals, 60000); hydrateLicense(); hydrateMasterRealMunicipalities(); });
