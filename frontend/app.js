@@ -45,6 +45,7 @@ import { renderDefectsPanel } from './components/defects-screens.js';
 import { fetchWasteReports, setWasteReportStatus, summarizeReports, projectPins, ageText } from '../shared/waste-reports.js';
 import { fetchSaibotIntegration, generateSaibotKey, saveSaibotSettings, ingestEndpoint } from '../shared/saibot-integration.js';
 import { renderWasteBoard, renderSaibotIntegration } from './components/waste-screens.js';
+import { liveMapUrl, fetchMunicipalityPublicInfo } from '../shared/public-links.js';
 import { DISPOSAL_UI, normalizeWasteSettings, isEnabled as wasteDisposalEnabled, summarizeDisposals, fetchWasteSettings, saveWasteSettings, fetchDisposalBoard, saveDisposalSite, recordDisposal, voidDisposal } from '../shared/waste-disposal.js';
 import { renderDisposalSettings, renderDisposalBoard } from './components/disposal-screens.js';
 import { formatKg as formatDisposalKg } from '../shared/waste-disposal.js';
@@ -229,6 +230,8 @@ let driverOfflineHandler = null;
 // static config points at (citizen-portal-only sessions), else the bundled demo municipality. Master
 // Admin's per-municipality cost-parameter forms (renderMaster()) never call this — they always
 // carry their own explicit municipality_id, since mt_superadmin has no single "own" municipality.
+// SW-132: con sesión real manda el ayuntamiento de la cuenta; el del despliegue solo sirve a quien no ha iniciado sesión (portal anónimo).
+function sessionMunicipalityId() { return driverAuthContext?.municipality_id ?? readSupabaseConfig()?.municipality_id ?? null; }
 function currentMunicipalityId() { return driverAuthContext?.municipality_id ?? readSupabaseConfig()?.municipality_id ?? pilotMunicipality.id; }
 // SW-062: completion must wait until every in-flight GPS insert has settled; otherwise the final
 // sample can land after completeRoute() has already counted points and calculated distance.
@@ -1808,7 +1811,8 @@ function renderSupervisor() {
 // syncCitizenLive() al entrar). Reportar incidencia y consultar estado viven ahora en Incidencias.
 function citizenLiveConfig() {
   const cfg = readSupabaseConfig();
-  return cfg?.url && cfg?.anonKey && cfg?.municipality_id ? cfg : null;
+  const municipality_id = sessionMunicipalityId();
+  return cfg?.url && cfg?.anonKey && municipality_id ? { ...cfg, municipality_id } : null;
 }
 function renderCitizen() {
   // SW-112: en producción Ciudadanía es el mapa en vivo con el calendario real de rutas; sin consulta ni avisos de demostración.
@@ -2179,6 +2183,30 @@ function readProfileDraftFromDom() {
   const signers = [...root.querySelectorAll('[data-profile-signer-name]')].map((el) => ({ name: el.value, role: root.querySelector(`[data-profile-signer-role="${el.dataset.profileSignerName}"]`)?.value ?? '' }));
   profileDraft = { ...profileDraft, officialName: val('[data-profile-field="officialName"]'), address: val('[data-profile-field="address"]'), phone: val('[data-profile-field="phone"]'), email: val('[data-profile-field="email"]'), signers };
 }
+// SW-132: enlace público del mapa en vivo de este ayuntamiento (cada uno tiene el suyo, con su slug).
+let publicLinks = { slug: '', status: '' };
+function renderPublicLinks() {
+  const url = liveMapUrl(window.location.origin, publicLinks.slug);
+  if (!getAuthClient()) return '<p class="demo">Disponible cuando el ayuntamiento inicia sesión con su cuenta.</p>';
+  if (!url) return '<p class="demo">Cargando la dirección de tu ayuntamiento…</p>';
+  return `<label class="sw-waste__label" for="publicLiveUrl">Mapa de camiones en vivo para tus ciudadanos</label>
+    <input id="publicLiveUrl" class="sw-waste__input" type="text" readonly value="${escapeHtmlText(url)}">
+    <div class="sw-waste__acts"><button type="button" class="sw-waste__btn" data-public-link-copy>Copiar dirección</button> <a class="sw-waste__btn" href="${escapeHtmlText(url)}" target="_blank" rel="noopener noreferrer">Abrir</a></div>
+    <p class="demo">Esta dirección es solo de tu ayuntamiento: muestra únicamente tus camiones. Compártela en tus redes y en tu portal.</p>
+    ${publicLinks.status ? `<p class="demo" role="status">${escapeHtmlText(publicLinks.status)}</p>` : ''}`;
+}
+function refreshPublicLinks() { const el = document.getElementById('configPublicLinks'); if (el) el.innerHTML = renderPublicLinks(); }
+async function hydratePublicLinks() {
+  const client = getAuthClient(); if (!client || document.body.classList.contains('sw-driver-mode')) return;
+  const r = await fetchMunicipalityPublicInfo(client, currentMunicipalityId());
+  if (r.ok) publicLinks = { ...publicLinks, slug: r.slug };
+  refreshPublicLinks();
+}
+async function copyPublicLink() {
+  try { await navigator.clipboard.writeText(liveMapUrl(window.location.origin, publicLinks.slug)); publicLinks = { ...publicLinks, status: 'Copiado.' }; }
+  catch { publicLinks = { ...publicLinks, status: 'Tu navegador no permitió copiar. Selecciona la dirección y cópiala a mano.' }; }
+  refreshPublicLinks();
+}
 async function hydrateMunicipalityProfile() {
   const municipalityId = currentMunicipalityId();
   const client = getAuthClient();
@@ -2264,6 +2292,7 @@ function renderConfiguracion() {
   return `<section id="configuracion" class="section card"><h2>Configuración</h2><div id="configTabs">${renderConfigTabs()}</div>
     ${panel('ayuntamiento',
       (HIDE_DEMO ? group('Tu suscripción', '', '<div id="configLicense"></div>', ' id="configLicenseWrap" hidden') : '')
+      + group('Enlace público de tu ayuntamiento', 'Cada ayuntamiento tiene su propia dirección, independiente de los demás.', `<div id="configPublicLinks">${renderPublicLinks()}</div>`)
       + group('Datos del ayuntamiento', 'Aparecen en el encabezado, las firmas y el pie de los reportes PDF.', `<div id="configProfile">${renderConfigProfile()}</div>`))}
     ${panel('operacion', group('Peso y destino de lo que se recoge', 'Opcional. Elige cómo registra tu ayuntamiento lo que se descarga: con báscula, estimado o solo el viaje. Puedes dejarlo apagado.', '<div id="configDisposal">' + renderDisposalSettings({ ui: DISPOSAL_UI, ...disposalUi, settings: disposalSettings }) + '</div>', ' id="configDisposalWrap" hidden') + group('Chequeo del camión antes de salir', 'El chofer revisa su camión antes de iniciar la ruta. Tú decides si se pide y si puede salir con una falla crítica.', `<div id="configInspection">${renderConfigInspection()}</div>`, ' id="configInspectionWrap" hidden'))}
     ${panel('costos', group('Parámetros de costo del ayuntamiento', 'Los usan Impacto y Ahorros y los reportes. El rendimiento (km por galón) de cada camión se escribe en Flota.', `<div class="cost-parameters-form" id="configCostParameters" data-cost-parameters-form="municipal">${renderConfigCostParameters()}</div>`))}
@@ -3435,6 +3464,7 @@ document.addEventListener('click', (event) => {
   if (defectBtn) changeDefectStatus(defectBtn);
   if (event.target.closest('[data-waste-select], [data-waste-filter], [data-waste-act]')) handleWasteClick(event);
   if (event.target.closest('[data-saibot-gen], [data-saibot-copy]')) handleSaibotClick(event);
+  if (event.target.closest('[data-public-link-copy]')) copyPublicLink();
   if (event.target.closest('[data-waste-capacity-save], [data-site-add], [data-site-toggle], [data-disp-save], [data-disp-void], [data-disp-void-cancel], [data-disp-void-confirm]')) handleDisposalClick(event);
   if (event.target.closest('[data-profile-save], [data-profile-add-signer], [data-profile-del-signer], [data-profile-logo-clear]')) handleProfileClick(event.target);
   const saveCostParamsButton = event.target.closest('[data-save-cost-parameters]');
@@ -3484,17 +3514,17 @@ $('#citizenSector')?.dispatchEvent(new Event('change'));
 document.addEventListener('submit', async (event) => {
   if (!event.target.matches?.('#incidentForm')) return;
   event.preventDefault();
-  const config = readSupabaseConfig();
   const client = getAuthClient();
   const folioEl = $('#folio');
-  if (client && config?.municipality_id) {
+  const reportMunicipalityId = sessionMunicipalityId();
+  if (client && reportMunicipalityId) {
     if (folioEl) folioEl.textContent = 'Enviando reporte…';
     const form = event.target;
     const evidenceFile = $('#evidence')?.files?.[0] || null;
     const selectedSectorId = form.sector.value;
     const sector_id = realSectors.some((s) => s.id === selectedSectorId) ? selectedSectorId : null;
     const result = await submitCitizenReport(client, {
-      municipality_id: config.municipality_id,
+      municipality_id: reportMunicipalityId,
       sector_id,
       type: form.type.value,
       description: form.description.value,
@@ -3523,7 +3553,7 @@ document.addEventListener('change', (event) => {
   if (event.target.id !== 'evidence') return;
   const file = event.target.files?.[0];
   const result = validateEvidenceFile(file);
-  const uploadNote = (getAuthClient() && readSupabaseConfig()?.municipality_id) ? 'se sube al enviar el formulario' : 'sin upload real (modo demo)';
+  const uploadNote = (getAuthClient() && sessionMunicipalityId()) ? 'se sube al enviar el formulario' : 'sin upload real (modo demo)';
   $('#evidencePreview').textContent = result.ok ? `${file?.name ?? 'Sin archivo'} · ${result.reason === 'no_file' ? 'sin archivo' : uploadNote}` : `Evidencia rechazada: ${result.reason}`;
 });
 $('#driverVehicleSelect')?.addEventListener('change', (event) => {
@@ -3741,7 +3771,7 @@ async function hydrateCitizenReports() {
 // realSectors, so a stale demo option value can never violate citizen_reports.sector_id's FK).
 async function hydrateRealCitizenSectors() {
   const client = getAuthClient();
-  const municipality_id = readSupabaseConfig()?.municipality_id;
+  const municipality_id = sessionMunicipalityId();
   if (!client || !municipality_id) return;
   const result = await fetchRealSectors(client, municipality_id);
   if (!result.ok || !result.sectors.length) return;
@@ -4054,4 +4084,4 @@ async function bootstrapRealBackend(ctx) {
 // SW-030: hydrateCostParameters() is the same "must work with no session at all" shape —
 // currentMunicipalityId() falls back to the deployment's static config or the bundled demo
 // municipality when there's no signed-in municipal session.
-initAuthGate().then((ctx) => { if (ctx) bootstrapRealBackend(ctx); hydrateRealCitizenSectors(); hydrateCostParameters(); hydrateMunicipalityProfile(); hydrateInspectionSettings(); hydrateDefectsBoard(); setInterval(hydrateDefectsBoard, 60000); hydrateWasteBoard(); setInterval(hydrateWasteBoard, 60000); hydrateSaibotIntegration(); hydrateDisposals(); setInterval(hydrateDisposals, 60000); hydrateLicense(); hydrateMasterRealMunicipalities(); });
+initAuthGate().then((ctx) => { if (ctx) bootstrapRealBackend(ctx); hydrateRealCitizenSectors(); hydrateCostParameters(); hydrateMunicipalityProfile(); hydrateInspectionSettings(); hydrateDefectsBoard(); setInterval(hydrateDefectsBoard, 60000); hydrateWasteBoard(); setInterval(hydrateWasteBoard, 60000); hydrateSaibotIntegration(); hydratePublicLinks(); hydrateDisposals(); setInterval(hydrateDisposals, 60000); hydrateLicense(); hydrateMasterRealMunicipalities(); });

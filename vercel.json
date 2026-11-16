@@ -7,6 +7,10 @@
       "destination": "/en-vivo.html"
     },
     {
+      "source": "/en-vivo/:slug",
+      "destination": "/en-vivo.html"
+    },
+    {
       "source": "/privacidad",
       "destination": "/privacidad.html"
     },

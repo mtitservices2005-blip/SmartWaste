@@ -4,6 +4,7 @@ import { pollLiveFleet } from '../shared/live-fleet-poll.js';
 import { normalizeRouteSchedule, buildWeekCalendar, describeNextDeparture } from '../shared/route-calendar.js';
 import { renderLiveHeader, renderCitizenHead, renderRouteCalendar, renderNextDeparture, renderLiveEmpty, renderLiveError, renderLiveNoMunicipality, renderLiveMarker, LIVE_ICONS } from './components/live-map.js';
 import { createLiveControls } from './live-controls.js';
+import { slugFromLocation } from '../shared/public-links.js';
 
 const ICON_KEY = 'smartwaste-live-icon';
 const FOCUS_ZOOM = 16;
@@ -233,8 +234,7 @@ async function loadLeafletFromCdn() {
 if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   const root = document.getElementById('liveRoot');
   if (root) {
-    const params = new URLSearchParams(window.location.search);
-    const slug = params.get('m') ?? '';
+    const slug = slugFromLocation(window.location); // /en-vivo/<slug> o ?m=<slug>
     const cfg = window.SMARTWASTE_SUPABASE_CONFIG;
     // Sin ?m= se usa el municipio del despliegue (SW-100): así /en-vivo y el Portal ciudadano funcionan sin slug.
     const municipalityId = slug ? '' : (cfg?.municipality_id ?? '');
