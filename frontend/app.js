@@ -50,6 +50,7 @@ import { DISPOSAL_UI, normalizeWasteSettings, isEnabled as wasteDisposalEnabled,
 import { renderDisposalSettings, renderDisposalBoard } from './components/disposal-screens.js';
 import { formatKg as formatDisposalKg } from '../shared/waste-disposal.js';
 import { createDriverTelemetrySession, createPersistentTelemetryQueue } from '../shared/driver-app-telemetry.js';
+import { createOfflineAssignmentAdapter } from '../shared/driver-offline-net.js';
 import { parseFuelGallons, buildFuelEntry } from '../shared/fuel-entry.js';
 import { connectionStatusText } from '../shared/driver-app-status.js';
 import { createDriverBackgroundBridge, getOrCreateDriverDeviceId } from '../shared/driver-app-background.js';
@@ -223,6 +224,7 @@ let driverGpsWatchId = null;
 let driverController = null; // SW-098: controlador de la app del conductor (recibe la posición del GPS nativo)
 let driverBackgroundBridge = null;
 let driverTelemetrySession = null;
+let driverOfflineAssignment = null; // SW-095: camión y corrida de la ruta abierta; el GPS los usa si no hay red
 let driverOnlineHandler = null;
 let driverOfflineHandler = null;
 // SW-030: which municipality's cost parameters the current session should read/write — the signed-
@@ -1456,7 +1458,7 @@ async function startDriverGps() {
       profileId: driverAuthContext.user_id,
       municipalityId: driverAuthContext.municipality_id,
       deviceId,
-      operationsAdapter: realAdapter,
+      operationsAdapter: createOfflineAssignmentAdapter(realAdapter, { getCached: () => driverOfflineAssignment, isOnline: () => navigator.onLine !== false }),
       ingestionAdapter: telemetry,
       batchAdapter: realAdapter, // SW-083: lotes a ingest_positions
       queue
@@ -3994,7 +3996,8 @@ async function startDriverExperience(ctx) {
   const logout = async () => { try { await client.auth.signOut(); } finally { window.location.reload(); } };
   driverController = await mountDriverApp({
     root, client, ctx, adapter: realAdapter,
-    gps: { start: () => startDriverGps(), stop: (opts) => stopDriverGps(opts) },
+    gps: { start: (assignment) => { if (assignment) driverOfflineAssignment = assignment; return startDriverGps(); }, stop: (opts) => stopDriverGps(opts) },
+    storage: localStorage, gpsFlush: async () => { await driverTelemetrySession?.reconnect(); },
     toast: showToast, logout,
     disclosure: createLocationDisclosure(),
     update: createAppUpdater(),

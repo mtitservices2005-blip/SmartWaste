@@ -111,3 +111,10 @@ body.sw-driver-mode #driverApp { display: block; }
 .sw-insp__note { min-height: 72px; padding: var(--space-3); resize: none; font-size: 1rem; }
 .sw-driver__cta[disabled] { opacity: .5; cursor: default; }
 .sw-insp__b:focus-visible, .sw-insp__all:focus-visible, .sw-insp__sev button:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 2px; }
+
+/* SW-095: modo sin conexión */
+.sw-driver__offline { margin: 0 0 var(--space-3); padding: var(--space-2) var(--space-3); border: 1px solid var(--color-warning); border-radius: var(--radius-2); color: var(--color-warning); background: var(--color-surface); font-weight: 600; font-size: var(--font-size-1); }
+.sw-driver__queue { margin: 0 0 var(--space-3); }
+.sw-driver__failed { list-style: none; margin: 0 0 var(--space-3); padding: 0; display: grid; gap: var(--space-2); }
+.sw-driver__failed li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); border: 1px solid var(--color-danger); border-radius: var(--radius-2); background: var(--color-surface); color: var(--color-text); font-size: var(--font-size-1); }
+.sw-driver__failed li span { flex: 1 1 100%; }

@@ -18,18 +18,28 @@ function routeCard(r) {
   return `<li class="${cls}"><div class="sw-driver__route-top"><h3>${e(r.routeName)}</h3>${time}</div><p class="sw-driver__meta">${meta.map(e).join(' · ')}</p>${action}</li>`;
 }
 
+// SW-095: franja "Sin conexión", chip de pendientes y acciones que el servidor rechazó (con Reintentar/Descartar).
+function offlineBlock({ offline = false, savedAtText = '', pendingCount = 0, failedActions = [] } = {}) {
+  const parts = [];
+  if (offline) parts.push(`<p class="sw-driver__offline" role="status">Sin conexión${savedAtText ? ` · datos de las ${e(savedAtText)}` : ''}</p>`);
+  if (pendingCount > 0) parts.push(`<p class="sw-driver__queue"><span class="sw-driver__chip" data-driver-field="queue" role="status">${Number(pendingCount)} ${Number(pendingCount) === 1 ? 'pendiente' : 'pendientes'} de enviar</span></p>`);
+  if (failedActions.length) parts.push(`<ul class="sw-driver__failed">${failedActions.map((f) => `<li role="alert"><span>${e(f.text)}</span><button type="button" class="sw-driver__link" data-driver-retry-action="${e(f.id)}">Reintentar</button><button type="button" class="sw-driver__link" data-driver-discard-action="${e(f.id)}">Descartar</button></li>`).join('')}</ul>`);
+  return parts.join('');
+}
+
 // SW-108: aviso de nueva versión (solo en Hoy, nunca durante una ruta). "Actualizar" abre la descarga del APK.
 export function renderUpdateBanner({ versionName = '', notes = '' } = {}) {
   const note = notes ? `<span class="sw-driver__update-note">${e(notes)}</span>` : '';
   return `<div class="sw-driver__update" role="status"><strong>Hay una versión nueva (${e(versionName)})</strong>${note}<div class="sw-driver__update-actions"><button type="button" class="sw-driver__cta sw-driver__cta--ghost" data-driver-update-dismiss>Después</button><button type="button" class="sw-driver__cta" data-driver-update-open>Actualizar</button></div></div>`;
 }
 
-export function renderDriverToday({ name = '', dateText = '', unit = null, gpsActive = false, routes = [], update = null } = {}) {
+export function renderDriverToday({ name = '', dateText = '', unit = null, gpsActive = false, routes = [], update = null, offline = false, savedAtText = '', pendingCount = 0, failedActions = [] } = {}) {
   const list = routes.length
     ? `<ul class="sw-driver__routes">${routes.map(routeCard).join('')}</ul>`
     : '<div class="sw-driver__empty"><p><strong>No tienes rutas asignadas para hoy.</strong></p><p>Cuando la central te asigne una, aparecerá aquí.</p></div>';
   return `<section class="sw-driver sw-driver--today" aria-label="Rutas de hoy">
     ${update ? renderUpdateBanner(update) : ''}
+    ${offlineBlock({ offline, savedAtText, pendingCount, failedActions })}
     <header class="sw-driver__head"><div><p class="sw-driver__date">${e(dateText)} · Camión ${e(unit ?? '—')}</p><h1>Hola, ${e(name)}</h1></div><span class="sw-driver__chip${gpsActive ? ' sw-driver__chip--on' : ''}" role="status">${gpsActive ? 'GPS activo' : 'GPS inactivo'}</span></header>
     <h2 class="sw-driver__label">Rutas de hoy · ${routes.length}</h2>
     ${list}
@@ -38,7 +48,7 @@ export function renderDriverToday({ name = '', dateText = '', unit = null, gpsAc
   </section>`;
 }
 
-export function renderDriverRun({ unit = null, connected = false, routeName = '', progressText = '—', nextStopLabel = null, nextStopDistance = '—', timeText = '—', distanceText = '—', pendingText = '—' } = {}) {
+export function renderDriverRun({ unit = null, connected = false, routeName = '', progressText = '—', nextStopLabel = null, nextStopDistance = '—', timeText = '—', distanceText = '—', pendingText = '—', offline = false, savedAtText = '', pendingCount = 0, failedActions = [] } = {}) {
   const stat = (label, value, field) => `<div class="sw-driver__stat"><span>${e(label)}</span><strong data-driver-field="${field}">${e(value)}</strong></div>`;
   return `<section class="sw-driver sw-driver--run" aria-label="Ruta en curso">
     <div id="driverRunMap" class="sw-driver__map" role="application" aria-label="Mapa de la ruta en curso"></div>
@@ -46,6 +56,7 @@ export function renderDriverRun({ unit = null, connected = false, routeName = ''
     <button type="button" class="sw-driver__recenter" data-driver-recenter hidden aria-label="Centrar el mapa en mi posición">Centrar en mí</button>
     <div class="sw-driver__sheet">
       <div class="sw-driver__grab" aria-hidden="true"></div>
+      ${offlineBlock({ offline, savedAtText, pendingCount, failedActions })}
       <div class="sw-driver__sheet-top"><h2>${e(routeName)}</h2><span data-driver-field="progress">${e(progressText)}</span></div>
       <div class="sw-driver__next"><div><span>Siguiente parada</span><strong data-driver-field="next-label">${e(nextStopLabel ?? 'Sin paradas pendientes')}</strong></div><span class="sw-driver__dist" data-driver-field="next-distance">${e(nextStopDistance)}</span></div>
       <div class="sw-driver__stats">${stat('Tiempo', timeText, 'time')}${stat('Distancia', distanceText, 'distance')}${stat('Pendientes', pendingText, 'pending')}</div>
@@ -54,12 +65,13 @@ export function renderDriverRun({ unit = null, connected = false, routeName = ''
   </section>`;
 }
 
-export function renderDriverFinish({ routeName = '', timeText = '—', distanceText = '—', stopsText = '—', errorMessage = '', fuelValue = '' } = {}) {
+export function renderDriverFinish({ routeName = '', timeText = '—', distanceText = '—', stopsText = '—', errorMessage = '', fuelValue = '', offline = false, savedAtText = '', pendingCount = 0, failedActions = [] } = {}) {
   const stat = (label, value) => `<div class="sw-driver__stat"><span>${e(label)}</span><strong>${e(value)}</strong></div>`;
   const err = errorMessage ? `<p class="sw-driver__error" role="alert">${e(errorMessage)}</p>` : '<p class="sw-driver__error" role="alert"></p>';
   return `<section class="sw-driver sw-driver--finish" aria-label="Terminar ruta">
     <div class="sw-driver__sheet sw-driver__sheet--full">
       <div class="sw-driver__grab" aria-hidden="true"></div>
+      ${offlineBlock({ offline, savedAtText, pendingCount, failedActions })}
       <h2>Terminar ${e(routeName)}</h2>
       <p class="sw-driver__sub">Revisa el resumen y anota el combustible.</p>
       <div class="sw-driver__stats">${stat('Tiempo', timeText)}${stat('Distancia', distanceText)}${stat('Paradas', stopsText)}</div>
