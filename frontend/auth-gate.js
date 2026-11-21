@@ -19,6 +19,7 @@ import { renderDriverAccess } from './components/driver-screens.js';
 import { decideDriverAccess, DRIVER_ACCESS_DENIED_MESSAGE } from '../shared/driver-access.js';
 import { findDriverRow } from '../shared/driver-data.js';
 import { DRIVER_REDIRECT_URL, extractAuthCode, needsOwnPassword } from '../shared/driver-oauth.js';
+import { createDriverAccessStore, decideOfflineAccess, OFFLINE_ACCESS_MAX_DAYS } from '../shared/driver-offline-access.js';
 
 // Which top-level <section id="..."> each role may see, per docs/ROLE_PERMISSION_MATRIX.md.
 // `null` means the section is public: always shown, logged in or not (the citizen portal is
@@ -224,21 +225,39 @@ export async function initAuthGate() {
   const client = createClient(config.url, config.anonKey, driverApp ? driverAuthOptions() : undefined);
   authClient = client;
   const identity = createIdentityProvider(client);
+  // SW-133: en el APK del conductor se recuerda quién entró (sin contraseña ni tokens) para poder abrir sin internet.
+  const accessStore = driverApp ? createDriverAccessStore({ storage: globalThis.localStorage }) : null;
+  if (accessStore) client.auth.onAuthStateChange((event) => { if (event === 'SIGNED_OUT') accessStore.clear(); });
 
   applySectionVisibility([]);
   applyOpsViewVisibility([]);
 
+  // SW-133: el último intento falló por falta de conexión (no porque el servidor negó el acceso).
+  let lastResolveConnectivity = false;
   async function resolveAuthenticatedUser() {
+    lastResolveConnectivity = false;
     try {
       const [ctx, userResult] = await Promise.all([identity.resolveContext(), client.auth.getUser()]);
-      if (userResult.error || !userResult.data?.user) return null;
+      if (userResult.error || !userResult.data?.user) { lastResolveConnectivity = isConnectivityError(userResult.error); return null; }
       return { ctx, user: userResult.data.user };
-    } catch {
+    } catch (error) {
+      lastResolveConnectivity = isConnectivityError(error);
       return null;
     }
   }
 
-  function grantApplicationAccess(ctx) {
+  // SW-133: sin internet, el conductor que ya había entrado reabre su app con el registro guardado (si es reciente).
+  // Solo en el APK del conductor; el servidor (RLS) sigue decidiendo todo lo que se envíe al volver la señal.
+  async function tryOfflineAccess() {
+    if (!driverApp || !accessStore) return null;
+    const decision = decideOfflineAccess({ stored: await accessStore.load(), now: new Date() });
+    if (decision.allowed) { const ctx = identity.createContext(decision.ctx); grantApplicationAccess(ctx); return ctx; }
+    if (decision.reason === 'vencido') initialError = `Hace más de ${OFFLINE_ACCESS_MAX_DAYS} días que no te conectas. Conéctate a internet para volver a entrar.`;
+    return null;
+  }
+
+  function grantApplicationAccess(ctx, user = null) {
+    if (user) accessStore?.save({ user, ctx }); // SW-133: solo con internet y acceso concedido
     applySectionVisibility(pickVisibleSections(ctx.role));
     applyOpsViewVisibility(pickVisibleOpsViews(ctx.role));
     renderLogoutButton(client);
@@ -262,7 +281,7 @@ export async function initAuthGate() {
         try {
           await setOwnPassword(client, password);
           passwordOverlay.remove();
-          grantApplicationAccess(resolved.ctx);
+          grantApplicationAccess(resolved.ctx, resolved.user);
           resolve(resolved.ctx);
         } catch {
           errorEl.textContent = 'No se pudo actualizar la contraseña. Intenta nuevamente.';
@@ -292,11 +311,15 @@ export async function initAuthGate() {
     const access = await checkDriverAccess(existing);
     if (access.allowed) {
       if (needsOwnPassword(existing.user) || recoveryReturn) return requireOwnPassword(existing);
-      grantApplicationAccess(existing.ctx);
+      grantApplicationAccess(existing.ctx, existing.user);
       return existing.ctx;
     }
+    if (access.connectivity) { const offlineCtx = await tryOfflineAccess(); if (offlineCtx) return offlineCtx; }
     if (!access.connectivity) await client.auth.signOut();
     initialError = access.message ?? DRIVER_ACCESS_DENIED_MESSAGE;
+  } else if (lastResolveConnectivity || globalThis.navigator?.onLine === false) {
+    const offlineCtx = await tryOfflineAccess();
+    if (offlineCtx) return offlineCtx;
   }
 
   // SW-088: regresó de Google pero esa cuenta no tiene membresía: se cierra la sesión y se explica (nunca se crea nada).
@@ -317,7 +340,7 @@ export async function initAuthGate() {
       overlay.remove();
       // D5: quien entra con Google no repite la contraseña temporal; con correo y contraseña sí.
       if (needsOwnPassword(resolved.user)) { resolve(await requireOwnPassword(resolved)); return; }
-      grantApplicationAccess(resolved.ctx);
+      grantApplicationAccess(resolved.ctx, resolved.user);
       resolve(resolved.ctx);
     }
 
