@@ -237,9 +237,14 @@ export async function initAuthGate() {
   async function resolveAuthenticatedUser() {
     lastResolveConnectivity = false;
     try {
-      const [ctx, userResult] = await Promise.all([identity.resolveContext(), client.auth.getUser()]);
+      // allSettled: si el contexto falla, resolveContext() reescribe el error y pierde el estado HTTP (503, red);
+      // por eso se mira primero el resultado directo de getUser().
+      const [ctxResult, userSettled] = await Promise.allSettled([identity.resolveContext(), client.auth.getUser()]);
+      if (userSettled.status === 'rejected') { lastResolveConnectivity = isConnectivityError(userSettled.reason); return null; }
+      const userResult = userSettled.value;
       if (userResult.error || !userResult.data?.user) { lastResolveConnectivity = isConnectivityError(userResult.error); return null; }
-      return { ctx, user: userResult.data.user };
+      if (ctxResult.status === 'rejected') { lastResolveConnectivity = isConnectivityError(ctxResult.reason); return null; }
+      return { ctx: ctxResult.value, user: userResult.data.user };
     } catch (error) {
       lastResolveConnectivity = isConnectivityError(error);
       return null;
