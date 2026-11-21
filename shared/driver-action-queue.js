@@ -17,6 +17,14 @@ export function sanitizeActionTime(at, { now = new Date(), startedAt } = {}) {
   return new Date(t).toISOString();
 }
 
+// "Rejected route transition <desde>-><hasta>": solo es "ya hecho" si la corrida ya está donde la acción la llevaría.
+// Una corrida cancelada (u otro estado) NO cuenta: el trabajo del conductor se avisa como fallido, no se pierde en silencio.
+const APPLIED_FROM = { start: ['started', 'in_progress', 'delayed', 'completed', 'verified'], complete: ['completed', 'verified'] };
+function alreadyApplied(action, error) {
+  const m = /(\w+)->(\w+)/.exec(error?.message ?? '');
+  return Boolean(m && APPLIED_FROM[action.type]?.includes(m[1]));
+}
+
 export function createDriverActionQueue({ storage, key = 'smartwaste.driver-actions.v1', now = () => new Date(), newId = () => globalThis.crypto.randomUUID() } = {}) {
   let items = null;
   let flushPromise = null;
@@ -59,9 +67,14 @@ export function createDriverActionQueue({ storage, key = 'smartwaste.driver-acti
           let gpsDone = false;
           for (const a of mine) {
             if (a.status === 'failed') break; // lo que sigue en esta corrida depende de esta acción
-            if (a.type !== 'start' && !gpsDone) { gpsDone = true; try { await gpsFlush(); } catch { /* el GPS se reintenta solo */ } }
+            if (a.type !== 'start' && !gpsDone) {
+              gpsDone = true;
+              // Sin los puntos GPS en el servidor, terminar fijaría km y puntos incompletos para siempre: se espera.
+              let g; try { g = await gpsFlush(); } catch { g = { ok: false }; }
+              if (g?.ok === false) { summary.stoppedByNetwork = true; return summary; }
+            }
             const result = await attempt(adapter, a, startedAt);
-            if (result.ok || result.error?.code === 'INVALID_ROUTE_TRANSITION') { // ya estaba aplicada = hecho
+            if (result.ok || (result.error?.code === 'INVALID_ROUTE_TRANSITION' && alreadyApplied(a, result.error))) { // ya estaba aplicada = hecho
               items = items.filter((x) => x.id !== a.id); summary.sent += 1; await save(); continue;
             }
             if (isNetworkFailure(result)) { summary.stoppedByNetwork = true; return summary; }

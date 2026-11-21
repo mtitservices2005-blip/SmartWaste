@@ -54,11 +54,33 @@ await q.flush({ adapter: ad });
 assert.equal(ad.calls[1][2].at, iso('2026-10-17T11:00:00Z'));
 
 // ya aplicado en el servidor = hecho (start/complete)
-const invalid = { ok: false, error: { code: 'INVALID_ROUTE_TRANSITION', message: 'ya' } };
-q = mk(); ad = fakeAdapter({ failOn: { start: invalid, complete: invalid } });
+const invalidMsg = (m) => ({ ok: false, error: { code: 'INVALID_ROUTE_TRANSITION', message: `Rejected route transition ${m}` } });
+q = mk(); ad = fakeAdapter({ failOn: { start: invalidMsg('in_progress->started'), complete: invalidMsg('completed->completed') } });
 await q.enqueue(A('start', 'run1')); await q.enqueue(A('complete', 'run1'));
 r = await q.flush({ adapter: ad });
 assert.equal(r.sent, 2); assert.equal(r.failed, 0); assert.equal(await q.pendingCount(), 0);
+
+// cancelada por el despacho mientras estaba sin red: NO es "ya aplicada", queda failed con aviso
+q = mk(); ad = fakeAdapter({ failOn: { start: invalidMsg('cancelled->started') } });
+await q.enqueue(A('start', 'run1')); await q.enqueue(A('complete', 'run1'));
+r = await q.flush({ adapter: ad });
+assert.equal(r.failed, 1); assert.equal(r.sent, 0);
+assert.equal((await q.list()).find((x) => x.status === 'failed').type, 'start');
+q = mk(); ad = fakeAdapter({ failOn: { complete: invalidMsg('cancelled->completed') } });
+await q.enqueue(A('complete', 'run1'));
+r = await q.flush({ adapter: ad }); assert.equal(r.failed, 1, 'completar una corrida cancelada no se da por hecho');
+q = mk(); ad = fakeAdapter({ failOn: { complete: { ok: false, error: { code: 'INVALID_ROUTE_TRANSITION', message: 'sin formato' } } } });
+await q.enqueue(A('complete', 'run1')); r = await q.flush({ adapter: ad }); assert.equal(r.failed, 1, 'mensaje irreconocible: no se asume hecho');
+
+// el GPS pendiente no subió: no se completa la corrida (las métricas saldrían sin sus puntos)
+q = mk(); ad = fakeAdapter();
+await q.enqueue(A('fuel', 'run1', { entry })); await q.enqueue(A('complete', 'run1'));
+r = await q.flush({ adapter: ad, gpsFlush: async () => ({ ok: false }) });
+assert.equal(r.stoppedByNetwork, true); assert.equal(ad.calls.length, 0); assert.equal(await q.pendingCount(), 2);
+r = await q.flush({ adapter: ad, gpsFlush: async () => { throw new Error('x'); } });
+assert.equal(ad.calls.length, 0, 'si el GPS lanza, tampoco se completa');
+r = await q.flush({ adapter: ad, gpsFlush: async () => ({ ok: true }) });
+assert.equal(r.sent, 2);
 
 // combustible ya guardado (corte a mitad): no se duplica
 const rows = [{ route_run_id: 'run1', vehicle_id: 'v1', liters: 20.82 }];
