@@ -49,7 +49,8 @@ import { liveMapUrl, fetchMunicipalityPublicInfo } from '../shared/public-links.
 import { DISPOSAL_UI, normalizeWasteSettings, isEnabled as wasteDisposalEnabled, summarizeDisposals, fetchWasteSettings, saveWasteSettings, fetchDisposalBoard, saveDisposalSite, recordDisposal, voidDisposal } from '../shared/waste-disposal.js';
 import { renderDisposalSettings, renderDisposalBoard } from './components/disposal-screens.js';
 import { formatKg as formatDisposalKg } from '../shared/waste-disposal.js';
-import { createDriverTelemetrySession, createPersistentTelemetryQueue } from '../shared/driver-app-telemetry.js';
+import { createDriverTelemetrySession, createPersistentTelemetryQueue, flushInBatches } from '../shared/driver-app-telemetry.js';
+import { createOfflineAssignmentAdapter } from '../shared/driver-offline-net.js';
 import { parseFuelGallons, buildFuelEntry } from '../shared/fuel-entry.js';
 import { connectionStatusText } from '../shared/driver-app-status.js';
 import { createDriverBackgroundBridge, getOrCreateDriverDeviceId } from '../shared/driver-app-background.js';
@@ -223,6 +224,7 @@ let driverGpsWatchId = null;
 let driverController = null; // SW-098: controlador de la app del conductor (recibe la posición del GPS nativo)
 let driverBackgroundBridge = null;
 let driverTelemetrySession = null;
+let driverOfflineAssignment = null; // SW-095: camión y corrida de la ruta abierta; el GPS los usa si no hay red
 let driverOnlineHandler = null;
 let driverOfflineHandler = null;
 // SW-030: which municipality's cost parameters the current session should read/write — the signed-
@@ -1456,7 +1458,7 @@ async function startDriverGps() {
       profileId: driverAuthContext.user_id,
       municipalityId: driverAuthContext.municipality_id,
       deviceId,
-      operationsAdapter: realAdapter,
+      operationsAdapter: createOfflineAssignmentAdapter(realAdapter, { getCached: () => driverOfflineAssignment, isOnline: () => navigator.onLine !== false }),
       ingestionAdapter: telemetry,
       batchAdapter: realAdapter, // SW-083: lotes a ingest_positions
       queue
@@ -3986,6 +3988,15 @@ function createAppUpdater() {
     open: async (url) => { if (typeof plugins.Browser?.open === 'function') await plugins.Browser.open({ url }); else window.open(url, '_blank', 'noopener'); }
   };
 }
+// SW-095: sube los puntos GPS guardados aunque la sesión de GPS ya se haya cerrado (se terminó la ruta sin red).
+// {ok:false} = quedaron puntos sin subir; la cola de acciones no completa la corrida hasta que suban.
+async function flushDriverTelemetry() {
+  if (driverTelemetrySession) { const r = await driverTelemetrySession.reconnect(); return { ok: r?.ok !== false }; }
+  if (!realAdapter) return { ok: true };
+  const queue = createPersistentTelemetryQueue({ storage: localStorage });
+  const { failed } = await flushInBatches({ queue, send: (batch) => realAdapter.ingestPositions(batch) });
+  return { ok: failed === 0 };
+}
 async function startDriverExperience(ctx) {
   document.body.classList.add('sw-driver-mode');
   let root = document.getElementById('driverApp');
@@ -3994,7 +4005,8 @@ async function startDriverExperience(ctx) {
   const logout = async () => { try { await client.auth.signOut(); } finally { window.location.reload(); } };
   driverController = await mountDriverApp({
     root, client, ctx, adapter: realAdapter,
-    gps: { start: () => startDriverGps(), stop: (opts) => stopDriverGps(opts) },
+    gps: { start: (assignment) => { if (assignment) driverOfflineAssignment = assignment; return startDriverGps(); }, stop: (opts) => stopDriverGps(opts) },
+    storage: localStorage, gpsFlush: flushDriverTelemetry,
     toast: showToast, logout,
     disclosure: createLocationDisclosure(),
     update: createAppUpdater(),

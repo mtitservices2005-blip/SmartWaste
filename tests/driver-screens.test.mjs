@@ -91,3 +91,22 @@ assert.match(acc, /aria-label|<label/, 'campos con etiqueta');
 const runHtml = renderDriverRun({ unit: 'C-01', routeName: 'Centro' });
 assert.match(runHtml, /<button[^>]*data-driver-recenter[^>]*hidden[^>]*>Centrar en mí<\/button>/);
 console.log('driver-screens ok');
+
+// SW-095: estado sin conexión, pendientes y acciones fallidas (en Hoy, En ruta y Terminar).
+{
+  const failedActions = [{ id: 'a1', text: 'No se pudo enviar "<b>x</b>": permiso denegado' }];
+  for (const html of [
+    renderDriverToday({ name: 'Ana', dateText: 'x', routes: [], offline: true, savedAtText: '7:42 a. m.', pendingCount: 3, failedActions }),
+    renderDriverRun({ routeName: 'R', offline: true, savedAtText: '7:42 a. m.', pendingCount: 3, failedActions }),
+    renderDriverFinish({ routeName: 'R', offline: true, savedAtText: '7:42 a. m.', pendingCount: 3, failedActions })
+  ]) {
+    assert.ok(html.includes('Sin conexión · datos de las 7:42 a. m.'));
+    assert.ok(html.includes('3 pendientes de enviar'));
+    assert.ok(html.includes('&lt;b&gt;x&lt;/b&gt;') && !html.includes('<b>x</b>'), 'texto escapado');
+    assert.ok(html.includes('data-driver-retry-action="a1"') && html.includes('data-driver-discard-action="a1"'));
+  }
+  assert.ok(renderDriverToday({ routes: [], pendingCount: 1 }).includes('1 pendiente de enviar'));
+  assert.ok(renderDriverToday({ routes: [], offline: true }).includes('Sin conexión</p>'));
+  const clean = renderDriverToday({ name: 'Ana', routes: [] });
+  assert.ok(!clean.includes('Sin conexión') && !clean.includes('pendiente') && !clean.includes('data-driver-field="queue"'));
+}

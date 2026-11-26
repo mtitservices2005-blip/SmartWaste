@@ -9,11 +9,16 @@ import { createLiveMarker } from '../shared/driver-live-marker.js';
 import { parseFuelGallons, buildFuelEntry } from '../shared/fuel-entry.js';
 import { renderDriverInspection, renderDriverInspectionBlocked } from './components/driver-inspection-screen.js';
 import { INSPECTION_GROUPS, INSPECTION_ITEMS, summarizeInspection, needsInspection } from '../shared/inspection.js';
+import { isNetworkFailure } from '../shared/driver-offline-net.js';
+import { createDriverCache } from '../shared/driver-offline-cache.js';
+import { createDriverActionQueue } from '../shared/driver-action-queue.js';
 
 const firstName = (full) => String(full ?? '').trim().split(/\s+/)[0] ?? '';
 
-export function createDriverController({ load, adapter, gps, municipalityId, userId, toast = () => {}, draw, now = () => new Date(), logout = async () => {}, disclosure = { isAccepted: () => true, accept: () => {}, privacyUrl: '' }, update = { check: async () => null, dismiss: () => {}, open: async () => {} }, inspection = null }) {
-  const state = { screen: 'today', data: null, error: '', runId: null, startedAt: {}, visited: {}, position: null, finishError: '', fuelValue: '', fuelSaved: {}, busy: false, pendingDisclosure: null, update: null, insp: null };
+export function createDriverController({ load, adapter, gps, municipalityId, userId, toast = () => {}, draw, now = () => new Date(), logout = async () => {}, disclosure = { isAccepted: () => true, accept: () => {}, privacyUrl: '' }, update = { check: async () => null, dismiss: () => {}, open: async () => {} }, inspection = null,
+  // SW-095: modo sin internet. Sin queue/cache el controlador se comporta exactamente como antes.
+  queue = null, cache = null, isOnline = () => globalThis.navigator?.onLine !== false, gpsFlush = async () => {} }) {
+  const state = { screen: 'today', data: null, error: '', runId: null, startedAt: {}, visited: {}, position: null, finishError: '', fuelValue: '', fuelSaved: {}, busy: false, pendingDisclosure: null, update: null, insp: null, offline: false, savedAt: null, pendingActions: 0, failedActions: [] };
   const c = { state, onField: null, onPosition: null };
 
   const runs = () => state.data?.runs ?? [];
@@ -30,6 +35,37 @@ export function createDriverController({ load, adapter, gps, municipalityId, use
     };
   }
 
+  // ---- SW-095: sin internet ----
+  const ACTION_TEXT = { start: 'iniciar la ruta', fuel: 'guardar el combustible', complete: 'terminar la ruta' };
+  const timeText = (iso) => { const t = Date.parse(iso); return Number.isFinite(t) ? new Intl.DateTimeFormat('es-DO', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Santo_Domingo' }).format(t) : ''; };
+  async function refreshPending() {
+    if (!queue) return [];
+    const items = await queue.list();
+    state.pendingActions = items.length;
+    state.failedActions = items.filter((a) => a.status === 'failed').map((a) => ({ id: a.id, text: `No se pudo enviar "${(state.data?.runs ?? []).find((r) => r.id === a.runId)?.routeName ?? 'la ruta'}" (${ACTION_TEXT[a.type]}): ${a.error ?? 'error desconocido'}` }));
+    return items;
+  }
+  // Lo hecho sin internet manda sobre lo que diga la copia o el servidor (aún sin enterarse).
+  function applyQueued(runsList, items) {
+    return runsList.flatMap((run) => {
+      const mine = items.filter((a) => a.runId === run.id);
+      if (!mine.length) return [run];
+      if (mine.some((a) => a.type === 'complete')) return [];
+      const started = mine.find((a) => a.type === 'start');
+      return [started ? { ...run, status: 'started', startedAt: run.startedAt ?? started.at } : run];
+    });
+  }
+  const flushQueue = async () => { if (!queue) return { sent: 0, failed: 0, stoppedByNetwork: false }; const r = await queue.flush({ adapter, gpsFlush, isOnline }); await refreshPending(); return r; };
+  c.syncQueue = async () => {
+    if (!queue) return;
+    const before = `${state.pendingActions}/${state.failedActions.length}`;
+    const r = await flushQueue();
+    if (r.sent) await c.refresh(); else if (before !== `${state.pendingActions}/${state.failedActions.length}`) render();
+  };
+  const assignmentOf = (run) => (run ? { vehicle_id: run.vehicleId, route_run_id: run.id, route_id: run.routeId } : undefined); // SW-095: el GPS lo usa si no hay red
+  const queuedFor = async (runId) => (queue ? (await queue.list()).some((a) => a.runId === runId) : false);
+  const offlineView = () => ({ offline: state.offline, savedAtText: state.savedAt ? timeText(state.savedAt) : '', pendingCount: state.pendingActions, failedActions: state.failedActions });
+
   function render() {
     if (state.error) { draw('error', renderDriverLoadError({ message: state.error })); return; }
     if (state.screen === 'disclosure') { draw('disclosure', renderDriverDisclosure({ privacyUrl: disclosure.privacyUrl ?? '' })); return; }
@@ -44,9 +80,9 @@ export function createDriverController({ load, adapter, gps, municipalityId, use
       if (run) {
         const v = runView(run);
         if (state.screen === 'run') {
-          draw('run', renderDriverRun({ unit: state.data.unit, connected: globalThis.navigator?.onLine !== false, routeName: run.routeName, progressText: v.info.progressText, nextStopLabel: v.info.label, nextStopDistance: v.info.distanceText, timeText: v.timeText, distanceText: v.distanceText, pendingText: v.info.total ? String(v.info.pending) : '—' }));
+          draw('run', renderDriverRun({ unit: state.data.unit, connected: globalThis.navigator?.onLine !== false, routeName: run.routeName, progressText: v.info.progressText, nextStopLabel: v.info.label, nextStopDistance: v.info.distanceText, timeText: v.timeText, distanceText: v.distanceText, pendingText: v.info.total ? String(v.info.pending) : '—', ...offlineView() }));
         } else {
-          draw('finish', renderDriverFinish({ routeName: run.routeName, timeText: v.timeText, distanceText: v.distanceText, stopsText: v.info.total ? `${v.info.done}/${v.info.total}` : '—', errorMessage: state.finishError, fuelValue: state.fuelValue }));
+          draw('finish', renderDriverFinish({ routeName: run.routeName, timeText: v.timeText, distanceText: v.distanceText, stopsText: v.info.total ? `${v.info.done}/${v.info.total}` : '—', errorMessage: state.finishError, fuelValue: state.fuelValue, ...offlineView() }));
         }
         return;
       }
@@ -55,14 +91,23 @@ export function createDriverController({ load, adapter, gps, municipalityId, use
     const today = selectTodayRoutes(runs(), { now: now() });
     draw('today', renderDriverToday({
       name: firstName(state.data?.driver?.display_name), dateText: formatTodayText(now()), unit: state.data?.unit ?? null, gpsActive: Boolean(gps.isActive?.()),
-      update: gps.isActive?.() ? null : state.update,
+      update: gps.isActive?.() ? null : state.update, ...offlineView(),
       routes: today.items.map((r) => ({ id: r.id, routeName: r.routeName, stopsCount: r.stopsCount, distanceText: r.distanceText, estimatedMinutes: r.estimatedMinutes, slot: r.slot, startLabel: r.startLabel }))
     }));
   }
 
   c.refresh = async () => {
-    const res = await load();
+    if (queue && isOnline()) await flushQueue();
+    let res = await load();
+    if (cache && !res.ok && isNetworkFailure(res, { online: isOnline() })) {
+      const copy = await cache.load(userId);
+      if (copy) { res = { ok: true, ...copy.snapshot }; state.offline = true; state.savedAt = copy.savedAt; }
+    } else if (res.ok) {
+      state.offline = false; state.savedAt = null;
+      if (cache) await cache.save(userId, { driver: res.driver, unit: res.unit, runs: res.runs });
+    }
     if (!res.ok) { state.error = res.message ?? 'Error desconocido.'; render(); return; }
+    if (queue) { const items = await refreshPending(); res = { ...res, runs: applyQueued(res.runs ?? [], items) }; }
     state.error = '';
     state.data = res;
     if (state.screen === 'today') {
@@ -70,7 +115,7 @@ export function createDriverController({ load, adapter, gps, municipalityId, use
       if (activeId) {
         state.runId = activeId;
         if (!disclosure.isAccepted()) { state.pendingDisclosure = { type: 'resume' }; state.screen = 'disclosure'; render(); return; }
-        state.screen = 'run'; await gps.start();
+        state.screen = 'run'; await gps.start(assignmentOf(runs().find((r) => r.id === activeId)));
       }
     }
     render();
@@ -107,7 +152,8 @@ export function createDriverController({ load, adapter, gps, municipalityId, use
   // SW-123: ¿hay que pedir el chequeo antes de iniciar? Si no se puede saber, no se bloquea la ruta.
   async function gate(run) {
     if (!inspection || !run.vehicleId) return null;
-    const cfg = await inspection.load(run.vehicleId);
+    let cfg;
+    try { cfg = await inspection.load(run.vehicleId); } catch { return null; } // SW-095: sin internet no se puede saber; no bloquea la ruta
     if (!cfg?.ok) return null;
     if (!needsInspection({ settings: cfg.settings, inspections: cfg.inspections, vehicleId: run.vehicleId, driverId: state.data?.driver?.id ?? null, now: now() })) return null;
     return cfg;
@@ -116,11 +162,24 @@ export function createDriverController({ load, adapter, gps, municipalityId, use
   async function begin(run) {
     state.busy = true;
     try {
-      const res = await adapter.startRoute(run.routeId);
-      if (!res?.ok) { toast(`No se pudo iniciar "${run.routeName}": ${res?.error?.message ?? 'error desconocido'}`, { type: 'error' }); return; }
-      state.startedAt[run.id] = res.data?.started_at ?? now().toISOString();
-      await gps.start();
-      state.runId = run.id; state.screen = 'run'; state.finishError = ''; state.fuelValue = ''; state.insp = null;
+      let startedAt;
+      // SW-095: sin internet (o con envíos pendientes de esta corrida) se inicia en el teléfono y se encola.
+      let local = Boolean(queue) && (!isOnline() || await queuedFor(run.id));
+      if (!local) {
+        const res = await adapter.startRoute(run.routeId, queue ? { runId: run.id } : undefined);
+        if (res?.ok) startedAt = res.data?.started_at ?? now().toISOString();
+        else if (queue && isNetworkFailure(res, { online: isOnline() })) local = true;
+        else { toast(`No se pudo iniciar "${run.routeName}": ${res?.error?.message ?? 'error desconocido'}`, { type: 'error' }); return; }
+      }
+      if (local) {
+        startedAt = now().toISOString();
+        await queue.enqueue({ type: 'start', runId: run.id, routeId: run.routeId, at: startedAt });
+        await refreshPending();
+      }
+      state.startedAt[run.id] = startedAt;
+      state.runId = run.id;
+      await gps.start(assignmentOf(run));
+      state.screen = 'run'; state.finishError = ''; state.fuelValue = ''; state.insp = null;
       render();
       await c.refresh();
     } finally { state.busy = false; }
@@ -178,6 +237,20 @@ export function createDriverController({ load, adapter, gps, municipalityId, use
     return render();
   }
 
+  // SW-095: terminar en el teléfono (sin internet o con envíos de esta corrida pendientes): combustible y cierre a la cola.
+  async function finishQueued(run, fuel) {
+    if (fuel.liters != null && !state.fuelSaved[run.id]) {
+      const entry = buildFuelEntry({ liters: fuel.liters, assignment: { vehicle_id: run.vehicleId, route_run_id: run.id }, municipalityId });
+      if (entry) { await queue.enqueue({ type: 'fuel', runId: run.id, routeId: run.routeId, at: now().toISOString(), entry }); state.fuelSaved[run.id] = true; }
+    }
+    await gps.stop({ flush: true });
+    await queue.enqueue({ type: 'complete', runId: run.id, routeId: run.routeId, at: now().toISOString() });
+    toast(`Ruta "${run.routeName}" terminada.${isOnline() ? '' : ' Se enviará cuando haya internet.'}`);
+    state.screen = 'today'; state.runId = null; state.finishError = ''; state.fuelValue = '';
+    await refreshPending();
+    await c.refresh();
+  }
+
   async function finish(text) {
     const run = currentRun();
     if (!run || state.busy) return;
@@ -186,22 +259,29 @@ export function createDriverController({ load, adapter, gps, municipalityId, use
     if (!fuel.ok) { state.finishError = fuel.message; render(); return; }
     state.busy = true;
     try {
+      if (queue && (!isOnline() || await queuedFor(run.id))) return await finishQueued(run, fuel);
       if (fuel.liters != null && !state.fuelSaved[run.id]) {
         const assignment = await adapter.findOwnVehicleAssignment(userId);
         const entry = buildFuelEntry({ liters: fuel.liters, assignment: assignment?.data, municipalityId });
+        if (queue && !assignment?.ok && isNetworkFailure(assignment, { online: isOnline() })) return await finishQueued(run, fuel);
         if (entry) {
           const saved = await adapter.logFuel(entry);
           if (saved?.ok) state.fuelSaved[run.id] = true;
+          else if (queue && isNetworkFailure(saved, { online: isOnline() })) return await finishQueued(run, fuel);
           else toast(`No se pudo guardar el combustible: ${saved?.error?.message ?? 'error desconocido'}. Avisa a tu supervisor.`, { type: 'error' });
         }
       }
       await gps.stop({ flush: true });
-      const done = await adapter.completeRoute(run.routeId);
-      if (!done?.ok) { state.finishError = `No se pudo terminar la ruta: ${done?.error?.message ?? 'error desconocido'}. Inténtalo de nuevo.`; render(); return; }
+      const done = await adapter.completeRoute(run.routeId, queue ? { runId: run.id } : undefined);
+      if (!done?.ok) {
+        if (queue && isNetworkFailure(done, { online: isOnline() })) { await queue.enqueue({ type: 'complete', runId: run.id, routeId: run.routeId, at: now().toISOString() }); toast(`Ruta "${run.routeName}" terminada. Se enviará cuando haya internet.`); state.screen = 'today'; state.runId = null; state.finishError = ''; state.fuelValue = ''; await refreshPending(); await c.refresh(); return undefined; }
+        state.finishError = `No se pudo terminar la ruta: ${done?.error?.message ?? 'error desconocido'}. Inténtalo de nuevo.`; render(); return undefined;
+      }
       toast(`Ruta "${run.routeName}" terminada.`);
       state.screen = 'today'; state.runId = null; state.finishError = ''; state.fuelValue = '';
       await c.refresh();
     } finally { state.busy = false; }
+    return undefined;
   }
 
   c.action = async (name, payload) => {
@@ -212,7 +292,7 @@ export function createDriverController({ load, adapter, gps, municipalityId, use
       const pending = state.pendingDisclosure; state.pendingDisclosure = null;
       disclosure.accept();
       if (pending?.type === 'start') { state.screen = 'today'; return start(pending.id); }
-      if (pending?.type === 'resume') { state.screen = 'run'; await gps.start(); return render(); }
+      if (pending?.type === 'resume') { state.screen = 'run'; await gps.start(assignmentOf(currentRun())); return render(); }
       state.screen = 'today'; return render();
     }
     if (name === 'disclosure-decline') { state.pendingDisclosure = null; state.runId = null; state.screen = 'today'; return render(); }
@@ -222,8 +302,10 @@ export function createDriverController({ load, adapter, gps, municipalityId, use
     if (name === 'finish-save') return finish(payload);
     if (name === 'update-open') { if (state.update?.apkUrl) await update.open(state.update.apkUrl); return undefined; }
     if (name === 'update-dismiss') { if (state.update) update.dismiss(state.update.versionCode); state.update = null; return render(); }
+    if (name === 'retry-action') { await queue?.retry(payload); await refreshPending(); return c.syncQueue(); }
+    if (name === 'discard-action') { await queue?.discard(payload); await refreshPending(); return c.refresh(); }
     if (name === 'retry') return c.refresh();
-    if (name === 'logout') { if (gps.isActive?.()) await gps.stop({ flush: true }); return logout(); }
+    if (name === 'logout') { if (gps.isActive?.()) await gps.stop({ flush: true }); await cache?.clear(); return logout(); }
     return undefined;
   };
 
@@ -232,14 +314,18 @@ export function createDriverController({ load, adapter, gps, municipalityId, use
 }
 
 // ---- Conexión con el navegador / WebView ----
-export async function mountDriverApp({ root, client, ctx, adapter, gps, toast, logout, disclosure, update, inspection, win = globalThis.window, nav = globalThis.navigator }) {
+export async function mountDriverApp({ root, client, ctx, adapter, gps, toast, logout, disclosure, update, inspection, storage = null, gpsFlush = async () => {}, win = globalThis.window, nav = globalThis.navigator }) {
   const userResult = await client.auth.getUser();
   const email = userResult?.data?.user?.email ?? '';
   let map = null; let live = null;
+  // SW-095: copia local de Hoy y cola de acciones (iniciar, combustible, terminar) para trabajar sin internet.
+  const cache = storage ? createDriverCache({ storage }) : null;
+  const queue = storage ? createDriverActionQueue({ storage }) : null;
 
   const controller = createDriverController({
     load: () => loadDriverToday(client, { userId: ctx.user_id, municipalityId: ctx.municipality_id, email }),
     adapter, gps, toast, logout, disclosure, update, inspection, municipalityId: ctx.municipality_id, userId: ctx.user_id,
+    queue, cache, gpsFlush, isOnline: () => nav?.onLine !== false,
     draw: (screen, html) => {
       if (map) { map.remove(); map = null; live = null; }
       root.innerHTML = html;
@@ -265,7 +351,7 @@ export async function mountDriverApp({ root, client, ctx, adapter, gps, toast, l
   controller.onPosition = (position) => { live?.update(position); };
 
   root.addEventListener('click', (event) => {
-    const t = event.target.closest?.('[data-driver-start-route],[data-driver-disclosure-accept],[data-driver-disclosure-decline],[data-driver-open-run],[data-driver-finish-open],[data-driver-finish-back],[data-driver-finish-save],[data-driver-retry],[data-driver-logout],[data-driver-recenter],[data-driver-update-open],[data-driver-update-dismiss],[data-driver-inspect-ok],[data-driver-inspect-fail],[data-driver-inspect-group],[data-driver-inspect-sev],[data-driver-inspect-save-fail],[data-driver-inspect-cancel-fail],[data-driver-inspect-submit],[data-driver-inspect-back]');
+    const t = event.target.closest?.('[data-driver-start-route],[data-driver-disclosure-accept],[data-driver-disclosure-decline],[data-driver-open-run],[data-driver-finish-open],[data-driver-finish-back],[data-driver-finish-save],[data-driver-retry],[data-driver-retry-action],[data-driver-discard-action],[data-driver-logout],[data-driver-recenter],[data-driver-update-open],[data-driver-update-dismiss],[data-driver-inspect-ok],[data-driver-inspect-fail],[data-driver-inspect-group],[data-driver-inspect-sev],[data-driver-inspect-save-fail],[data-driver-inspect-cancel-fail],[data-driver-inspect-submit],[data-driver-inspect-back]');
     if (!t) return;
     const d = t.dataset;
     if ('driverStartRoute' in d) controller.action('start', d.driverStartRoute);
@@ -285,6 +371,8 @@ export async function mountDriverApp({ root, client, ctx, adapter, gps, toast, l
     else if ('driverInspectCancelFail' in d) controller.action('inspect-fail-cancel');
     else if ('driverInspectSubmit' in d) controller.action('inspect-submit');
     else if ('driverInspectBack' in d) controller.action('inspect-cancel');
+    else if ('driverRetryAction' in d) controller.action('retry-action', d.driverRetryAction);
+    else if ('driverDiscardAction' in d) controller.action('discard-action', d.driverDiscardAction);
     else if ('driverRetry' in d) controller.action('retry');
     else if ('driverLogout' in d) controller.action('logout');
     else if ('driverRecenter' in d) live?.recenter();
@@ -295,10 +383,11 @@ export async function mountDriverApp({ root, client, ctx, adapter, gps, toast, l
     const on = nav?.onLine !== false;
     root.querySelectorAll('[data-driver-field="connected"]').forEach((el) => { el.textContent = on ? 'Conectado' : 'Sin conexión'; el.classList.toggle('sw-driver__chip--on', on); el.classList.toggle('sw-driver__chip--off', !on); });
   };
-  win?.addEventListener?.('online', setConn); win?.addEventListener?.('offline', setConn);
+  win?.addEventListener?.('online', () => { setConn(); controller.syncQueue(); }); win?.addEventListener?.('offline', setConn);
   win?.setInterval?.(() => controller.tick(), 30000);
   win?.setInterval?.(() => controller.refreshIfIdle(), 60000);
-  win?.document?.addEventListener?.('visibilitychange', () => { if (win.document.visibilityState === 'visible') { controller.refreshIfIdle(); controller.checkUpdate(); } });
+  win?.setInterval?.(() => controller.syncQueue(), 60000);
+  win?.document?.addEventListener?.('visibilitychange', () => { if (win.document.visibilityState === 'visible') { controller.syncQueue(); controller.refreshIfIdle(); controller.checkUpdate(); } });
   win?.setInterval?.(() => controller.checkUpdate(), 6 * 60 * 60 * 1000);
 
   await controller.refresh();

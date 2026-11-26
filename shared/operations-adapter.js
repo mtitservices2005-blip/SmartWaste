@@ -515,7 +515,10 @@ async function transitionRouteRun(client, fallback, municipality_id, routeId, ne
   const adapterMissing = !client?.from;
   const fallbackMethod = { started:'startRoute', delayed:'markDelayed', completed:'completeRoute', verified:'verifyRoute', in_progress:'updateProgress' }[next] ?? 'markDelayed';
   if (adapterMissing) return ok(fallback[fallbackMethod]?.(routeId) ?? fallback.getRoute(routeId), { source:'DEMO_FALLBACK', correlation_id: opts.correlation_id });
-  let findQuery = client.from('route_runs').select('*').eq('route_id', routeId).order('created_at', { ascending: false }).limit(1);
+  // SW-095: con runId la transición actúa sobre esa corrida exacta (un reenvío tardío no toca la siguiente, SW-086).
+  let findQuery = opts.runId
+    ? client.from('route_runs').select('*').eq('id', opts.runId).eq('route_id', routeId).limit(1)
+    : client.from('route_runs').select('*').eq('route_id', routeId).order('created_at', { ascending: false }).limit(1);
   // SW-086: al completarse una corrida queda lista la siguiente (assigned); verificar actúa sobre la terminada.
   if (next === 'verified') findQuery = findQuery.eq('status', 'completed');
   if (municipality_id) findQuery = findQuery.eq('municipality_id', municipality_id);
@@ -528,8 +531,12 @@ async function transitionRouteRun(client, fallback, municipality_id, routeId, ne
   // (e.g. a route re-completing through updateProgress(100) after completeRoute() already ran).
   // Ordered before ...patch so an explicit patch value (none of today's callers pass one) would win.
   const timingPatch = {};
-  if (next === 'started' && !current.data.started_at) timingPatch.started_at = new Date().toISOString();
-  if (next === 'completed' && !current.data.completed_at) timingPatch.completed_at = new Date().toISOString();
+  if (next === 'started' && !current.data.started_at) timingPatch.started_at = opts.at ?? new Date().toISOString(); // SW-095: opts.at = hora real del teléfono, ya saneada por la cola
+  if (next === 'completed' && !current.data.completed_at) {
+    timingPatch.completed_at = opts.at ?? new Date().toISOString();
+    // SW-095: la hora del teléfono nunca queda antes del inicio ya guardado (completed_at >= started_at en la base).
+    if (current.data.started_at && Date.parse(timingPatch.completed_at) < Date.parse(current.data.started_at)) timingPatch.completed_at = current.data.started_at;
+  }
   // SW-045: sums the real GPS trail (vehicle_positions, already collected whenever the driver
   // shared their location — SW-036) into an actual distance for this run, the same "measured, not
   // estimated" upgrade SW-044 did for duration. Best-effort: any failure here (query error, fewer
